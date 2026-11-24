@@ -196,3 +196,21 @@ def test_kill_mid_run_preserves_finished_and_uncertain_external_steps(tmp_path, 
     assert [s["request_id"] for s in after["steps"]] == [s["request_id"] for s in receipt["steps"]]
     assert after["steps"][0]["attempt_phase"] == "completed"
     assert after["steps"][1]["attempt_phase"] in {"dispatched", "reconciliation-required"}
+
+
+def test_durable_history_is_graph_scoped_and_includes_pruned_runs(tmp_path):
+    path = tmp_path / "history.db"
+    plan = _plan()
+    graph_id, _ = chat_library.save_chat_atomically_row(path, None, "First", {"graph_runs": [plan]}, [], [])
+    other_id, _ = chat_library.save_chat_atomically_row(path, None, "Other", {}, [], [])
+    plan = copy.deepcopy(plan)
+    plan["status"] = "completed"
+    plan["steps"][0]["status"] = "completed"
+    chat_library.save_chat_atomically_row(path, graph_id, "First", {"graph_runs": [plan]}, [], [])
+    chat_library.save_chat_atomically_row(path, graph_id, "First", {}, [], [])
+    rows = chat_library.list_workflow_runs(path, graph_id)
+    assert [row["run_id"] for row in rows] == [plan["runId"]]
+    assert rows[0]["step_count"] == 1
+    assert rows[0]["status"] == "completed"
+    assert chat_library.list_workflow_runs(path, graph_id, offset=1) == []
+    assert chat_library.list_workflow_runs(path, other_id) == []

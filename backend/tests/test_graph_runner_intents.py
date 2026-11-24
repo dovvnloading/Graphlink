@@ -378,3 +378,65 @@ def test_workspace_archive_preserves_completed_history_and_resumes_interrupted_r
         assert len(imported.command_log) == 1
 
     asyncio.run(scenario())
+
+
+def test_run_to_here_and_durable_detail_content_reveal(tmp_path):
+    async def scenario():
+        bus, doc, send = open_session(tmp_path / "history.db")
+        source, report, note = setup_chain(doc)
+        original_note = note.content
+        assert (await send("getWorkflowHistory"))["runs"] == []
+        preview = await send("previewGraphRun", [report.id], "through")
+        assert [step["nodeId"] for step in preview["steps"]] == [report.id]
+        body = await send("showWorkflowPreviewStep", [report.id], preview["previewToken"], 0, "through")
+        assert body["input"]["rows"] == [["West", "9"]]
+        run = await send("executeGraphRun", [report.id], preview["previewToken"], "run-to-here", None, "through")
+        assert run["status"] == "completed"
+        assert note.content == original_note
+        history = await send("getWorkflowHistory")
+        assert history["runs"][0]["run_id"] == "run-to-here"
+        graph_id = history["graphId"]
+        detail = await send("getWorkflowRunDetail", graph_id, "run-to-here")
+        assert detail["retained"]
+        assert detail["steps"][0]["nodeId"] == report.id
+        assert detail["steps"][0]["retryable"]
+        assert detail["events"]
+        body = await send("showWorkflowStep", graph_id, "run-to-here", 0)
+        assert body["input"]["rows"] == [["West", "9"]]
+        assert body["output"] is not None
+        assert (await send("getWorkflowCanvasState"))["statuses"][report.id] == "Done"
+        doc.set_table_source(source.id, "Region,Qty\nWest,12", source.content)
+        assert (await send("showWorkflowStep", graph_id, "run-to-here", 0))["input"] is None
+        retry = await send("previewGraphRun", [report.id], "from", "run-to-here")
+        assert [step["nodeId"] for step in retry["steps"]] == [report.id, note.id]
+        with pytest.raises(IntentValidationError, match="failed steps"):
+            await send("previewGraphRun", [report.id], "failed", "run-to-here")
+        await bus.dispatch_intent("app-chat-library", "newChat", [])
+        with pytest.raises(IntentValidationError, match="saved graph"):
+            await send("getWorkflowRunDetail", graph_id, "run-to-here")
+
+    asyncio.run(scenario())
+
+
+def test_failed_only_preserves_stale_prerequisites(tmp_path):
+    from backend.domain.graph_runner import plan_graph_run
+
+    async def scenario():
+        _, doc, send = open_session(tmp_path / "retry.db")
+        source, report, note = setup_chain(doc)
+        preview = plan_graph_run(doc, [note.id], scope="failed")
+        assert [step["nodeId"] for step in preview] == [report.id, note.id]
+        assert [step["status"] for step in preview] == ["blocked", "blocked"]
+
+        through = await send("previewGraphRun", [report.id], "through")
+        await send("executeGraphRun", [report.id], through["previewToken"], "prerequisite-run", None, "through")
+        retry = plan_graph_run(doc, [note.id], scope="failed")
+        assert [step["status"] for step in retry] == ["current", "ready"]
+        protected = plan_graph_run(doc, [note.id], scope="from", protected_ids=frozenset({report.id}))
+        assert [step["status"] for step in protected] == ["current", "ready"]
+
+        doc.set_table_source(source.id, "Region,Qty\nWest,14", source.content)
+        retry = plan_graph_run(doc, [note.id], scope="failed")
+        assert [step["status"] for step in retry] == ["blocked", "blocked"]
+
+    asyncio.run(scenario())

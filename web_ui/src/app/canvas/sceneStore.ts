@@ -1,3 +1,4 @@
+import type { WorkflowCanvasState, WorkflowContents, WorkflowHistoryPage, WorkflowRunDetail, WorkflowScope } from "./workflowRunTypes";
 /**
  * Scene-topic client store (Qt-removal plan R1).
  *
@@ -270,6 +271,10 @@ export interface GraphRunStep {
   errorType?: "timeout" | "cancelled" | "invalid_input" | "worker_error" | "validation" | "conflict";
   scientificResult?: ScienceResult;
   externalAttempt?: GraphRunExternalAttempt;
+  provider?: string;
+  modelId?: string;
+  serverId?: string;
+  toolName?: string;
 }
 
 export interface GraphRunPreview {
@@ -384,6 +389,8 @@ export class SceneStore {
   // Transient handoff to Graph Runner's existing preview/approval dialog.
   // This is UI-only selection; it never dispatches a graph execution.
   private graphRunnerRequestedIds: readonly string[] | null = null;
+  private graphRunnerScope: WorkflowScope | undefined;
+  private graphRunnerSourceRunId: string | undefined;
   // ADR-002 Workstream 1 ("Branch from here"): which chat node the NEXT
   // sendMessage should reply to instead of the current branch tip - local
   // UI state only, same posture as selectedNodeId above. Set by a chat
@@ -831,6 +838,8 @@ export class SceneStore {
   getFontConfig = (): FontControlState => this.fontConfig;
   getSelectedNodeId = (): string | null => this.selectedNodeId;
   getGraphRunnerRequestedIds = (): readonly string[] | null => this.graphRunnerRequestedIds;
+  getGraphRunnerRequestScope = (): WorkflowScope | undefined => this.graphRunnerScope;
+  getGraphRunnerSourceRunId = (): string | undefined => this.graphRunnerSourceRunId;
   getReplyTargetNodeId = (): string | null => this.replyTargetNodeId;
   getSynthesizeTargetNodeIds = (): string[] | null => this.synthesizeTargetNodeIds;
   getFocusAcceptedPaths = (): boolean => this.focusAcceptedPaths;
@@ -861,10 +870,12 @@ export class SceneStore {
     this.emit();
   }
 
-  requestGraphRunnerNodes(ids: readonly string[]): void {
+  requestGraphRunnerNodes(ids: readonly string[], scope?: WorkflowScope, sourceRunId?: string): void {
     if (ids.length === 0) return;
     // No arbitrary Graph Runner execution here: the receiving dialog still
     // requires its backend preview followed by a separate approval click.
+    this.graphRunnerScope = scope;
+    this.graphRunnerSourceRunId = sourceRunId;
     this.graphRunnerRequestedIds = [...new Set(ids)];
     this.emit();
   }
@@ -872,6 +883,8 @@ export class SceneStore {
   clearGraphRunnerRequestedIds(): void {
     if (this.graphRunnerRequestedIds === null) return;
     this.graphRunnerRequestedIds = null;
+    this.graphRunnerScope = undefined;
+    this.graphRunnerSourceRunId = undefined;
     this.emit();
   }
 
@@ -2006,8 +2019,31 @@ export class SceneStore {
     await this.transport.request("scene", "setEdgeRole", [edgeId, role]);
   }
 
-  previewGraphRun(nodeIds: string[]): Promise<GraphRunPreview> {
-    return this.transport.request("scene", "previewGraphRun", [nodeIds]) as Promise<GraphRunPreview>;
+  previewGraphRun(nodeIds: string[], scope?: WorkflowScope, sourceRunId?: string): Promise<GraphRunPreview> {
+    const args = scope ? [nodeIds, scope, sourceRunId ?? null] : [nodeIds];
+    return this.transport.request("scene", "previewGraphRun", args) as Promise<GraphRunPreview>;
+  }
+
+  getWorkflowHistory(offset = 0): Promise<WorkflowHistoryPage> {
+    return this.transport.request("scene", "getWorkflowHistory", [offset]) as Promise<WorkflowHistoryPage>;
+  }
+
+  getWorkflowRunDetail(graphId: number, runId: string): Promise<WorkflowRunDetail> {
+    return this.transport.request("scene", "getWorkflowRunDetail", [graphId, runId]) as Promise<WorkflowRunDetail>;
+  }
+
+  showWorkflowStep(graphId: number, runId: string, index: number): Promise<WorkflowContents> {
+    return this.transport.request("scene", "showWorkflowStep", [graphId, runId, index]) as Promise<WorkflowContents>;
+  }
+
+  showWorkflowPreviewStep(nodeIds: string[], token: string, index: number, scope?: WorkflowScope,
+                          sourceRunId?: string): Promise<WorkflowContents> {
+    return this.transport.request("scene", "showWorkflowPreviewStep",
+      [nodeIds, token, index, scope ?? null, sourceRunId ?? null]) as Promise<WorkflowContents>;
+  }
+
+  getWorkflowCanvasState(): Promise<WorkflowCanvasState> {
+    return this.transport.request("scene", "getWorkflowCanvasState", []) as Promise<WorkflowCanvasState>;
   }
 
   connectModelInput(sourceId: string, targetId: string): void {
@@ -2051,8 +2087,11 @@ export class SceneStore {
     ) as Promise<GraphRun>;
   }
 
-  executeGraphRun(nodeIds: string[], previewToken: string, operationId: string, scientific = false): Promise<GraphRun> {
-    const args = [nodeIds, previewToken, operationId];
+  executeGraphRun(nodeIds: string[], previewToken: string, operationId: string, scientific = false,
+                  scope?: WorkflowScope, sourceRunId?: string): Promise<GraphRun> {
+    const args = scope
+      ? [nodeIds, previewToken, operationId, null, scope, sourceRunId ?? null]
+      : [nodeIds, previewToken, operationId];
     // A Scientific Workbench operation may use its full 600-second isolated
     // worker budget. The ordinary graph timeout is unchanged for other runs.
     return (scientific

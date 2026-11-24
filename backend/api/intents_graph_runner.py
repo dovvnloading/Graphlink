@@ -38,10 +38,18 @@ class GraphRunSelection:
 
 
 @dataclass
+class PreviewGraphRunArgs(GraphRunSelection):
+    scope: str | None = None
+    sourceRunId: str | None = None
+
+
+@dataclass
 class ExecuteGraphRunArgs(GraphRunSelection):
     previewToken: str
     operationId: str
     maxConcurrency: int | None = None
+    scope: str | None = None
+    sourceRunId: str | None = None
 
 
 @dataclass
@@ -84,9 +92,42 @@ def _find_run(document: SceneDocument, run_id: str) -> dict[str, Any] | None:
     return next((run for run in document.graph_runs if run["runId"] == run_id), None)
 
 
-def _plan(document: SceneDocument, node_ids: list[str], mcp_runtime: Any = None) -> tuple[str, list[dict[str, str]]]:
+def _selection_hash(node_ids: list[str], scope: str | None, source_run_id: str | None) -> str:
+    ids = sorted(set(node_ids))
+    return _digest([ids, scope, source_run_id]) if scope or source_run_id else _digest(ids)
+
+
+def _retry_protected(document: SceneDocument, node_ids: list[str], scope: str, source_run_id: str | None) -> frozenset[str]:
+    if scope not in {"from", "failed"}:
+        if source_run_id is not None:
+            raise SceneError("A source run is only valid for retry scopes.")
+        return frozenset()
+    run = _find_run(document, source_run_id or "")
+    if run is None or run["status"] not in {"completed", "partial", "cancelled"}:
+        raise SceneError("Retry requires a retained, finished run without unresolved requests.")
+    by_id = {step["nodeId"]: step for step in run["steps"]}
+    if not node_ids or any(node_id not in by_id for node_id in node_ids):
+        raise SceneError("Choose a step belonging to the source run.")
+    if scope == "from" and len(set(node_ids)) != 1:
+        raise SceneError("Choose exactly one step to re-run from.")
+    if scope == "failed" and any(by_id[node_id]["status"] != "failed" for node_id in node_ids):
+        raise SceneError("Run failed steps only accepts failed steps.")
+    for node_id in node_ids:
+        _matching_node(document, by_id[node_id])
+    # Do not replay completed/current external work, even if its live inputs
+    # have changed since the source run. The user can review a fresh run separately.
+    return frozenset(step["nodeId"] for step in run["steps"]
+                     if step["kind"] in {"model", "tool"} and step["status"] in {"current", "completed"})
+
+
+def _plan(
+    document: SceneDocument, node_ids: list[str], mcp_runtime: Any = None,
+    scope: str | None = None, source_run_id: str | None = None,
+) -> tuple[str, list[dict[str, Any]]]:
     try:
-        steps = plan_graph_run(document, node_ids)
+        mode = scope if scope is not None else "selection"
+        protected = _retry_protected(document, node_ids, mode, source_run_id)
+        steps = plan_graph_run(document, node_ids, scope=mode, protected_ids=protected)
         for step in steps:
             if step["kind"] == "tool" and step["status"] in {"ready", "waiting"}:
                 if mcp_runtime is None:
@@ -105,7 +146,7 @@ def _plan(document: SceneDocument, node_ids: list[str], mcp_runtime: Any = None)
                 step["endpointHash"] = _digest(["local_model_endpoint", endpoint])
     except SceneError as exc:
         raise IntentValidationError([str(exc)]) from exc
-    token = _digest([str(document.graph_run_epoch), sorted(set(node_ids)), steps])
+    token = _digest([str(document.graph_run_epoch), _selection_hash(node_ids, scope, source_run_id), steps])
     return token, steps
 
 
@@ -341,6 +382,15 @@ def _make_graph_checkpoint(save_checkpoint: Callable[[], Awaitable[bool]]) -> Ca
     return checkpoint
 
 
+def _visible_run(bus: SessionBus, run: dict[str, Any], active_run_id: str | None) -> dict[str, Any]:
+    result = _public_run(run)
+    if run["runId"] in {active_run_id, getattr(bus, "graph_model_active_run_id", None), getattr(bus, "mcp_active_run_id", None)}:
+        # The terminal receipt is not visible until its SQLite commit finishes.
+        result["status"] = "running"
+        result["trace"]["status"] = "running"
+    return result
+
+
 def register_graph_runner(
     bus: SessionBus, document: SceneDocument, save_checkpoint: Callable[[], Awaitable[bool]], serialize_mutation: Callable,
     settings_manager: Any = None,
@@ -349,17 +399,10 @@ def register_graph_runner(
     active_task: asyncio.Task[Any] | None = None
     cancel_requested = False
     def visible_run(run: dict[str, Any]) -> dict[str, Any]:
-        result = _public_run(run)
-        if run["runId"] in {active_run_id, getattr(bus, "graph_model_active_run_id", None), getattr(bus, "mcp_active_run_id", None)}:
-            # The terminal SQLite write may still be in flight. A concurrent
-            # reader must not receive a success receipt before it commits,
-            # including an opt-in model step handled by the sibling intents.
-            result["status"] = "running"
-            result["trace"]["status"] = "running"
-        return result
+        return _visible_run(bus, run, active_run_id)
 
-    async def preview_graph_run(node_ids: list[str]):
-        token, steps = _plan(document, node_ids, getattr(bus, "mcp_connect_runtime", None))
+    async def preview_graph_run(node_ids: list[str], scope: str | None = None, source_run_id: str | None = None):
+        token, steps = _plan(document, node_ids, getattr(bus, "mcp_connect_runtime", None), scope, source_run_id)
         return {"previewToken": token, "steps": [_public_step(step) for step in steps]}
 
     async def get_graph_run():
@@ -549,8 +592,8 @@ def register_graph_runner(
                 run.pop("finishedAt", None)
 
     @serialize_mutation
-    async def start_run(node_ids: list[str], preview_token: str, run_id: str, max_concurrency: int):
-        token, steps = _plan(document, node_ids, getattr(bus, "mcp_connect_runtime", None))
+    async def start_run(node_ids, preview_token, run_id, max_concurrency, scope, source_run_id):
+        token, steps = _plan(document, node_ids, getattr(bus, "mcp_connect_runtime", None), scope, source_run_id)
         if token != preview_token:
             raise IntentValidationError(["The graph or selection changed. Preview the run again."])
         if not any(step["status"] == "ready" for step in steps):
@@ -564,7 +607,7 @@ def register_graph_runner(
                 step["outputHash"] = _output_digest(document.nodes[step["nodeId"]])
                 _pin_output_version(document, step)
         run = {
-            "runId": run_id, "previewHash": token, "selectionHash": _digest(sorted(set(node_ids))),
+            "runId": run_id, "previewHash": token, "selectionHash": _selection_hash(node_ids, scope, source_run_id),
             "startedAt": datetime.now(timezone.utc).isoformat(), "steps": steps, "status": "running",
             "maxConcurrency": max_concurrency,
         }
@@ -579,7 +622,8 @@ def register_graph_runner(
         document.graph_run_epoch = uuid.uuid4()
         return await drive(run)
 
-    async def execute_graph_run(node_ids: list[str], preview_token: str, run_id: str, max_concurrency: int | None = None):
+    async def execute_graph_run(node_ids: list[str], preview_token: str, run_id: str, max_concurrency: int | None = None,
+                                scope: str | None = None, source_run_id: str | None = None):
         max_concurrency = 3 if max_concurrency is None else max_concurrency
         if type(max_concurrency) is not int or not 1 <= max_concurrency <= 8:
             raise IntentValidationError(["Graph Runner concurrency must be between 1 and 8."])
@@ -588,11 +632,11 @@ def register_graph_runner(
         existing = _find_run(document, run_id)
         if existing is not None:
             if (existing["previewHash"] != preview_token
-                    or existing["selectionHash"] != _digest(sorted(set(node_ids)))
+                    or existing["selectionHash"] != _selection_hash(node_ids, scope, source_run_id)
                     or existing.get("maxConcurrency", 3) != max_concurrency):
                 raise IntentValidationError(["This operation ID already belongs to another preview or concurrency limit."])
             return visible_run(existing)
-        result = await start_run(node_ids, preview_token, run_id, max_concurrency)
+        result = await start_run(node_ids, preview_token, run_id, max_concurrency, scope, source_run_id)
         if result is None:
             raise IntentValidationError(["Another graph operation is in progress. Try again."])
         return result
@@ -631,7 +675,9 @@ def register_graph_runner(
         return {"ok": True}
 
     bus.register_intent("scene", "cancelGraphRun", cancel_graph_run, args_schema=ResumeGraphRunArgs)
-    bus.register_intent("scene", "previewGraphRun", preview_graph_run, args_schema=GraphRunSelection)
+    bus.register_intent("scene", "previewGraphRun", preview_graph_run, args_schema=PreviewGraphRunArgs)
     bus.register_intent("scene", "getGraphRun", get_graph_run, args_schema=GetGraphRunArgs)
     bus.register_intent("scene", "executeGraphRun", execute_graph_run, args_schema=ExecuteGraphRunArgs)
     bus.register_intent("scene", "resumeGraphRun", resume_graph_run, args_schema=ResumeGraphRunArgs)
+    from backend.api.intents_workflow_visibility import register_workflow_visibility
+    register_workflow_visibility(bus, document, lambda: active_run_id)
