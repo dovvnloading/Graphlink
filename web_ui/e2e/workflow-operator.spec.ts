@@ -2,7 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { openTable, editHours } from "./table-workflow-helpers";
 import type { WorkflowSpec } from "../src/lib/workflow-contract/generated/workflow";
 
-test.use({ viewport: { width: 1440, height: 1000 }, reducedMotion: "reduce" });
+test.use({ viewport: { width: 1440, height: 1000 }, contextOptions: { reducedMotion: "reduce" } });
 
 async function runner(page: Page) {
   await page.locator('[data-overlay-trigger="plugins"]').press("Enter");
