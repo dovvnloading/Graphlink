@@ -657,7 +657,7 @@ class VirtualEnvSandbox:
 
         self.requirements_hash_file.write_text(manifest_hash, encoding="utf-8")
 
-    def execute_code(self, code, should_continue, emit_line=None):
+    def execute_code(self, code, should_continue, emit_line=None, *, timeout_seconds=240):
         if not isinstance(code, str) or len(code) > CODE_SANDBOX_MAX_CODE_CHARS:
             raise RuntimeError("Python script exceeded the safe execution size limit.")
         prepare_scratch_dir(self.base_dir)
@@ -670,6 +670,6 @@ class VirtualEnvSandbox:
             should_continue=should_continue,
             emit_line=emit_line,
             cwd=self.base_dir,
-            timeout_seconds=240,
+            timeout_seconds=timeout_seconds,
         )
         return output.strip(), return_code

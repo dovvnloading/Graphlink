@@ -501,6 +501,12 @@ def test_args_schema_is_scoped_to_the_known_intents():
             ("scene", "cancelGraphRun"),
             ("scene", "executeGraphRun"),
             ("scene", "resumeGraphRun"),
+            # Durable workflow history, content disclosure and canvas status.
+            ("scene", "getWorkflowHistory"),
+            ("scene", "getWorkflowRunDetail"),
+            ("scene", "showWorkflowStep"),
+            ("scene", "showWorkflowPreviewStep"),
+            ("scene", "getWorkflowCanvasState"),
             ("scene", "previewGraphModel"),
             ("scene", "executeGraphModel"),
             ("scene", "bindGraphModel"),

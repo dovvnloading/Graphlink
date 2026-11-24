@@ -122,6 +122,60 @@ No provider, filesystem, asset, network, process or scheduler is required.
 Cancellation is a no-op because these adapters retain no external work.
 
 
+## Typed service steps (version 1)
+
+The registry also includes these namespaced adapters; the legacy scene kinds
+and scheduler are unchanged. All use the same typed descriptor, preparation,
+fingerprint, preview, run and cancel interface as transforms.
+
+| Adapter | Class | Configuration | Input → output |
+| --- | --- | --- | --- |
+| model.generate | cloud (conservative) | provider, model_id, system_prompt, template, output_kind; optional schema (required for JSON), estimated_output_tokens | Named text ports → text or JSON |
+| python.execute | executes | code, inputs (name-to-port-kind mapping), output_kind, optional timeout_seconds (1–240) | Named variables and file/image paths → text, JSON, table or file |
+| knowledge.search | local-read | optional k (1–50) | query text → passages JSON, cited text |
+| web.research | cloud | optional max_sources (1–8) | query text → cited text, sources JSON |
+| chart.generate | pure | label_column, value_column | table, optional title text → chart JSON |
+| report.generate | pure | label_column, value_column | table, optional intro text → Markdown report |
+| image.generate | cloud | model_id | prompt text → content-addressed image |
+| agent.run | executes | folder | task text → text |
+
+Model JSON supports the documented schema subset (type, properties, required,
+items, enum, boolean additionalProperties). An invalid reply fails the step;
+there is no automatic repair/retry. The preview estimates cost with the existing
+pricing table (unknown prices remain unknown). The output token estimate is
+an estimate, not an enforced budget. The exact provider/model pair must be
+available in the unified cached catalog.
+
+Python runs through the existing guarded virtualenv sandbox (not an OS
+filesystem security boundary); no implicit dependency installation is performed.
+Inputs are variables, table inputs are objects with columns and rows, and
+file/image inputs are paths to staged copies. Text output is stdout; for
+other output kinds assign result to a JSON value, a columns/rows object, or
+a relative regular file path respectively. Outputs are bounded and file
+outputs are stored by content hash.
+
+Construct WorkflowRunHost with a frozen WorkflowSpec, run ID, durable
+WorkflowRequestJournal (use a persistent SQLite path, not memory), settings,
+and the required existing session services. Pass the host to
+builtin_registry(host). A discovery registry can prepare/preview but refuses
+effectful execution. The host verifies the pinned spec/attempt, caps model steps
+at 64, and uses the existing external dispatch fence to atomically reserve
+model and Fal request IDs and checkpoint their typed outputs. Reopening the
+journal allows inspecting completed/uncertain receipts; it never silently
+resends, even with a new attempt number.
+
+The caller must supply a trusted per-workflow/revision/destination
+cloud_consent lookup and async approve callback for fresh action approvals.
+The spec itself never grants permission. Knowledge honors embedding
+settings and consent, using keyword-only search if the embedding service
+is unavailable or not authorized; the step does not populate cold embeddings.
+Web Research uses the existing per-domain approval path including redirects.
+Fal requires a current price estimate and a fresh approval of the exact
+prompt/model/price before submitting. The Agent uses a chosen trusted folder
+and fresh approvals, not saved session/shell grants. This is the typed
+execution adapter boundary, not a new workflow scheduler or canvas UI.
+
+
 ## Detached workflow engine
 
 Instantiate one backend-owned WorkflowEngine per chats.db, on the application's

@@ -29,6 +29,7 @@ const COMMAND_META: Readonly<Record<string, CommandMeta>> = {
   "zoom-out": { icon: "zoom-out", category: "Canvas" },
   "organize-nodes": { icon: "organize", category: "Canvas" },
   "graph-runner": { icon: "play", category: "Graph" },
+  "run-history": { icon: "compare", category: "Graph" },
   "select-all": { icon: "check", category: "Canvas" },
   "delete-selected": { icon: "trash", category: "Canvas" },
   "compare-branches": { icon: "compare", category: "Graph", shortcut: "Ctrl+Shift+C" },
@@ -142,6 +143,13 @@ export function buildCommands(
       name: "Graph runner",
       aliases: ["run graph", "run selection", "preview run", "resume run", "workflow"],
       run: () => overlays.open("graph-runner", "dialog"),
+      enabled: () => true,
+    },
+    {
+      id: "run-history",
+      name: "Run history",
+      aliases: ["workflow history", "run detail", "compare runs"],
+      run: () => overlays.open("run-history", "dialog"),
       enabled: () => true,
     },
     {

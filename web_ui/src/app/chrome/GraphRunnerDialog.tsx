@@ -11,6 +11,8 @@ import { Select } from "../ui/Select";
 import { TextField } from "../ui/TextField";
 import { Icon } from "../ui/icons/Icon";
 import { formatCount, formatRelativeTime } from "../ui/format";
+import { workflowScope, type WorkflowContents, type WorkflowScope } from "../canvas/workflowRunTypes";
+import { FullWorkflowContents } from "./WorkflowContents";
 import "./GraphRunnerDialog.css";
 
 const LazyGraphRunnerInspectorContent = lazy(() =>
@@ -30,7 +32,9 @@ const operations: Record<string, string> = {
   tool: "MCP tool",
 };
 
-function RunSteps({ steps, names }: { steps: GraphRunStep[]; names: Map<string, string> }) {
+function RunSteps({ steps, names, reveal }: {
+  steps: GraphRunStep[]; names: Map<string, string>; reveal?: (index: number) => Promise<WorkflowContents>;
+}) {
   return <ol className="runner-steps">
     {steps.map((step, index) => <li key={step.nodeId || index}>
       <div className="runner-step-heading">
@@ -45,9 +49,25 @@ function RunSteps({ steps, names }: { steps: GraphRunStep[]; names: Map<string, 
       {step.kind === "scientific" && <div>
         {step.elapsedMs !== undefined && <>Elapsed: {formatCount(step.elapsedMs)} ms. </>}
         {step.errorType && <>Error type: <strong>{step.errorType}</strong></>}
-        {step.scientificResult && <p>Result: {formatScienceSummary(step.scientificResult.summary)}</p>}
+        {step.scientificResult && <Disclosure label="Show full">
+          <p>Result: {formatScienceSummary(step.scientificResult.summary)}</p>
+        </Disclosure>}
       </div>}
       {step.detail && <p>{step.detail}</p>}
+      {reveal && <div className="runner-note">
+        <div>Will send: {step.status === "blocked" ? "Nothing; step is blocked."
+          : step.status === "current" ? "Nothing; reuse current output."
+          : step.kind === "model" ? `Text input to ${step.provider || "Ollama"} / ${step.modelId || "configured model"}.`
+          : step.kind === "tool" ? `Resolved arguments to ${step.serverId || "configured MCP server"} / ${step.toolName || step.operation}.`
+          : "Connected inputs to a local operation (no external request)."}</div>
+        <div>Cost: {step.status === "blocked" ? "No call in this plan."
+          : step.status === "current" ? "$0 additional"
+          : step.kind === "tool" ? "Unknown; the tool server may charge."
+          : step.kind === "model" ? "$0 Graphlink API charge (loopback; cloud aliases may charge)."
+          : "$0 external charge (local operation)."}</div>
+        {step.status === "waiting" && <p>Exact input is deferred until its prerequisites finish.</p>}
+        <FullWorkflowContents load={() => reveal(index)} preview />
+      </div>}
       {step.externalAttempt && <Disclosure label="External request" className="runner-fingerprints">
         <div>Provider <code>{step.externalAttempt.provider}</code></div>
         <div>{step.externalAttempt.kind === "model" ? "Model" : "Tool"} <code>{step.externalAttempt.model || step.externalAttempt.tool}</code></div>
@@ -97,7 +117,9 @@ function Runner({ store }: { store: SceneStore }) {
   const [appliedRequestedIds, setAppliedRequestedIds] = useState(requestedIds);
   const [selectedIds, setSelectedIds] = useState<string[]>(() =>
     requestedIds ? [...requestedIds] : rf.getNodes().filter((node) => node.selected).map((node) => node.id));
-  const [scope, setScope] = useState(selectedIds.length ? "selection" : "all");
+  const [scope, setScope] = useState<string>(store.getGraphRunnerRequestScope() ?? (selectedIds.length ? "selection" : "all"));
+  const requestedScope = store.getGraphRunnerRequestScope();
+  const overlays = useOverlays();
   const scene = useSyncExternalStore(store.subscribe, store.getScene);
   const names = new Map(scene.nodes.map((node) => [node.id, node.title]));
   const plainNotes = scene.nodes.filter((node) =>
@@ -128,7 +150,9 @@ function Runner({ store }: { store: SceneStore }) {
   const noteModelBindings = (modelBindings ?? []).filter((binding) => binding.nodeKind !== "model");
   const modelNodes = (modelBindings ?? []).filter((binding) => binding.nodeKind === "model");
   const savedModelBinding = noteModelBindings.find((binding) => binding.targetId === modelTargetId);
-  const [preview, setPreview] = useState<(GraphRunPreview & { nodeIds: string[]; operationId: string }) | null>(null);
+  const [preview, setPreview] = useState<(GraphRunPreview & {
+    nodeIds: string[]; operationId: string; scope?: WorkflowScope; sourceRunId?: string;
+  }) | null>(null);
   const [latest, setLatest] = useState<LatestGraphRun | null>(null);
   const [busy, setBusy] = useState("Loading run history…");
   const [cancellingRun, setCancellingRun] = useState(false);
@@ -140,7 +164,7 @@ function Runner({ store }: { store: SceneStore }) {
     setAppliedRequestedIds(requestedIds);
     if (requestedIds !== null) {
       setSelectedIds([...requestedIds]);
-      setScope("selection");
+      setScope(requestedScope ?? "selection");
       setPreview(null);
       setError("");
     }
@@ -244,9 +268,11 @@ function Runner({ store }: { store: SceneStore }) {
     void perform("Preparing preview…", async () => {
       setPreview(null);
       const nodeIds = scope === "all" ? [] : selectedIds;
-      const plan = await store.previewGraphRun(nodeIds);
+      const mode = workflowScope(scope);
+      const sourceRunId = mode === "from" || mode === "failed" ? store.getGraphRunnerSourceRunId() : undefined;
+      const plan = await store.previewGraphRun(nodeIds, mode, sourceRunId);
       // Keep the same identifier if a request times out after backend commit.
-      setPreview({ ...plan, nodeIds, operationId: crypto.randomUUID() });
+      setPreview({ ...plan, nodeIds, scope: mode, sourceRunId, operationId: crypto.randomUUID() });
     });
   }
 
@@ -300,6 +326,9 @@ function Runner({ store }: { store: SceneStore }) {
 
   const ready = preview?.steps.filter((step) => step.status === "ready").length ?? 0;
   return <>
+    <div className="runner-controls">
+      <Button variant="secondary" iconStart="compare" onClick={() => overlays.open("run-history", "dialog")}>Run history</Button>
+    </div>
     <p className="runner-intro">Preview a dependency-ordered graph. Local Model nodes, configured Scientific Workbench operations, and MCP tools run after you review the plan; every connected input must be ready. MCP tools follow their server’s approval policy and pause for resolved input review when required. Preview does not execute tools or calculations.</p>
     <div className="runner-controls">
       <Select label="Run scope" value={scope} disabled={!!busy}
@@ -307,10 +336,15 @@ function Runner({ store }: { store: SceneStore }) {
         options={[
           { value: "all", label: "Whole graph" },
           { value: "selection", label: `Selected nodes (${selectedIds.length})`, disabled: !selectedIds.length },
+          { value: "through", label: "Run to here", disabled: selectedIds.length !== 1 },
+          ...(requestedScope === "from" ? [{ value: "from", label: "Re-run from this step" }] : []),
+          ...(requestedScope === "failed" ? [{ value: "failed", label: "Run failed steps only" }] : []),
         ]} />
       <Button variant="secondary" disabled={!!busy} onClick={previewRun}>Preview run</Button>
     </div>
     {scope === "selection" && <p className="runner-note">Includes downstream outputs and the inputs they depend on.</p>}
+    {scope === "through" && <p className="runner-note">Runs only the selected destination and its prerequisites. No downstream steps.</p>}
+    {(scope === "from" || scope === "failed") && <p className="runner-note">Verified current results are reused. Stale preserved prerequisites block the retry rather than repeating external work. Retrying a failed request may incur a new charge.</p>}
     {modelNoteHandoff && <p className="runner-note">The selected note has a saved local-model
       input. Review it below with Preview model step; a separate approval is required to run it.</p>}
     <Disclosure label="Run a local model into a note" onOpen={loadModelBindings}
@@ -408,16 +442,17 @@ function Runner({ store }: { store: SceneStore }) {
         <h2>Run preview</h2>
         <span>{ready} ready</span>
       </header>
-      {preview.steps.length ? <RunSteps steps={preview.steps} names={names} /> :
+      {preview.steps.length ? <RunSteps key={preview.previewToken} steps={preview.steps} names={names}
+        reveal={index => store.showWorkflowPreviewStep(preview.nodeIds, preview.previewToken, index, preview.scope, preview.sourceRunId)} /> :
         <p>No connected outputs in this scope. Bind a note's text input, create a table output, or save a Scientific Workbench operation for Graph Runner.</p>}
       {ready > 0 && <div className="runner-commit">
         <p>Running saves this graph and records each finished step.</p>
         <Button variant="secondary" disabled={!!busy || running} onClick={() =>
           void perform("Running graph…", () => updateRun(store.executeGraphRun(
             preview.nodeIds, preview.previewToken, preview.operationId,
-            preview.steps.some((step) => step.kind === "scientific"),
+            preview.steps.some((step) => step.kind === "scientific"), preview.scope, preview.sourceRunId,
           )))
-        }>Run graph</Button>
+        }>{preview.scope === "through" ? "Run to here" : preview.scope === "from" ? "Re-run from this step" : preview.scope === "failed" ? "Run failed steps only" : "Run graph"}</Button>
       </div>}
     </section>}
     {latest && <section aria-label="Latest run">

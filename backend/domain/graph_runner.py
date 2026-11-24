@@ -87,7 +87,10 @@ def _closure(seeds: set[str], neighbors: dict[str, list[str]]) -> set[str]:
     return seen
 
 
-def plan_graph_run(document: SceneDocument, selected_ids: list[str]) -> list[dict[str, Any]]:
+def plan_graph_run(
+    document: SceneDocument, selected_ids: list[str], *, scope: str = "selection",
+    protected_ids: frozenset[str] = frozenset(),
+) -> list[dict[str, Any]]:
     """Preview explicit bindings in stable dependency order, without calculation.
 
     Deterministic note/table projections run only on private node copies.
@@ -108,11 +111,17 @@ def plan_graph_run(document: SceneDocument, selected_ids: list[str]) -> list[dic
     for target_id, parents in sources.items():
         for parent_id in parents:
             children[parent_id].append(target_id)
+    if scope not in {"selection", "through", "from", "failed"} or (scope != "selection" and not selected_ids):
+        raise SceneError("Select an executable destination for this run.")
     included = set(bindings)
+    branch = set(bindings)
     if selected_ids:
         if any(node_id not in document.nodes for node_id in selected_ids):
             raise SceneError("A selected node no longer exists. Select the branch again.")
-        branch = _closure(set(selected_ids), children)
+        if scope != "selection" and any(node_id not in bindings for node_id in selected_ids):
+            raise SceneError("A selected destination no longer has an executable binding.")
+        branch = (set(selected_ids) if scope in {"through", "failed"}
+                  else _closure(set(selected_ids), children))
         included &= _closure(branch, {target: list(parents) for target, parents in sources.items()})
 
     projected = copy.copy(document)
@@ -141,6 +150,9 @@ def plan_graph_run(document: SceneDocument, selected_ids: list[str]) -> list[dic
         target = pending.popleft()
         step = steps[target]
         parent_steps = [steps[parent] for parent in sources[target] if parent in steps]
+        # Retry scopes can consume only verified current prerequisite results.
+        # A stale protected step is blocked, never silently replayed.
+        protected = target in protected_ids or (scope in {"from", "failed"} and target not in branch)
         if target in invalid_bindings:
             step["detail"] = invalid_bindings[target]
         elif any(parent["status"] == "blocked" for parent in parent_steps):
@@ -154,12 +166,20 @@ def plan_graph_run(document: SceneDocument, selected_ids: list[str]) -> list[dic
             # can be guessed during a read-only preview.
             try:
                 _config_and_target(projected, step)
-                step.update(status="waiting", detail="Awaiting an upstream result.")
+                if protected:
+                    step.update(status="blocked", detail="A preserved prerequisite needs a new result. Review a separate run.")
+                else:
+                    step.update(status="waiting", detail="Awaiting an upstream result.")
             except SceneError as exc:
                 step.update(status="blocked", detail=str(exc))
         else:
             try:
                 _inspect(projected, step)
+                if protected and step["status"] != "current":
+                    step.update(status="blocked", detail="A preserved result is no longer current. Review a separate run.")
+                elif (scope == "from" and target in selected_ids and not protected
+                      and step["status"] == "current" and adapter_for_step(step).predictable):
+                    step.update(status="ready", detail="Re-run the selected local transform.")
                 if step["status"] == "ready" and adapter_for_step(step).predictable:
                     projected.nodes[target] = copy.deepcopy(projected.nodes[target])
                     _evaluate(projected, step)

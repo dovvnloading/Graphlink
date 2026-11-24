@@ -1,0 +1,17 @@
+@layer surfaces {
+.workflow-canvas-progress {
+  position: absolute;
+  inset-block-start: var(--gl-space-3);
+  inset-inline-end: var(--gl-space-3);
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: var(--gl-space-3);
+  padding: var(--gl-space-3);
+  border: 1px solid var(--gl-surface-border);
+  border-radius: var(--gl-radius-md);
+  background: var(--gl-surface-window);
+  color: var(--gl-surface-text-primary);
+}
+.workflow-canvas-progress > .gl-progress { min-inline-size: 12rem; }
+}

@@ -82,6 +82,7 @@ describe("buildCommands", () => {
           "Zoom out",
           "Organize nodes",
           "Graph runner",
+          "Run history",
           "Select all nodes",
           "Delete selected items",
           "Compare branches",

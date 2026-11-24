@@ -75,6 +75,7 @@ const BuilderLaunchDialog = lazy(() =>
 const CommandPalette = lazy(() => import("./chrome/CommandPalette").then((m) => ({ default: m.CommandPalette })));
 const OrganizationDialog = lazy(() => import("./chrome/OrganizationDialog").then((m) => ({ default: m.OrganizationDialog })));
 const GraphRunnerDialog = lazy(() => import("./chrome/GraphRunnerDialog").then((m) => ({ default: m.GraphRunnerDialog })));
+const WorkflowHistoryDialog = lazy(() => import("./chrome/WorkflowHistoryDialog").then((m) => ({ default: m.WorkflowHistoryDialog })));
 const DiagnosticsDialog = lazy(() =>
   import("./chrome/DiagnosticsDialog").then((m) => ({ default: m.DiagnosticsDialog })),
 );
@@ -494,6 +495,9 @@ function AppShell() {
                   </LazySurface>
                   <LazySurface overlayName="graph-runner">
                     <GraphRunnerDialog store={sceneStore} />
+                  </LazySurface>
+                  <LazySurface overlayName="run-history">
+                    <WorkflowHistoryDialog store={sceneStore} />
                   </LazySurface>
                   <LazySurface overlayName="quick-switcher">
                     <QuickSwitcherDialog transport={transport} />

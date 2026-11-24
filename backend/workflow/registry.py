@@ -55,11 +55,14 @@ class StepAdapterRegistry[T]:
         )
 
 
-def builtin_registry() -> StepAdapterRegistry[StepAdapter[Any]]:
-    """Return a fresh registry of built-in adapters, with no service dependencies."""
+def builtin_registry(host=None) -> StepAdapterRegistry[StepAdapter[Any]]:
+    """Return a fresh registry; effectful steps require an explicitly bound run host."""
     from .transforms import TRANSFORM_ADAPTERS
+    from .step_adapters import STEP_CLASSES, ServiceStepAdapter
 
     registry = StepAdapterRegistry[StepAdapter[Any]]()
     for adapter in TRANSFORM_ADAPTERS:
         registry.register(adapter.adapter_id, adapter.adapter_version, adapter)
+    for adapter_id in STEP_CLASSES:
+        registry.register(adapter_id, "1", ServiceStepAdapter(adapter_id, host))
     return registry

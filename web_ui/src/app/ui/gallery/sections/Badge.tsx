@@ -6,7 +6,7 @@ function Badges() {
     <h3>Counts, labels and semantic status words</h3>
     <div className="gl-gallery-control-row">
       <Badge>12</Badge><Badge size="xs">Local</Badge>
-      {(["Running", "Done", "Failed", "Cancelled", "Waiting for approval", "Out of date", "Skipped"] as const)
+      {(["Queued", "Running", "Done", "Failed", "Cancelled", "Waiting for approval", "Out of date", "Skipped"] as const)
         .map((status) => <StatusPill key={status} status={status} />)}
     </div>
   </div>;
