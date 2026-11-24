@@ -62,8 +62,9 @@ Runner's dependency graph; publications are normal snapshot nodes.
 - allowed_hosts: up to seven **exact DNS hostnames** for cross-origin
   subresources (e.g. a necessary script CDN). Each host is also independently
   approved. Unexpected third-party subresources are blocked rather than
-  silently triggering more host approvals. Top-level cross-site redirects
-  receive a fresh domain approval.
+  silently triggering more host approvals. **All HTTP redirects are blocked.**
+  To follow a redirect, inspect its destination and navigate to that public
+  HTTPS URL explicitly with a fresh host approval.
 - screenshot: boolean; captures a bounded 1280×900 viewport PNG.
 
 Only GET HTTPS requests to port 443 are permitted. Browser Agent blocks
@@ -94,8 +95,10 @@ not shared across calls or tasks. Published nodes are durable snapshots.
   resource request is DNS-validated, rejected if any resolved IP is non-public,
   and its TCP socket is connected to the **validated public IP** while HTTPS
   verifies the original domain certificate. Redirects are not followed by
-  Python; each browser redirect is separately intercepted and checked.
-  Neither proxies nor ambient bearer credentials are forwarded.
+  Python **and never forwarded to Chromium**: Playwright does not re-route
+  redirected responses fulfilled by an interceptor. Use explicit, approved
+  navigation to the final URL instead. Neither proxies nor ambient bearer
+  credentials are forwarded.
 - Resource body size is limited to 2 MiB and total session transfers to
   16 MiB, with an 80-request and eight-host
   ceiling. Compressed HTTP bodies are refused even if their compressed size
@@ -103,7 +106,12 @@ not shared across calls or tasks. Published nodes are durable snapshots.
   Each in-flight request reserves up to 2 MiB of the session budget until it
   finishes; concurrent requests may therefore exhaust the remaining budget
   before a total of 16 MiB has actually arrived. Navigation and interactions
-  have finite timeouts; a whole browser.run call has a 100-second deadline. Captures contain
+  have finite timeouts; browser.run has a 100-second **active-work** deadline
+  that pauses during each serialized user approval. In managed agent runs the
+  outer active-work deadline replaces Playwright's independent wall-clock navigation
+  and action timers, so a consent prompt cannot trigger an unrelated timeout.
+  The browser has one active
+  human approval prompt at a time. Captures contain
   up to 16,000 text characters, 60 links and four bounded tables; screenshot
   size is limited to 3 MiB. Tool previews use a smaller text/table subset.
 - Page text is explicitly labeled untrusted in model output and published
@@ -137,3 +145,23 @@ use a public HTTPS test page, request a navigation and an approved interaction,
 verify a visible capture with source URL/time, publish text and screenshot,
 then invoke Undo run and reopen a saved workspace. Confirm that private/local
 URLs, unexpected third-party hosts and non-GET submissions are blocked.
+
+
+## Hotfix behavior and remaining limits
+
+- Consent-approved interactive targets are bound to their original DOM element
+  and rechecked for identity, visibility, disabled state, markup and form target
+  after human approval. Dynamic JavaScript event listeners may change without
+  changing markup, so this is a *best-effort* identity guard, not a guarantee
+  that arbitrary third-party JS cannot change behavior. Only interact with
+  trusted public sites, even after approving their host.
+- First-party temporary cookies can work **within a single disposable
+  browser.run call**. No cookies are loaded from the user's real browser,
+  forwarded to third-party domains or retained across browser.run calls.
+  Authentication/login automation is intentionally unsupported.
+- Browser capture evidence includes the final page's observed HTTP status
+  (when known). HTTP 4xx/5xx pages are labeled, not silently treated as a
+  successful response.
+- Browser Agent is not a bulk crawler and does not currently implement the
+  separate Web Research subsystem's robots.txt/crawl-delay policy; operators
+  must respect website terms and use Web Research for robots-aware crawling.

@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from graphlink_plugins.browser_agent.runner import (
-    BrowserPolicyError, capture_markdown, normalize_steps, run_browser,
+    BrowserPolicyError, _first_party_cookies, capture_markdown, normalize_steps, run_browser,
 )
 
 
@@ -24,6 +24,16 @@ class FakeLocator:
 
     async def inner_text(self, **kwargs):
         return "Visible control name"
+
+    async def element_handle(self, **kwargs):
+        return self
+
+    async def evaluate(self, script, *args):
+        if "current === approved" in script:
+            return not getattr(self.page, "replace_during_approval", False)
+        if "_irrelevant" in script:
+            raise AssertionError("Unexpected evaluator")
+        return "changed" if getattr(self.page, "changed_during_approval", False) else "stable"
 
     async def click(self, **kwargs):
         self.page.calls.append(("click", self.selector))
@@ -51,7 +61,7 @@ class FakePage:
 
     async def goto(self, url, **kwargs):
         self.url = url
-        self.calls.append(("goto", url))
+        self.calls.append(("goto", url, kwargs.get("timeout")))
 
     def on(self, event, callback):
         self.calls.append(("on", event))
@@ -80,6 +90,11 @@ class FakeContext:
         self.route_handler = None
         self.websocket_handler = None
         self.scripts = []
+        self.cookies_seen = []
+
+    async def cookies(self, urls=None):
+        self.cookies_seen.append(urls)
+        return []
 
     async def route(self, pattern, handler):
         self.route_handler = handler
@@ -257,6 +272,53 @@ def test_markdown_capture_escapes_external_markup_and_anchors_provenance():
     assert "Interactive controls" in markdown
 
 
+
+def test_replaced_control_and_rewritten_attributes_are_rejected_after_consent():
+    for mutation in ("replace_during_approval", "changed_during_approval"):
+        wrapper = FakePlaywrightContext()
+
+        async def approve_host(host, url):
+            return True
+
+        async def approve_action(kind, selector, url, detail):
+            setattr(wrapper.driver.browser.context.page, mutation, True)
+            return True
+
+        with pytest.raises(BrowserPolicyError, match="target changed"):
+            asyncio.run(run_browser(
+                "https://example.com/",
+                [{"kind": "click", "selector": "#submit"}],
+                approve_host, approve_action, playwright_factory=lambda: wrapper,
+            ))
+        assert not any(
+            call[0] == "click" for call in wrapper.driver.browser.context.page.calls
+        )
+        assert wrapper.driver.browser.closed
+
+
+def test_http_status_is_reflected_in_capture_and_markdown():
+    wrapper = FakePlaywrightContext()
+
+    class Response:
+        status = 403
+
+    async def navigate(url, **kwargs):
+        wrapper.driver.browser.context.page.url = url
+        return Response()
+
+    wrapper.driver.browser.context.page.goto = navigate
+
+    async def approve(*args):
+        return True
+
+    capture = asyncio.run(run_browser(
+        "https://example.com/", [], approve, approve, playwright_factory=lambda: wrapper,
+    ))
+    assert capture.http_status == 403
+    assert capture.report()["http_status"] == 403
+    assert "**HTTP status:** 403" in capture_markdown(capture)
+
+
 def test_published_page_text_is_fenced_and_untrusted_titles_cannot_inject_links():
     wrapper = FakePlaywrightContext()
 
@@ -277,3 +339,50 @@ def test_published_page_text_is_fenced_and_untrusted_titles_cannot_inject_links(
     assert "~~~~text" in markdown
     assert "~~~\n[Impersonate Graphlink]" in markdown
     assert markdown.count("~~~~") >= 2
+
+
+def test_ephemeral_cookies_are_forwarded_only_on_the_same_host():
+    class CookieContext:
+        def __init__(self):
+            self.calls = []
+        async def cookies(self, urls):
+            self.calls.append(urls)
+            return [
+                {"name": "sid", "value": "only-this-run", "sameSite": "Lax"},
+                {"name": "unsafe", "value": "x\r\nInjected: 1", "sameSite": "Lax"},
+            ]
+
+    async def check():
+        ctx = CookieContext()
+        same = await _first_party_cookies(ctx, "https://example.com/next", "https://example.com/")
+        assert same == "sid=only-this-run"
+        assert ctx.calls == [["https://example.com/next"]]
+        assert await _first_party_cookies(ctx, "https://cdn.example.com/asset", "https://example.com/") == ""
+        assert len(ctx.calls) == 1
+
+    asyncio.run(check())
+
+
+def test_managed_browser_uses_outer_approval_aware_deadline_instead_of_playwright_wall_clocks():
+    wrapper = FakePlaywrightContext()
+
+    async def approve(*args):
+        return True
+
+    asyncio.run(run_browser(
+        "https://example.com/",
+        [{"kind": "click", "selector": "#q"}],
+        approve, approve,
+        playwright_factory=lambda: wrapper,
+        managed_deadline=True,
+    ))
+    calls = wrapper.driver.browser.context.page.calls
+    assert ("goto", "https://example.com/", 0) in calls
+    assert any(call[0] == "click" for call in calls)
+
+    unwrapped = FakePlaywrightContext()
+    asyncio.run(run_browser(
+        "https://example.com/", [], approve, approve,
+        playwright_factory=lambda: unwrapped,
+    ))
+    assert ("goto", "https://example.com/", 16000) in unwrapped.driver.browser.context.page.calls
