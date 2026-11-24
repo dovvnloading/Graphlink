@@ -422,3 +422,74 @@ For a persisted axis lock, the publication hexbin counts only observations
 inside that X/Y range, matching the interactive viewport's inclusion rule.
 A range containing zero observations renders a clear empty state rather
 than suggesting that offscreen points are present.
+
+## ChartSpec V2 — composable multi-panel figures
+
+Graphlink accepts `type: "composite"` with **`version: 2`**, without changing
+or upgrading any existing version-1 chart data. Choose **Composite figure**
+from the chat node's Generate → Chart submenu, or create a chart through
+the existing programmatic `scene.generateChart` intent with chart type
+`"composite"`. The model may propose a composition, but all data bindings
+and observations are validated before a chart becomes renderable.
+
+A figure uses **columnar typed data**: `numbers` contains 2–12 named
+finite numeric columns with 2–2,000 aligned observations per column.
+`categories` optionally holds up to four aligned categorical columns.
+The optional `facetBy` groups rows into at most six panels sharing
+identical X and Y scales. Up to eight independently specified mark layers
+reference numeric columns by name:
+
+- `point`: scatter marks, with original-index tooltips.
+- `line`: X-ordered connected traces.
+- `band`: filled region between explicit lower (`y`) and upper (`y2`)
+  columns. Every source row must satisfy lower ≤ upper; confidence or
+  uncertainty bounds are **never fabricated**.
+- `area`: filled area down to numeric zero (linear Y axes only).
+
+`colorBy` optionally binds each layer to a categorical column, with
+a maximum of eight groups. All categorical keys and field references
+are validated; unknown expressions, scripts, URLs and callbacks are
+rejected. Original arrays are never modified or ordered in place.
+Tooltips use original numeric coordinates, regardless of display sampling.
+Numeric axis labels, units, and linear/log10 scales are supported.
+
+An example:
+
+```json
+{
+  "type": "composite",
+  "version": 2,
+  "title": "Experimental response",
+  "xAxis": "Time",
+  "yAxis": "Signal",
+  "composite": {
+    "numbers": {
+      "time": [0, 1, 2, 3],
+      "response": [1, 2, 2.4, 3],
+      "low": [0.8, 1.8, 2.1, 2.8],
+      "high": [1.2, 2.2, 2.7, 3.3]
+    },
+    "categories": {
+      "group": ["control", "control", "treated", "treated"]
+    },
+    "facetBy": "group",
+    "layers": [
+      {"mark": "band", "x": "time", "y": "low", "y2": "high", "colorBy": "group", "label": "Reported interval"},
+      {"mark": "line", "x": "time", "y": "response", "colorBy": "group", "label": "Signal"},
+      {"mark": "point", "x": "time", "y": "response", "colorBy": "group"}
+    ]
+  }
+}
+```
+
+Live React SVG and low-zoom overview render the same faceting and layer
+references. They display a bounded, extrema-preserving sample of dense
+marks; the original values remain in chart state. The Matplotlib
+publication exporter (SVG/PDF/PNG) uses every observation with the same
+facets, layer types, labels and scale semantics. Numerical data, generated
+layers, typed columns and figure version survive chart save/reload.
+
+**Current V2 limitations:** inline columnar data only (2,000 observations),
+no external columnar storage, no arbitrary user-defined expressions,
+and no linked cross-chart selections yet. This is a native composable
+graphics foundation, not a complete Vega-Lite implementation.
