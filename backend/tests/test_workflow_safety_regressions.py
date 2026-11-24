@@ -11,7 +11,6 @@ from dataclasses import asdict
 
 import pytest
 
-from backend.chat_library import get_default_workspace_id
 from backend.tests.test_detached_workflow_engine import _engine, _entry, _spec, _until
 from backend.workflow.contracts import TextValue
 from backend.workflow.engine import UnattendedPolicy, WorkflowEngine
