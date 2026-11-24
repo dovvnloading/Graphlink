@@ -114,22 +114,31 @@ class EvaluationHost:
             self.wrong_inputs += 1
             raise ValueError("Evaluation dispatched an unexpected request")
 
-    def _script(self, step_id, subject):
+    def _script(self, step_id, subject, messages):
+        self._expect(messages[0] == {"role": "system", "content": SYSTEM})
         if step_id == "summary":
             self._expect(subject == EVIDENCE)
+            self._expect(messages[1]["content"] ==
+                         "Summarize both trials in one sentence with [A] and [B] citations:\n" + EVIDENCE)
             return RESEARCH_ANSWER
         if step_id == "chart-summary":
             self._expect(_check_chart(json.loads(subject)))
+            self._expect(messages[1]["content"] ==
+                         "Report both region totals exactly as 'West total N; East total N.'\n" + subject)
             return CHART_ANSWER
         if step_id == "draft":
             self._expect(subject == "3 + 4")
+            self._expect(messages[1]["content"] == "Return only the integer result of 3 + 4.")
             return "9"  # deliberate semantic failure, not a transport retry
         if step_id.startswith("repair-"):
             self._expect(subject.strip() != "7")
+            self._expect(messages[1]["content"] ==
+                         f"Correct this wrong answer to 3 + 4: {subject}. Return only the integer.")
             return "7"
         if step_id.startswith("map-"):
             index = int(step_id.removeprefix("map-"))
             self._expect(0 <= index < len(DOCUMENTS) and subject == DOCUMENTS[index])
+            self._expect(messages[1]["content"] == "Summarize the document as 'Name: N' only.\n" + subject)
             return MAP_ANSWERS[index]
         self._expect(False)
 
@@ -148,7 +157,7 @@ class EvaluationHost:
         self._expect(cfg["model_id"] == self.model.model and cfg["provider"] == LOCAL_PROVIDER_OLLAMA)
         messages = model_messages(cfg, inputs)
         if self.model.mode == "scripted":
-            reply = self._script(step_id, inputs["subject"].text)
+            reply = self._script(step_id, inputs["subject"].text, messages)
             reply = self.overrides.get(step_id, reply)
         else:
             _require_live_opt_in()
@@ -171,8 +180,9 @@ class TaskRun:
     def __init__(self, path, task, model, overrides):
         self.task = task
         self.host = EvaluationHost(model, overrides)
-        self.engine = WorkflowEngine(path, registry=builtin_registry(self.host),
-                                     policy_for=self.host.policy, limits=RunLimits(cloud_concurrency=1))
+        self.timeout = 20 if model.mode == "scripted" else 300
+        self.engine = WorkflowEngine(path, registry=builtin_registry(self.host), policy_for=self.host.policy,
+                                     limits=RunLimits(cloud_concurrency=1, wall_time_seconds=self.timeout))
         self.ws = get_default_workspace_id(path)
         self.records = []
         self.expected = []
@@ -200,7 +210,7 @@ class TaskRun:
         preview = self.engine.preview(spec, parameters)
         token = self.engine.approve(self.ws, preview) if preview.requires_approval else None
         run_id = self.engine.start(self.ws, spec, parameters, approval_token=token)
-        await asyncio.wait_for(self.engine.wait(self.ws, run_id), timeout=300)
+        await asyncio.wait_for(self.engine.wait(self.ws, run_id), timeout=self.timeout + 5)
         record = self.engine.store.read(self.ws, run_id)
         self.records.append(record)
         return {name: self.engine.artifacts.unpack(value) for name, value in record["outputs"].items()}
@@ -325,6 +335,8 @@ async def _installed_model(model):
         matches = [item for item in response.json()["models"] if item.get("name") == model]
     if len(matches) != 1:
         raise ValueError("Select an exact installed model tag (including its version tag).")
+    if matches[0].get("remote_host") or matches[0].get("remote_model"):
+        raise ValueError("Cloud-backed Ollama models are not eligible for the local comparison.")
     version = matches[0].get("digest")
     if not isinstance(version, str) or not re.fullmatch(r"(?:sha256:)?[a-f0-9]{64}", version):
         raise ValueError("Installed model did not expose a content digest.")
@@ -333,6 +345,7 @@ async def _installed_model(model):
 
 def _report(model, results):
     return {
+        "provider": LOCAL_PROVIDER_OLLAMA if model.mode == "live-local" else "scripted",
         "model": model.model, "version": model.version, "mode": model.mode,
         "price": {"currency": "USD", "model_per_call": model.price_usd_per_call,
                   "research_per_call": RESEARCH_PRICE if model.mode == "scripted" else 0.0,
