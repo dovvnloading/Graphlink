@@ -4,6 +4,8 @@ import asyncio
 
 import pytest
 
+from backend.tests.graph_runner_golden import assert_golden, remap_step
+
 import backend.agents  # noqa: F401 - initialize the ordinary canvas import graph
 from backend.domain.graph import SceneDocument
 from backend.domain.graph_runner import (
@@ -26,12 +28,14 @@ def test_selected_note_uses_ancestors_and_descendants_without_running_ancestor_s
     plan = plan_graph_run(doc, [selected.id])
     assert [step["nodeId"] for step in plan] == [upstream.id, selected.id, leaf.id]
     assert [step["status"] for step in plan] == ["ready"] * 3
+    ids = {source.id: "source", upstream.id: "upstream", selected.id: "selected", leaf.id: "leaf"}
+    assert_golden("note_chain_preview", [remap_step(step, ids) for step in plan])
     assert all(node.content == "Add note..." for node in (upstream, selected, leaf, sibling))
     with pytest.raises(SceneError, match="input changed"):
         execute_graph_step(doc, plan[-1])
-    assert [execute_graph_step(doc, step) for step in plan] == [
-        _text_digest("three short words"), _text_digest("3"), _text_digest("3"),
-    ]
+    outputs = [execute_graph_step(doc, step) for step in plan]
+    assert outputs == [_text_digest("three short words"), _text_digest("3"), _text_digest("3")]
+    assert_golden("note_chain_outputs", outputs)
     assert (upstream.content, selected.content, leaf.content, sibling.content) == ("three short words", "3", "3", "Add note...")
     assert [step["status"] for step in plan_graph_run(doc, [leaf.id])] == ["current"] * 3
 
@@ -157,8 +161,11 @@ def test_grouped_table_feeds_two_consumers_and_preserves_committed_versions():
     doc.set_table_source(source.id, source.content.replace(",3,third", ",9,third"), source.content)
     plan = plan_graph_run(doc, [grouped.id])
     assert [(s["kind"], s["status"]) for s in plan] == [("table", "ready"), ("chart", "ready"), ("artifact", "ready")]
-    for step in plan:
-        execute_graph_step(doc, step)
+    assert_golden("grouped_table_preview", remap_step(plan[0], {source.id: "source", grouped.id: "grouped"}))
+    outputs = [execute_graph_step(doc, step) for step in plan]
+    assert_golden("grouped_table_result", {
+        "content": grouped.content, "outputHash": outputs[0], "version": grouped.state.table_output.current.version,
+    })
     assert chart.state.chart_data["values"] == [11, 1]
     assert "11" in report.state.artifact_content
     history = doc.get_table_output_history(grouped.id)

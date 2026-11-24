@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from backend.domain.graph import SceneDocument
-from backend.domain.graph_runner import _inspect, _matching_node, _output_digest
+from backend.workflow.graph_steps import _inspect, _matching_node, _output_digest
 from backend.domain.model import SceneError
 from backend.domain.table_workflows import _current_result
 from backend.domain.graph_run_history import RUN_ID
@@ -99,7 +99,7 @@ def _output_body(document: SceneDocument, step: dict, expected: str | None) -> A
         if _output_digest(node) != expected:
             return None
         if step["kind"] == "scientific":
-            from backend.api.intents_graph_runner import _state_data
+            from backend.workflow.graph_execution import _state_data
             return _state_data(node).get("latest")
         if step["kind"] in {"note", "model", "tool"}:
             return node.content

@@ -12,9 +12,11 @@ import threading
 
 import pytest
 
+from backend.tests.graph_runner_golden import assert_golden, step_fields
+
 from backend.api import intents_graph_model as local_model
 from backend.canvas import SceneDocument
-from backend.chat_library import load_chat_row
+from backend.chat_library import load_chat_row, load_workflow_run
 from backend.domain.model import SceneError
 from backend.domain.node_states import ModelState
 from backend.domain.graph_runner import plan_graph_run
@@ -116,6 +118,10 @@ def test_two_model_steps_then_transform_commit_in_dependency_order(tmp_path, mon
         assert doc.nodes[target.id].content == "Add note..."
         preview = await send("previewGraphRun", [])
         assert [x["status"] for x in preview["steps"]] == ["ready", "waiting", "waiting"]
+        assert_golden("model_chain_preview", [
+            {**fields, "deferred": not step["inputHash"]}
+            for fields, step in zip(step_fields(preview["steps"], "kind", "operation", "status"), preview["steps"], strict=True)
+        ])
         assert not path.exists() or not doc.graph_runs
         observed = []
 
@@ -128,12 +134,22 @@ def test_two_model_steps_then_transform_commit_in_dependency_order(tmp_path, mon
             assert attempt["phase"] == "dispatched"
             assert attempt["model"] == model_id == "qwen3:8b"
             observed.append((prompt, dispatched[0]["nodeId"], attempt["requestId"]))
-            return {"message": {"content": "First model reply" if len(observed) == 1 else "Second model reply with four words"}}
+            return {"message": {"content": "First model reply" if len(observed) == 1 else "Second model reply with four words"},
+                    "prompt_eval_count": 10 + len(observed), "eval_count": 5}
 
         monkeypatch.setattr(local_model, "local_ollama_complete", fake_ollama)
         result = await send("executeGraphRun", [], preview["previewToken"], "first-class-graph-run")
         assert result["status"] == "completed"
         assert [row["status"] for row in result["steps"]] == ["completed", "completed", "completed"]
+        assert_golden("model_chain_result", step_fields(result["steps"], "kind", "operation", "status", "detail"))
+        receipt = load_workflow_run(path, doc.current_chat_id, "first-class-graph-run")
+        assert receipt["status"] == "completed"
+        for index, model_step in enumerate(receipt["steps"][:2], start=1):
+            assert model_step["status"] == "completed"
+            assert model_step["approval"] == "reviewed"
+            assert model_step["input_tokens"] == 10 + index
+            assert model_step["output_tokens"] == 5
+            assert model_step["cost_usd"] == 0.0
         assert len(observed) == 2
         assert observed[0][0] == source.content
         assert observed[1][0] == "First model reply"
