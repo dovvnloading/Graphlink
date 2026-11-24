@@ -1,5 +1,5 @@
 import { useReactFlow, useStoreApi } from "@xyflow/react";
-import { lazy, Suspense, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { GraphModelBinding, GraphRun, GraphRunPreview, GraphRunStep, LatestGraphRun, SceneStore } from "../canvas/sceneStore";
 import { formatScienceSummary } from "../canvas/scientificWorkbench";
 import { McpApprovalPanel } from "../canvas/McpApprovalPanel";
@@ -125,15 +125,16 @@ function Runner({ store }: { store: SceneStore }) {
   const requestedScope = store.getGraphRunnerRequestScope();
   const overlays = useOverlays();
   const scene = useSyncExternalStore(store.subscribe, store.getScene);
-  const names = new Map(scene.nodes.map((node) => [node.id, node.title]));
-  const plainNotes = scene.nodes.filter((node) =>
+  const names = useMemo(() => new Map(scene.nodes.map((node) => [node.id, node.title])), [scene.nodes]);
+  const plainNotes = useMemo(() => scene.nodes.filter((node) =>
     node.kind === "note" && !node.isTableSource && !node.isSystemPrompt &&
     !node.isSummaryNote && !node.isBranchComparison && !node.tableOutputVersion
-  );
-  const sources = scene.nodes.filter((node) =>
-    node.kind === "chat" || node.kind === "artifact" || node.kind === "model" || node.kind === "mcp_connect.tool" ||
-    (node.kind === "note" && plainNotes.some((note) => note.id === node.id))
-  );
+  ), [scene.nodes]);
+  const sources = useMemo(() => {
+    const noteIds = new Set(plainNotes.map(note => note.id));
+    return scene.nodes.filter(node => node.kind === "chat" || node.kind === "artifact" || node.kind === "model" ||
+      node.kind === "mcp_connect.tool" || noteIds.has(node.id));
+  }, [scene.nodes, plainNotes]);
   const modelNoteHandoff = !!requestedIds?.some((id) => plainNotes.some((node) =>
     node.id === id && !node.textInputSourceId && !node.tableInputSourceId,
   ));
@@ -157,6 +158,9 @@ function Runner({ store }: { store: SceneStore }) {
   const [preview, setPreview] = useState<(GraphRunPreview & {
     nodeIds: string[]; operationId: string; scope?: WorkflowScope; sourceRunId?: string;
   }) | null>(null);
+  const previewHeading = useRef<HTMLHeadingElement>(null);
+  const previewOrigin = useRef<HTMLElement | null>(null);
+  const commitArea = useRef<HTMLDivElement>(null);
   const [latest, setLatest] = useState<LatestGraphRun | null>(null);
   const [busy, setBusy] = useState("Loading run history…");
   const [cancellingRun, setCancellingRun] = useState(false);
@@ -268,7 +272,15 @@ function Runner({ store }: { store: SceneStore }) {
     </div>;
   }
 
+  useEffect(() => {
+    if (!preview || !previewOrigin.current) return;
+    const origin = previewOrigin.current;
+    previewOrigin.current = null;
+    if (document.activeElement === origin || document.activeElement === document.body) previewHeading.current?.focus();
+  }, [preview]);
+
   function previewRun() {
+    previewOrigin.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     void perform("Preparing preview…", async () => {
       setPreview(null);
       const nodeIds = scope === "all" ? [] : selectedIds;
@@ -431,7 +443,7 @@ function Runner({ store }: { store: SceneStore }) {
         </li>)}
       </ol>
     </section>}
-    {busy && <p role="status">{busy}</p>}
+    <p className={busy ? undefined : "visually-hidden"} role="status">{busy}</p>
     <McpApprovalPanel store={store} active={scene.nodes.some(node => node.kind === "mcp_connect.tool")
       && (!!running || busy === "Running graph…" || busy === "Resuming run…")} />
     {error && <div className="runner-error">
@@ -444,13 +456,14 @@ function Runner({ store }: { store: SceneStore }) {
     </div>}
     {preview && <section aria-label="Run preview">
       <header className="runner-section-header">
-        <h2>Run preview</h2>
+        <h2 ref={previewHeading} tabIndex={-1}>Run preview</h2>
         <span>{ready} ready</span>
       </header>
+      {ready > 0 && <Button size="sm" onClick={() => commitArea.current?.querySelector("button")?.focus()}>Jump to run confirmation</Button>}
       {preview.steps.length ? <RunSteps key={preview.previewToken} steps={preview.steps} names={names}
         reveal={index => store.showWorkflowPreviewStep(preview.nodeIds, preview.previewToken, index, preview.scope, preview.sourceRunId)} /> :
         <p>No connected outputs in this scope. Bind a note's text input, create a table output, or save a Scientific Workbench operation for Graph Runner.</p>}
-      {ready > 0 && <div className="runner-commit">
+      {ready > 0 && <div className="runner-commit" ref={commitArea}>
         <p>Running saves this graph and records each finished step.</p>
         <Button variant="secondary" disabled={!!busy || running} onClick={() =>
           void perform("Running graph…", () => updateRun(store.executeGraphRun(
