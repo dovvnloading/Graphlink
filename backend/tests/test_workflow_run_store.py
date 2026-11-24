@@ -50,7 +50,7 @@ def test_migration_checkpoint_rollback_order_and_backup(tmp_path):
     assert json.loads(first["steps"][0]["input_ref"])["sha256"] == "c" * 64
     assert "private" not in json.dumps(first)
     with closing(sqlite3.connect(path)) as conn:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 6
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == chat_library.CHATS_DB_SCHEMA_VERSION
         assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
 
     completed = copy.deepcopy(plan)
