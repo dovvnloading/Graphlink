@@ -13,6 +13,7 @@ import { Select } from "../ui/Select";
 import { Spinner } from "../ui/Spinner";
 import { formatCount, formatDuration } from "../ui/format";
 import { FullWorkflowContents } from "./WorkflowContents";
+import { DetachedWorkflowInspector } from "./DetachedWorkflowInspector";
 import "./GraphRunnerDialog.css";
 import "./WorkflowHistoryDialog.css";
 
@@ -209,6 +210,7 @@ function History({ store }: { store: SceneStore }) {
 
 export function WorkflowHistoryDialog({ store }: { store: SceneStore }) {
   return <Dialog name="run-history" title="Run history" size="lg" className="graph-runner-dialog">
+    <DetachedWorkflowInspector />
     <History store={store} />
   </Dialog>;
 }

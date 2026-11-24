@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Protocol, TypeVar
 
@@ -27,6 +27,8 @@ class StepContext:
     model_identity: tuple[str, str] | None = None
     cost_limit_usd: float = 0.0
     report_cost: Callable[[float], None] | None = None
+    wait_for_approval: Callable[[str], Awaitable[None]] | None = None
+    run_map: Callable[[dict, list], Awaitable[list]] | None = None
 
 
 class StepAdapter(Protocol[PreparedT]):

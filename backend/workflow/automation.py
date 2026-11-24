@@ -139,6 +139,7 @@ class WorkflowAutomation:
         preview = self.preview(request)
         if preview["fingerprint"] != policy.fingerprint:
             raise PermissionError("The preview changed; review it again.")
+        policy.validate_map_children(preview["control_flow"])
         if preview["estimated_cost_usd"] > min(policy.cost_usd, self.service.engine().limits.cost_usd):
             raise ValueError("The preview exceeds the preset or backend cost cap.")
         trigger = validate_trigger(body["trigger"], self.db_path)

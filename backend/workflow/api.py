@@ -44,6 +44,9 @@ class WorkflowService:
                                           policy_for=self.policy_for, on_pause=self.on_pause)
         return self._engine
 
+    def pending_approvals(self):
+        return self._engine.pending_approvals() if self._engine is not None else []
+
     async def shutdown(self) -> None:
         await self.automation.stop()
         if self._engine is not None:
@@ -72,6 +75,10 @@ def _run_asset_refs(record: dict[str, Any]) -> set[str]:
     values = [*record["inputs"].values(), *record["outputs"].values()]
     for step in record["steps"].values():
         values.extend(step["outputs"].values())
+        for item in step.get("map_items", {}).values():
+            values.extend(item["outputs"].values())
+            for child in item["steps"].values():
+                values.extend(child["outputs"].values())
     return {value["asset_ref"] for value in values if "asset_ref" in value}
 
 
@@ -90,6 +97,15 @@ def _download(engine: WorkflowEngine, ref: str, refs: set[str]) -> Response:
 
 def register_workflow_api(app: FastAPI, service: WorkflowService) -> None:
     prefix = "/api/workflows/{workspace_id}"
+
+    @app.get("/api/workflows/active-approvals")
+    async def active_approvals():
+        return service.pending_approvals()
+
+    @app.get("/api/workflows/workspaces")
+    async def workspaces():
+        from backend.chat_library import get_all_workspaces
+        return [{"id": row["id"], "name": row["name"]} for row in get_all_workspaces(service.db_path)]
 
     @app.post(prefix + "/preview")
     async def preview(workspace_id: int, body: dict[str, Any]):
@@ -124,6 +140,16 @@ def register_workflow_api(app: FastAPI, service: WorkflowService) -> None:
         if not engine.cancel(workspace_id, run_id):
             raise HTTPException(409, "This workflow is not running.")
         return {"cancel_requested": True}
+
+    @app.post(prefix + "/runs/{run_id}/step-approval")
+    async def step_approval(workspace_id: int, run_id: str, body: dict[str, Any]):
+        if type(body.get("approved")) is not bool or not isinstance(body.get("step_id"), str):
+            raise HTTPException(400, "Explicit approval or rejection of a pending step is required.")
+        engine = service.engine()
+        _require_run(engine, workspace_id, run_id)
+        if not engine.decide_step(workspace_id, run_id, body["step_id"], body["approved"]):
+            raise HTTPException(409, "This step is not awaiting approval.")
+        return {"decision_recorded": True}
 
     @app.post(prefix + "/runs/{run_id}/save-as-graph", status_code=201)
     async def save_as_graph(workspace_id: int, run_id: str, body: dict[str, Any] | None = None):
