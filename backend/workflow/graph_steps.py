@@ -26,6 +26,7 @@ from graphlink_plugins.scientific.graph_run_adapter import (
     output_hash as science_output_hash, prepare as prepare_science,
 )
 
+from . import canvas as reusable
 from .model_note_adapter import ModelNoteAdapter
 from .registry import builtin_registry
 
@@ -42,6 +43,7 @@ class GraphExecutionContext(Protocol):
     async def scientific(self, step: Step) -> None: ...
     async def tool(self, step: Step) -> None: ...
     async def deterministic(self, step: Step) -> None: ...
+    async def workflow(self, step: Step) -> None: ...
     def recover_scientific(self, step: Step) -> bool: ...
 
 
@@ -71,6 +73,8 @@ class GraphStepAdapter:
 
 
 def _kind(node: SceneNode) -> str:
+    if node.kind == reusable.KIND:
+        return "workflow"
     if mcp_configured(node):
         return "tool"
     if science_configured(node):
@@ -87,6 +91,33 @@ def _binding(node: SceneNode) -> tuple[str, str] | None:
     if output is not None:
         return output.source_id, "group_sum"
     return None
+
+
+def _pin_workflow(document: SceneDocument, step: Step) -> None:
+    node = document.nodes[step["nodeId"]]
+    step["configHash"] = reusable.config_hash(node)
+    step["targetHash"] = reusable.output_hash(node)
+
+
+def _inspect_workflow(document: SceneDocument, step: Step) -> None:
+    node = document.nodes[step["nodeId"]]
+    _, _, digest = reusable.prepare(document, node)
+    current = reusable.data(node)["lastInputHash"] == digest
+    step.update(inputHash=digest, status="current" if current else "ready",
+                detail="Pinned workflow inputs are ready.")
+
+
+def _match_workflow(document: SceneDocument, node: SceneNode, step: Step) -> None:
+    if step["operation"] != "workflow" or reusable.dependencies(node) != step_sources(step):
+        raise SceneError("Workflow configuration changed since preview.")
+
+
+def _workflow_binding(document: SceneDocument, node: SceneNode) -> GraphBinding:
+    try:
+        parents = reusable.dependencies(node)
+    except SceneError as exc:
+        return GraphBinding("", "workflow", (), str(exc))
+    return GraphBinding(parents[0] if parents else "", "workflow", parents)
 
 
 def _pin_mcp(document: SceneDocument, step: Step) -> None:
@@ -317,6 +348,12 @@ _MCP = GraphStepAdapter(
     fan_in=True, pin_preview=_pin_mcp_preview,
 )
 
+_WORKFLOW = GraphStepAdapter(
+    _pin_workflow, _inspect_workflow, _evaluate_async, reusable.output_hash,
+    _match_workflow, _workflow_binding, lambda context, step: context.workflow(step),
+    fan_in=True,
+)
+
 # The old wire kind is the compatibility selector, not a new wire field.
 # All legacy steps are pinned to this v1 implementation.
 GRAPH_STEP_ADAPTERS = builtin_registry().with_entries((
@@ -327,6 +364,7 @@ GRAPH_STEP_ADAPTERS = builtin_registry().with_entries((
     ("model", "1", _MODEL),
     ("scientific", "1", _SCIENCE),
     ("tool", "1", _MCP),
+    ("workflow", "1", _WORKFLOW),
     ("model-note", "1", ModelNoteAdapter()),
 ))
 

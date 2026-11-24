@@ -163,7 +163,7 @@ def _visible_run(bus: SessionBus, run: dict[str, Any], active_run_id: str | None
 
 def register_graph_runner(
     bus: SessionBus, document: SceneDocument, save_checkpoint: Callable[[], Awaitable[bool]], serialize_mutation: Callable,
-    settings_manager: Any = None,
+    settings_manager: Any = None, workflow_resolver: Callable | None = None,
 ) -> None:
     active_run_id: str | None = None
     active_task: asyncio.Task[Any] | None = None
@@ -218,6 +218,7 @@ def register_graph_runner(
             adapter = adapter_for_step(step)
             execution = GraphRunExecution(
                 document, bus, settings_manager, confirmed_checkpoint, run, by_node_id, record_step, started_clock,
+                workflow_resolver=workflow_resolver,
             )
             try:
                 if "externalAttempt" in step:

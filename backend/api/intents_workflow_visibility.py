@@ -80,6 +80,10 @@ def _input_body(document: SceneDocument, step: dict, expected: str | None) -> An
         if step["kind"] == "scientific":
             _, inputs, _, digest, _ = prepare_science(document, node, lambda _pack: True)
             return inputs if digest == expected else None
+        if step["kind"] == "workflow":
+            from backend.workflow import canvas as reusable
+            _, inputs, digest = reusable.prepare(document, node)
+            return inputs if digest == expected else None
         if step["kind"] in {"note", "model"}:
             return document._text_output(step["sourceId"])
         _, output = document._require_table_output(step["nodeId"])
@@ -101,6 +105,9 @@ def _output_body(document: SceneDocument, step: dict, expected: str | None) -> A
         if step["kind"] == "scientific":
             from backend.workflow.graph_execution import _state_data
             return _state_data(node).get("latest")
+        if step["kind"] == "workflow":
+            from backend.workflow import canvas as reusable
+            return reusable.data(node)["outputs"]
         if step["kind"] in {"note", "model", "tool"}:
             return node.content
         return _current_result(node)

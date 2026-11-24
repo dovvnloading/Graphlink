@@ -59,6 +59,8 @@ class Classified:
 
 
 CLASSIFICATION: tuple[Classified, ...] = (
+    Classified("scene", "workflowLibrary", "B", "Global library actions do not edit the canvas."),
+    Classified("scene", "mutateWorkflowNode", "A", "Placement, configuration, upgrade and unpack are undoable."),
     # -- backend/app.py (system) --------------------------------------------
     Classified("system", "ping", "B", "read-only: diagnostic echo, no document mutation"),
 

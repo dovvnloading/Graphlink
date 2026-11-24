@@ -298,6 +298,9 @@ class ContentOps(SceneDocumentParts):
             return self._plain_note(source_id).content
         if source.kind == "model" and isinstance(source.state, ModelState):
             return source.content
+        if source.kind == "graph_runner.workflow":
+            from backend.workflow.canvas import text_output
+            return text_output(source)
         if source.kind == "mcp_connect.tool":
             from graphlink_plugins.mcp_connect.core import saved_text
             return saved_text(source)
@@ -319,6 +322,9 @@ class ContentOps(SceneDocumentParts):
             raise SceneError("Disconnect the model input before connecting a text transform.")
 
         # Only data dependencies count. A structural edge can run either way.
+        from backend.workflow.canvas import contains_dependency
+        if contains_dependency(self, source_id, target_id):
+            raise SceneError("A text input cannot form a cycle.")
         current_id = source_id
         seen = {target_id}
         while current_id:
@@ -350,6 +356,10 @@ class ContentOps(SceneDocumentParts):
         if target.state.text_input_source_id or target.state.table_output is not None:
             raise SceneError("Disconnect the existing input before connecting a model.")
         if source_id == target_id:
+            raise SceneError("A model connection cannot form a cycle.")
+
+        from backend.workflow.canvas import contains_dependency
+        if contains_dependency(self, source_id, target_id):
             raise SceneError("A model connection cannot form a cycle.")
 
         # Follow all supported note-to-note dependencies; legacy visual edges
@@ -462,14 +472,14 @@ class ContentOps(SceneDocumentParts):
             return "stale"
         return "current"
 
-    def require_current_model_source(self, source_id: str, *, check_text_inputs: bool = False) -> None:
+    def require_current_model_source(self, source_id: str, *, check_text_inputs: bool = False, _visited: set[str] | None = None) -> None:
         """Reject stale model provenance without changing manual text transform semantics.
 
         A model call (or freshness query) additionally requires upstream text
         transforms to be current. A direct deterministic run can still copy a
         cached text source explicitly as it could before model ports existed.
         """
-        seen: set[str] = set()
+        seen: set[str] = set(_visited or ())
         current_id = source_id
         traversed_model = False
         while current_id in self.nodes:
@@ -477,6 +487,13 @@ class ContentOps(SceneDocumentParts):
                 raise SceneError("The source graph contains a dependency cycle.")
             seen.add(current_id)
             source = self.nodes[current_id]
+            if source.kind == "graph_runner.workflow":
+                from backend.workflow import canvas
+                for parent in canvas.dependencies(source):
+                    self.require_current_model_source(parent, check_text_inputs=True, _visited=seen)
+                if canvas.data(source)["lastInputHash"] != canvas.prepare(self, source)[2]:
+                    raise SceneError("Run the upstream Workflow first; its output is not current.")
+                return
             if source.kind == "mcp_connect.tool":
                 from graphlink_plugins.mcp_connect.core import prepare
                 if not prepare(self, source).current:

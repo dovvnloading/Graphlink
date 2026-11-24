@@ -507,6 +507,9 @@ def test_args_schema_is_scoped_to_the_known_intents():
             ("scene", "showWorkflowStep"),
             ("scene", "showWorkflowPreviewStep"),
             ("scene", "getWorkflowCanvasState"),
+            # Workflow Library and pinned Workflow node actions validate request shapes.
+            ("scene", "workflowLibrary"),
+            ("scene", "mutateWorkflowNode"),
             ("scene", "previewGraphModel"),
             ("scene", "executeGraphModel"),
             ("scene", "bindGraphModel"),

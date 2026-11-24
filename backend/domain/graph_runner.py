@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any
 
 from backend.domain.model import SceneError, SceneNode
 from backend.domain.node_states import NoteState
+from backend.workflow import canvas as reusable
 from backend.workflow.graph_steps import (
     _binding, _config_and_target, _evaluate, _inspect, _kind, _matching_node, _output_digest,
     adapter_for_step, discover_binding, mcp_configured, mcp_dependencies,
@@ -28,7 +29,7 @@ def is_bound_node(node: SceneNode) -> bool:
     not its ordinary deterministic graph-plan endpoint.
     """
     return (
-        science_configured(node) or mcp_configured(node)
+        node.kind == reusable.KIND or science_configured(node) or mcp_configured(node)
         or _binding(node) is not None
         or isinstance(node.state, NoteState) and node.state.model_text_input is not None
     )
@@ -44,7 +45,12 @@ def bound_dependents(document: SceneDocument, source_ids: set[str]) -> list[str]
     """
     children: dict[str, list[str]] = defaultdict(list)
     for node in document.nodes.values():
-        if mcp_configured(node):
+        if node.kind == reusable.KIND:
+            try:
+                parents = reusable.dependencies(node)
+            except SceneError:
+                parents = ()
+        elif mcp_configured(node):
             try:
                 parents = mcp_dependencies(document, node)
             except SceneError:
@@ -213,7 +219,8 @@ def validate_graph_run_ancestors(
         ancestor = by_node_id.get(source_id)
         if ancestor is None:
             source = document.nodes.get(source_id)
-            if source is not None and (_binding(source) is not None or science_configured(source) or mcp_configured(source)):
+            if source is not None and (_binding(source) is not None or science_configured(source)
+                                       or mcp_configured(source) or source.kind == reusable.KIND):
                 raise SceneError("An upstream connection changed. Preview the branch again.")
             return
         if ancestor["status"] not in {"current", "completed"}:

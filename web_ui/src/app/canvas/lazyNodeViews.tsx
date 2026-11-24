@@ -185,3 +185,7 @@ export const ScientificNodeView = withNodeSuspense(
 export const McpToolNodeView = withNodeSuspense(
   lazy(() => import("./McpToolNodeView").then((m) => ({ default: m.McpToolNodeView }))),
 );
+
+export const WorkflowNodeView = withNodeSuspense(
+  lazy(() => import("./WorkflowNodeView").then((m) => ({ default: m.WorkflowNodeView }))),
+);

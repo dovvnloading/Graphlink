@@ -23,7 +23,7 @@ from backend.domain.graph_run_inspector import _digest, _duration_ms, _identifie
 _RUN_STATUSES = {"running", "interrupted", "completed", "partial", "cancelled", "reconciliation-required"}
 _STEP_STATUSES = {"pending", "running", "current", "completed", "blocked", "failed", "cancelled",
                   "reconciliation-required"}
-_KINDS = {"note", "chart", "artifact", "table", "model", "tool", "scientific"}
+_KINDS = {"note", "chart", "artifact", "table", "model", "tool", "scientific", "workflow"}
 _APPROVALS = {"pending", "reviewed", "auto", "cached", "approved", "denied", "expired", "cancelled"}
 _APPROVAL_ID = re.compile(r"mcp-[a-f0-9]{32}")
 
@@ -258,6 +258,14 @@ def checkpoint(conn: sqlite3.Connection, graph_id: int, runs: Any) -> None:
             step_record = _step_record(step)
             if _write(conn, "workflow_steps", {**key, "step_index": index}, step_record):
                 _event(conn, graph_id, run_id, index, "step_state", step_record)
+            if step["kind"] == "workflow":
+                from backend.workflow.child_runs import validate_child
+                child = validate_child(step.get("childRun"))
+                if child is not None:
+                    conn.execute(
+                        "INSERT OR IGNORE INTO workflow_child_runs VALUES (?, ?, ?, ?, ?)",
+                        (graph_id, run_id, index, child["runId"], _json(child)),
+                    )
         if changed and record["status"] != "running":
             _event(conn, graph_id, run_id, None, "run_state", record)
     # A stale or incomplete graph write must not make an unresolved fence
@@ -348,6 +356,16 @@ def overlay_receipts(conn: sqlite3.Connection, graph_id: int, runs: Any) -> None
                     step.pop(name, None)
             if retries:
                 step["retryCount"] = retries
+            if step["kind"] == "workflow":
+                from backend.workflow.child_runs import validate_child
+                receipt = conn.execute(
+                    "SELECT receipt_json FROM workflow_child_runs WHERE graph_id = ? AND run_id = ? AND step_index = ? ORDER BY rowid DESC LIMIT 1",
+                    (*key, index),
+                ).fetchone()
+                if receipt:
+                    child = validate_child(json.loads(receipt[0]))
+                    if child:
+                        step["childRun"] = child
 
 
 def read_run(conn: sqlite3.Connection, graph_id: int, run_id: str) -> dict[str, Any] | None:
@@ -363,6 +381,10 @@ def read_run(conn: sqlite3.Connection, graph_id: int, run_id: str) -> dict[str, 
     result = runs[0]
     result["steps"] = rows("SELECT * FROM workflow_steps WHERE graph_id = ? AND run_id = ? ORDER BY step_index")
     result["events"] = rows("SELECT * FROM workflow_events WHERE graph_id = ? AND run_id = ? ORDER BY event_id")
+    if any(step["kind"] == "workflow" for step in result["steps"]):
+        result["child_runs"] = [json.loads(row["receipt_json"]) for row in rows(
+            "SELECT receipt_json FROM workflow_child_runs WHERE graph_id = ? AND run_id = ? ORDER BY step_index"
+        )]
     return result
 
 

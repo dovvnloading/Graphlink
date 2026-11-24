@@ -55,11 +55,12 @@ from backend import db_backup
 from backend import knowledge_store
 from backend import native_dialogs
 from backend import workspace_archive
-from backend import workflow_run_store
+from backend import workflow_run_store, workflow_library_store
 from backend.workflow import detached_store
 from backend.canvas import SceneDocument
 from backend.domain.node_states import ChatState
 from backend.api.intents_graph_runner import register_graph_runner
+from backend.api.intents_workflow_library import register_workflow_library
 from backend.api.intents_graph_model import register_graph_model_runner
 from backend.api.intents_mcp_connect import register_mcp_connect
 from backend.events import SessionBus
@@ -122,7 +123,7 @@ class ConcurrentSaveConflict(RuntimeError):
 # The note-edge fix adds version "5": the notes table gains a note_id
 # column so note-endpoint edges survive a save/load round-trip - see
 # _migration_005_note_ids's own docstring.
-CHATS_DB_SCHEMA_VERSION = 7
+CHATS_DB_SCHEMA_VERSION = 8
 
 
 # ADR-009 stage 9.2: `created_at` and historical `updated_at` values use
@@ -1098,6 +1099,13 @@ def _migration_005_note_ids(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE notes ADD COLUMN note_id TEXT")
 
 
+def _migration_008_workflow_library(conn: sqlite3.Connection) -> None:
+    # Both feature branches originally claimed version 7. Keep main's
+    # detached migration at 7 and repair either pre-merge v7 schema.
+    detached_store.migrate(conn)
+    workflow_library_store.migrate(conn)
+
+
 # Keyed by the version each function PRODUCES (migration "1" takes a
 # database from 0 -> 1), matching graphlink_migrations' own ordering
 # convention - see run_sqlite_migrations' docstring. ADR-020 stage 20.1
@@ -1121,6 +1129,7 @@ _MIGRATIONS: dict[int, Callable[[sqlite3.Connection], None]] = {
     5: _migration_005_note_ids,
     6: workflow_run_store.migrate,
     7: detached_store.migrate,
+    8: _migration_008_workflow_library,
 }
 
 
@@ -3705,9 +3714,10 @@ def register_chat_library(
             bus, canvas_document, settings_manager,
             lambda: save_chat(checkpoint=True), _serialize_mutating_intent,
         )
+        workflow_resolver = register_workflow_library(bus, canvas_document, lambda: _connect(resolved_path), _serialize_mutating_intent)
         register_graph_runner(
             bus, canvas_document, lambda: save_chat(checkpoint=True), _serialize_mutating_intent,
-            settings_manager=settings_manager,
+            settings_manager=settings_manager, workflow_resolver=workflow_resolver,
         )
         register_graph_model_runner(
             bus, canvas_document, lambda: save_chat(checkpoint=True), _serialize_mutating_intent,

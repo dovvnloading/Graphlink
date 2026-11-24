@@ -29,7 +29,7 @@ const statuses: Record<string, string> = {
 const operations: Record<string, string> = {
   copy: "Copy text", word_count: "Word count", group_sum: "Group and sum",
   model: "Local model reply",
-  tool: "MCP tool",
+  tool: "MCP tool", workflow: "Pinned workflow",
 };
 
 function RunSteps({ steps, names, reveal }: {
@@ -54,6 +54,10 @@ function RunSteps({ steps, names, reveal }: {
         </Disclosure>}
       </div>}
       {step.detail && <p>{step.detail}</p>}
+      {step.childRun && <Disclosure label={"Child run · " + step.childRun.status}>
+        <p><code>{step.childRun.runId}</code></p>
+        <ol>{step.childRun.steps.map((child, index) => <li key={child.stepId}>Step {index + 1}: {child.status}</li>)}</ol>
+      </Disclosure>}
       {reveal && <div className="runner-note">
         <div>Will send: {step.status === "blocked" ? "Nothing; step is blocked."
           : step.status === "current" ? "Nothing; reuse current output."
@@ -341,6 +345,7 @@ function Runner({ store }: { store: SceneStore }) {
           ...(requestedScope === "failed" ? [{ value: "failed", label: "Run failed steps only" }] : []),
         ]} />
       <Button variant="secondary" disabled={!!busy} onClick={previewRun}>Preview run</Button>
+      <Button disabled={!!busy} onClick={() => overlays.open("workflow-library", "dialog")}>Workflow Library</Button>
     </div>
     {scope === "selection" && <p className="runner-note">Includes downstream outputs and the inputs they depend on.</p>}
     {scope === "through" && <p className="runner-note">Runs only the selected destination and its prerequisites. No downstream steps.</p>}

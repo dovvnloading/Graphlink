@@ -234,6 +234,61 @@ async def _run_mcp_tool_step(document, bus, checkpoint, step, by_node_id, record
     await runtime.execute(step, checkpoint, apply_result)
 
 
+async def _run_reusable_step(document, step, by_node_id, resolver, record):
+    from backend.workflow import canvas
+    from backend.workflow.library import execute, identifier
+
+    node = document.nodes.get(step["nodeId"])
+    child = None
+    try:
+        if node is None or resolver is None:
+            raise SceneError("Workflow Library is unavailable.")
+        validate_graph_run_ancestors(document, step, by_node_id)
+        _matching_node(document, step)
+        for source in canvas.dependencies(node):
+            document.require_current_model_source(source, check_text_inputs=True)
+        spec, inputs, digest = canvas.prepare(document, node)
+        old = canvas.data(node)
+        if (step["configHash"] != canvas.config_hash(node) or step["targetHash"] != canvas.output_hash(node)
+                or step["inputHash"] and step["inputHash"] != digest):
+            raise SceneError("The workflow changed since preview.")
+        step["inputHash"] = digest
+        frozen = await resolver(spec.workflow_id, spec.revision)
+        if frozen != old["document"]:
+            raise SceneError("The pinned Workflow Library version does not match.")
+        child = {"runId": identifier(), "workflowId": spec.workflow_id, "revision": spec.revision,
+                 "status": "running", "steps": []}
+        receipts = {}
+
+        def receipt(step_id, status, fingerprint):
+            receipts[step_id] = {"stepId": canvas.digest(step_id), "status": status, "fingerprint": fingerprint}
+            child["steps"] = list(receipts.values())
+
+        outputs = await execute(spec, inputs, child["runId"], receipt)
+        if (document.nodes.get(node.id) is not node or canvas.data(node) != old
+                or canvas.prepare(document, node)[2] != digest):
+            raise SceneError("The workflow changed while running.")
+        if len(canvas.canonical(outputs).encode()) > 1_000_000:
+            raise SceneError("Workflow outputs are too large.")
+        child["status"] = "completed"
+
+        def commit():
+            node.state = PluginStateSnapshot.from_data({
+                **old, "outputs": outputs, "lastInputHash": digest, "childRunId": child["runId"],
+            })
+            return canvas.output_hash(node)
+
+        output_digest, _ = record(commit, (node.id,))
+        step.update(status="completed", detail="Pinned workflow completed.", outputHash=output_digest, childRun=child)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        if child is not None:
+            child["status"] = "failed"
+            step["childRun"] = child
+        step.update(status="failed", detail="Workflow could not run. Check the pinned version and input values.")
+
+
 @dataclass
 class GraphRunExecution:
     document: SceneDocument
@@ -244,6 +299,7 @@ class GraphRunExecution:
     by_node_id: dict[str, Any]
     record: Callable
     started_clock: float
+    workflow_resolver: Callable | None = None
 
     def elapsed(self) -> int:
         return max(0, int((time.monotonic() - self.started_clock) * 1000))
@@ -288,6 +344,9 @@ class GraphRunExecution:
                 step.update(status="blocked", detail="The MCP tool could not start. Check its server settings.")
             else:
                 step.update(status="reconciliation-required", detail=RECONCILIATION_DETAIL)
+
+    async def workflow(self, step: dict[str, Any]) -> None:
+        await _run_reusable_step(self.document, step, self.by_node_id, self.workflow_resolver, self.record)
 
     async def deterministic(self, step: dict[str, Any]) -> None:
         document = self.document

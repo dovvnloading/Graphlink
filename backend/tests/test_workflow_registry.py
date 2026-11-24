@@ -28,14 +28,14 @@ def test_registry_resolves_only_the_pinned_version():
 
 
 def test_all_legacy_kinds_are_registered_with_explicit_projection_policy():
-    kinds = {"note", "table", "chart", "artifact", "model", "scientific", "tool", "model-note"}
+    kinds = {"note", "table", "chart", "artifact", "model", "scientific", "tool", "workflow", "model-note"}
     assert set(GRAPH_STEP_ADAPTERS.keys()) == {
         (kind, "1") for kind in kinds
     } | set(builtin_registry().keys())
     for kind in kinds - {"model-note"}:
         adapter = adapter_for_step({"kind": kind})
         assert adapter.predictable == (kind in {"note", "table", "chart", "artifact"})
-        assert adapter.fan_in == (kind in {"scientific", "tool"})
+        assert adapter.fan_in == (kind in {"scientific", "tool", "workflow"})
         assert adapter.local_model == (kind == "model")
         assert (adapter.pin_preview is not None) == (kind == "tool")
         assert (adapter.recover_cancelled is not None) == (kind == "scientific")

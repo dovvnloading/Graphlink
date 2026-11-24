@@ -30,7 +30,7 @@ import {
   ArtifactNodeView, ChartNodeView, ChatNodeView, CodeNodeView, CodeReviewNodeView,
   CodeSandboxNodeView, ConversationNodeView, DocumentNodeView, GitlinkNodeView,
   GroupNodeView, HarnessNodeView, HtmlNodeView, ImageNodeView, FalMediaNodeView, NoteNodeView, ScientificNodeView,
-  PlaceholderNodeView, PlanNodeView, ThinkingNodeView, WebResearchNodeView, ModelNodeView, McpToolNodeView,
+  PlaceholderNodeView, PlanNodeView, ThinkingNodeView, WebResearchNodeView, ModelNodeView, McpToolNodeView, WorkflowNodeView,
 } from "./lazyNodeViews";
 import type { ArtifactFlowNode } from "./ArtifactNodeView";
 import type { ChartFlowNode } from "./ChartNodeView";
@@ -52,6 +52,7 @@ import { ScientificWorkspace, type ScienceEditorProps } from "./ScientificWorksp
 import type { ScientificFlowNode } from "./ScientificNodeView";
 import { scientificFlowNode, isScienceKind } from "./scientificScene";
 import type { McpToolFlowNode } from "./McpToolNodeView";
+import type { WorkflowFlowNode } from "./WorkflowNodeView";
 import { mcpFlowNode } from "./mcpScene";
 import type { ModelFlowNode } from "./ModelNodeView";
 import { availableTextSources, isPlainNote, textSourceLabel, TEXT_INPUT_HANDLE, TEXT_OUTPUT_HANDLE, type TextInputOperation } from "./textInputs";
@@ -116,6 +117,7 @@ export type SceneFlowNode =
   | ModelFlowNode
   | ScientificFlowNode
   | McpToolFlowNode
+  | WorkflowFlowNode
   | GroupFlowNode
   | ChartFlowNode
   | PlanFlowNode
@@ -145,6 +147,7 @@ const NODE_TYPES = {
   model: ModelNodeView,
   scientific: ScientificNodeView,
   mcp_tool: McpToolNodeView,
+  workflow: WorkflowNodeView,
   // R6.1: one shared component backs both "frame" and "container" NODE_TYPES
   // entries - see GroupNodeView.tsx's own module doc for why a single
   // data.groupKind-parameterized component was chosen over two near-
@@ -500,6 +503,7 @@ export const FILTERABLE_NODE_KINDS = [
   "harness",
   "scientific",
   "mcp_connect.tool",
+  "graph_runner.workflow",
 ] as const;
 
 /**
@@ -2183,6 +2187,23 @@ export function toFlowNodes(
       flowNodes.push(scientificFlowNode(n, edgesByTarget.get(n.id) ?? [], nodesById, store, cache, isDimmed(n.id) ? BRANCH_DIM_OPACITY : 1));
       continue;
     }
+    if (n.kind === "graph_runner.workflow") {
+      const opacity = isDimmed(n.id) ? BRANCH_DIM_OPACITY : 1;
+      const extraSig = String(opacity);
+      const cached = cache.flowNodes.get(n);
+      if (cached?.extraSig === extraSig && cached.flowNode.type === "workflow") {
+        flowNodes.push(cached.flowNode);
+      } else {
+        const flowNode: WorkflowFlowNode = {
+          id: n.id, type: "workflow", position: { x: n.x, y: n.y },
+          style: opacity === 1 ? undefined : { opacity },
+          data: { title: n.title, raw: n.pluginState.workflow ?? "", isCollapsed: n.isCollapsed, store },
+        };
+        cache.flowNodes.set(n, { extraSig, flowNode });
+        flowNodes.push(flowNode);
+      }
+      continue;
+    }
     if (n.kind === "mcp_connect.tool") {
       flowNodes.push(mcpFlowNode(n, edgesByTarget.get(n.id) ?? [], nodesById, store, cache, isDimmed(n.id) ? BRANCH_DIM_OPACITY : 1));
       continue;
@@ -2216,7 +2237,7 @@ export function toFlowNodes(
     // Only a typed bound output may hand off to Graph Runner. A stale
     // script/plugin/agent node has no automatic run affordance.
     const isBoundForRunner = !!row && (
-      row.kind === "model" || isScienceKind(row.kind) || row.kind === "mcp_connect.tool" ||
+      row.kind === "model" || isScienceKind(row.kind) || row.kind === "mcp_connect.tool" || row.kind === "graph_runner.workflow" ||
       !!row.textInputSourceId || !!row.tableInputSourceId
     );
     const oldData = flow.data as Record<string, unknown>;
@@ -3224,7 +3245,7 @@ function CanvasInner({
       <RunBoundNodesContext.Provider value={openBoundNodes}>
       <WorkflowCanvasProvider store={store} enabled={scene.nodes.some(node =>
         !!node.textInputSourceId || !!node.tableInputSourceId || node.kind === "model" ||
-        node.kind === "mcp_connect.tool" || isScienceKind(node.kind))}>
+        node.kind === "mcp_connect.tool" || node.kind === "graph_runner.workflow" || isScienceKind(node.kind))}>
       <WorkflowCanvasProgress />
       <ScientificWorkspace Editor={CanvasScientificEditor}>
       <ReactFlow

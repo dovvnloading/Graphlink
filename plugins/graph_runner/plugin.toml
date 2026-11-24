@@ -8,3 +8,6 @@ description = "Preview and run connected text and table operations on the canvas
 
 [frontend]
 view = "generic"
+
+[persistence]
+passive_node_kinds = ["workflow"]
