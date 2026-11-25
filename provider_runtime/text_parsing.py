@@ -49,14 +49,15 @@ def _append_unique_text_segment(parts: list[str], text, seen: set[str]):
 
 def _strip_leading_harmony_tokens(text: str) -> str:
     import api_provider as _mod  # deferred: patch-seam safety (see module docstring)
-    remaining = str(text or "")
+    remaining = str(text or "").lstrip()
     while True:
-        updated = _mod._HARMONY_FINAL_MARKER_PATTERN.sub("", remaining, count=1)
-        updated = _mod._HARMONY_END_MARKER_PATTERN.sub("", updated, count=1)
-        updated = updated.lstrip()
-        if updated == remaining:
-            return updated
-        remaining = updated
+        marker = (
+            _mod._HARMONY_FINAL_MARKER_PATTERN.match(remaining)
+            or _mod._HARMONY_END_MARKER_PATTERN.match(remaining)
+        )
+        if marker is None:
+            return remaining
+        remaining = remaining[marker.end():].lstrip()
 
 
 def _split_harmony_reasoning_block(text: str) -> tuple[str, str] | None:
@@ -91,15 +92,23 @@ def _split_closing_only_think_block(text: str) -> tuple[str, str] | None:
         return None
 
     prefix = raw_text[:closing_match.start()]
-    if re.search(r"<(think|thinking)>", prefix, re.IGNORECASE):
+    suffix = raw_text[closing_match.end():]
+    # With no opening marker, this is inherently heuristic. Require a
+    # standalone closing line after nonempty reasoning-like text. Prefer
+    # preserving the answer if its prefix looks like quoted or example code.
+    if not prefix.strip() or prefix.rsplit("\n", 1)[-1].strip() or suffix.split("\n", 1)[0].strip():
+        return None
+    if re.search(
+        r"`|<(?:think|thinking|code_block)>|^[ \t]{0,3}(?:~{3,}|>)|^(?: {4}|\t)",
+        prefix, re.IGNORECASE | re.MULTILINE,
+    ):
         return None
 
-    reasoning_text = prefix.strip()
-    answer_text = raw_text[closing_match.end():].strip()
-    return reasoning_text, answer_text
+    return prefix.strip(), suffix.strip()
 
 
 def split_reasoning_and_content(text: str) -> tuple[str, str]:
+    """Extract leading reasoning envelopes without scanning the final answer."""
     import api_provider as _mod  # deferred: patch-seam safety (see module docstring)
     remaining_text = str(text or "").strip()
     if not remaining_text:
@@ -107,46 +116,44 @@ def split_reasoning_and_content(text: str) -> tuple[str, str]:
 
     reasoning_parts: list[str] = []
     reasoning_seen: set[str] = set()
+    found_envelope = False
 
-    while True:
-        changed = False
+    while remaining_text:
+        # Harmony explicitly establishes the final-answer boundary. Never
+        # interpret protocol examples inside the returned answer as reasoning.
+        harmony_split = _mod._split_harmony_reasoning_block(remaining_text)
+        if harmony_split is not None:
+            reasoning, answer = harmony_split
+            _mod._append_unique_text_segment(reasoning_parts, reasoning, reasoning_seen)
+            return "\n\n".join(reasoning_parts), answer
 
-        think_match = _mod._THINK_TAG_PATTERN.search(remaining_text)
+        answer = _mod._strip_leading_harmony_tokens(remaining_text)
+        if answer != remaining_text:
+            return "\n\n".join(reasoning_parts), answer.strip()
+
+        # Consume only contiguous leading envelopes, retaining deduplication
+        # for providers that emit more than one. Once visible text begins,
+        # paired markers (including those in fenced/inline code) are literal.
+        think_match = _mod._THINK_TAG_PATTERN.match(remaining_text)
+        fallback_match = _mod._FALLBACK_REASONING_PATTERN.match(remaining_text) if not think_match else None
         if think_match:
             _mod._append_unique_text_segment(reasoning_parts, think_match.group(2), reasoning_seen)
-            remaining_text = (
-                f"{remaining_text[:think_match.start()]}\n{remaining_text[think_match.end():]}"
-            ).strip()
-            changed = True
-
-        fallback_match = _mod._FALLBACK_REASONING_PATTERN.search(remaining_text)
-        if fallback_match:
+            remaining_text = remaining_text[think_match.end():].strip()
+        elif fallback_match:
             _mod._append_unique_text_segment(reasoning_parts, fallback_match.group(1), reasoning_seen)
-            remaining_text = (
-                f"{remaining_text[:fallback_match.start()]}\n{remaining_text[fallback_match.end():]}"
-            ).strip()
-            changed = True
-
-        closing_only_split = _mod._split_closing_only_think_block(remaining_text)
-        if closing_only_split:
-            closing_reasoning, closing_answer = closing_only_split
-            _mod._append_unique_text_segment(reasoning_parts, closing_reasoning, reasoning_seen)
-            remaining_text = closing_answer.strip()
-            changed = True
-
-        harmony_split = _mod._split_harmony_reasoning_block(remaining_text)
-        if harmony_split:
-            harmony_reasoning, harmony_answer = harmony_split
-            _mod._append_unique_text_segment(reasoning_parts, harmony_reasoning, reasoning_seen)
-            remaining_text = harmony_answer.strip()
-            changed = True
-
-        if not changed:
+            remaining_text = remaining_text[fallback_match.end():].strip()
+        else:
             break
+        found_envelope = True
 
-    remaining_text = _mod._strip_leading_harmony_tokens(remaining_text).strip()
-    reasoning_text = "\n\n".join(reasoning_parts).strip()
-    return reasoning_text, remaining_text
+    # Only try the ambiguous closing-only format on the original response,
+    # never on text already established as the answer by a leading envelope.
+    if not found_envelope:
+        closing_only_split = _mod._split_closing_only_think_block(remaining_text)
+        if closing_only_split is not None:
+            return closing_only_split
+
+    return "\n\n".join(reasoning_parts), remaining_text
 
 
 class ReasoningWithoutAnswerError(RuntimeError):
