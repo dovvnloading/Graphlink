@@ -1,4 +1,4 @@
-import { Suspense, lazy, useCallback, useEffect, useRef, useState } from "react";
+import { Suspense, lazy, memo, useCallback, useDeferredValue, useEffect, useRef, useState } from "react";
 import { DocumentViewToc } from "./DocumentViewToc";
 import { DocumentViewSearch } from "./DocumentViewSearch";
 import type { DocumentHeading } from "./documentViewHeadings";
@@ -18,9 +18,9 @@ import "./DocumentViewPanel.css";
 // mounted element: lazy-mounting the shell would cost the first open its
 // slide-in. Splitting the contents instead keeps the animation exactly as it
 // was and still leaves the weight behind the click.
-const DocumentViewMarkdown = lazy(() =>
+const DocumentViewMarkdown = memo(lazy(() =>
   import("./DocumentViewMarkdown").then((m) => ({ default: m.DocumentViewMarkdown })),
-);
+));
 
 const SEARCH_MATCH_SELECTOR = ".document-view-search-match";
 const SEARCH_MATCH_CURRENT_CLASS = "document-view-search-match-current";
@@ -359,8 +359,14 @@ export function DocumentViewPanel({
   // content-change reset block below, which references these setters.
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
+  // Keep the input urgent; defer the expensive Markdown pipeline. Clearing
+  // Find always removes the highlights immediately.
+  const deferredSearchQuery = useDeferredValue(searchQuery);
+  const renderedSearchQuery = searchQuery.trim() ? deferredSearchQuery : "";
+  const searchPending = searchQuery.trim() !== renderedSearchQuery.trim();
   const [currentMatchIndex, setCurrentMatchIndex] = useState(0);
   const [matchCount, setMatchCount] = useState(0);
+  const searchMatchesRef = useRef<HTMLElement[]>([]);
 
   // A new document (or the panel closing and a different one opening next)
   // must never start the reader mid-scroll from whatever the PREVIOUS
@@ -400,38 +406,54 @@ export function DocumentViewPanel({
   }
 
   const onSearchNext = useCallback(() => {
-    setCurrentMatchIndex((i) => (matchCount === 0 ? 0 : (i + 1) % matchCount));
-  }, [matchCount]);
+    if (!searchPending) setCurrentMatchIndex((i) => (matchCount === 0 ? 0 : (i + 1) % matchCount));
+  }, [matchCount, searchPending]);
 
   const onSearchPrevious = useCallback(() => {
-    setCurrentMatchIndex((i) => (matchCount === 0 ? 0 : (i - 1 + matchCount) % matchCount));
-  }, [matchCount]);
+    if (!searchPending) setCurrentMatchIndex((i) => (matchCount === 0 ? 0 : (i - 1 + matchCount) % matchCount));
+  }, [matchCount, searchPending]);
 
   const onSearchClose = useCallback(() => {
     setIsSearchOpen(false);
     setSearchQuery("");
   }, []);
 
-  // Runs after every render where the highlighted matches could have
-  // changed (new content, new query) or the user navigated to a different
-  // one - reads the actual <mark> elements DocumentViewMarkdown produced
-  // (the source of truth for "how many matches" and "which one is
-  // current"), rather than recomputing that independently and risking it
-  // drifting from what's really on screen.
+  // Cache the actual rendered marks only when the Markdown inputs change,
+  // not on navigation. If the lazy renderer has not mounted yet, collect
+  // them as soon as its content arrives.
   useEffect(() => {
     const container = scrollRef.current;
     if (!container) return;
-    const allMatches = Array.from(container.querySelectorAll<HTMLElement>(SEARCH_MATCH_SELECTOR));
-    setMatchCount(allMatches.length);
-    for (const el of allMatches) el.classList.remove(SEARCH_MATCH_CURRENT_CLASS);
-    if (allMatches.length === 0) return;
+    const collect = () => {
+      const matches = renderedSearchQuery.trim()
+        ? Array.from(container.querySelectorAll<HTMLElement>(SEARCH_MATCH_SELECTOR))
+        : [];
+      searchMatchesRef.current = matches;
+      setMatchCount(matches.length);
+    };
+    collect();
+    if (!renderedSearchQuery.trim() || container.hasChildNodes()) return;
+    const observer = new MutationObserver(() => {
+      collect();
+      if (container.hasChildNodes()) observer.disconnect();
+    });
+    observer.observe(container, { childList: true, subtree: true });
+    return () => observer.disconnect();
+  }, [content, renderedSearchQuery, citation]);
 
-    const current = allMatches[Math.min(currentMatchIndex, allMatches.length - 1)];
+  // Moving between cached matches touches just the previous and current
+  // elements. The memoized Markdown renderer also skips navigation renders.
+  useEffect(() => {
+    const container = scrollRef.current;
+    const matches = searchMatchesRef.current;
+    if (!container || searchPending || matches.length === 0) return;
+    const current = matches[Math.min(currentMatchIndex, matches.length - 1)];
     current.classList.add(SEARCH_MATCH_CURRENT_CLASS);
     const containerRect = container.getBoundingClientRect();
     const currentRect = current.getBoundingClientRect();
     container.scrollTop += currentRect.top - containerRect.top;
-  }, [content, searchQuery, currentMatchIndex]);
+    return () => current.classList.remove(SEARCH_MATCH_CURRENT_CLASS);
+  }, [content, renderedSearchQuery, citation, currentMatchIndex, matchCount, searchPending]);
 
   // The markdown renderer is lazy. A citation can open Document View before
   // it mounts, so observe the scroll container until the cited source blocks
@@ -563,7 +585,8 @@ export function DocumentViewPanel({
           query={searchQuery}
           onQueryChange={setSearchQuery}
           matchCount={matchCount}
-          currentMatchNumber={matchCount === 0 ? 0 : currentMatchIndex + 1}
+          searchPending={searchPending}
+          currentMatchNumber={matchCount === 0 ? 0 : Math.min(currentMatchIndex + 1, matchCount)}
           onNext={onSearchNext}
           onPrevious={onSearchPrevious}
           onClose={onSearchClose}
@@ -594,7 +617,7 @@ export function DocumentViewPanel({
               empty body for that moment is what the animation already shows. */}
           {hasOpened && (
             <Suspense fallback={null}>
-              <DocumentViewMarkdown content={content ?? ""} searchQuery={searchQuery} citation={citation} />
+              <DocumentViewMarkdown content={content ?? ""} searchQuery={renderedSearchQuery} citation={citation} />
             </Suspense>
           )}
         </div>

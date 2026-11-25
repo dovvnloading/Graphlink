@@ -1,12 +1,10 @@
-import { visit } from "unist-util-visit";
-
 /**
  * Document View full redesign, stage 3 ("in-document search/find"). The
  * first hand-authored rehype plugin in this codebase (stage 1/2 only ever
- * composed published plugins) - wraps every case-insensitive substring
- * match of a search query in a `<mark data-search-match-index>` element,
- * directly in the hast tree, so highlighting is fully declarative (re-render
- * on every keystroke, like the rest of this pipeline) rather than mutating
+ * composed published plugins) - wraps up to the first 1,000 case-insensitive
+ * substring matches in `<mark data-search-match-index>` elements,
+ * directly in the hast tree, so highlighting is fully declarative rather
+ * than mutating
  * the rendered DOM out from under React.
  *
  * Runs LAST in DocumentViewMarkdown.tsx's rehypePlugins array, after
@@ -46,6 +44,8 @@ import { visit } from "unist-util-visit";
  * you-type feature.
  */
 
+export const MAX_DOCUMENT_SEARCH_MATCHES = 1000;
+
 const REGEXP_SPECIAL_CHARS_RE = /[.*+?^${}()|[\]\\]/g;
 
 export function escapeSearchRegExp(value: string): string {
@@ -69,12 +69,8 @@ interface ElementNode {
   children: unknown[];
 }
 
-type MatchNode = TextNode | ElementNode;
-
-// Minimal structural stand-in for unified's own `Node` type (just
-// `{type: string}`), matching this codebase's existing convention
-// (documentViewHeadings.ts) of hand-rolling a small local interface rather
-// than adding a dependency on the official unist/hast/mdast type packages.
+// Minimal structural stand-in for unified's Node type. Only the child
+// arrays, text values and immediate parent's properties are needed.
 interface Tree {
   type: string;
   children?: unknown[];
@@ -88,60 +84,62 @@ export function rehypeHighlightSearchMatches(query: string) {
     const pattern = buildSearchPattern(trimmed);
     let matchIndex = 0;
 
-    visit(tree, "text", (node: TextNode, index, parent) => {
-      if (typeof index !== "number" || !parent || !("children" in parent)) return;
-      // Skip decorative content invisible to assistive tech - concretely,
-      // rehype-autolink-headings' own appended "#" anchor (aria-hidden,
-      // tabIndex -1) after every heading. Caught by adversarial review:
-      // without this guard, searching for "#" highlighted that decoration
-      // next to every heading and inflated the match count/navigation with
-      // hits that have nothing to do with the document's real content.
-      // Checks the IMMEDIATE parent only (not the full ancestor chain) -
-      // sufficient for this specific, known case, since the anchor's
-      // aria-hidden property sits directly on the "#" text node's parent.
-      const parentProperties = (parent as unknown as ElementNode).properties;
-      if (parentProperties && parentProperties.ariaHidden) return;
-      pattern.lastIndex = 0;
-      if (!pattern.test(node.value)) return;
-      pattern.lastIndex = 0;
-
-      const replacement: MatchNode[] = [];
-      let lastEnd = 0;
-      let match: RegExpExecArray | null;
-      while ((match = pattern.exec(node.value)) !== null) {
-        const start = match.index;
-        const end = start + match[0].length;
-        if (start > lastEnd) {
-          replacement.push({ type: "text", value: node.value.slice(lastEnd, start) });
+    // Rebuild each changed sibling array once, in document order, instead
+    // of passing an unbounded replacement array as splice arguments. Never
+    // visit newly-created marks. Stop looking for matches at the shared
+    // limit, keeping the unhighlighted remainder of the document intact.
+    function highlightChildren(parent: Tree) {
+      const children = parent.children;
+      if (!children) return;
+      let rewritten: unknown[] | undefined;
+      for (let index = 0; index < children.length; index++) {
+        if (matchIndex >= MAX_DOCUMENT_SEARCH_MATCHES) {
+          if (rewritten) parent.children = rewritten.concat(children.slice(index));
+          return;
         }
-        replacement.push({
-          type: "element",
-          tagName: "mark",
-          properties: { className: ["document-view-search-match"], dataSearchMatchIndex: matchIndex },
-          children: [{ type: "text", value: match[0] }],
-        });
-        matchIndex += 1;
-        lastEnd = end;
-        // A zero-length query can never reach here (escapeSearchRegExp'd
-        // non-empty `trimmed` always matches at least one character), so no
-        // infinite-loop guard is needed for lastIndex staying put.
+        const child = children[index] as Tree;
+        if (child.type !== "text") {
+          highlightChildren(child);
+          rewritten?.push(child);
+          continue;
+        }
+        // The heading permalink is decorative, not searchable. As before,
+        // check the immediate parent (where rehype-autolink sets ariaHidden).
+        if ((parent as ElementNode).properties?.ariaHidden) {
+          rewritten?.push(child);
+          continue;
+        }
+        const node = child as TextNode;
+        pattern.lastIndex = 0;
+        let match = pattern.exec(node.value);
+        if (!match) {
+          rewritten?.push(child);
+          continue;
+        }
+        rewritten ??= children.slice(0, index);
+        let lastEnd = 0;
+        do {
+          const start = match.index;
+          const end = start + match[0].length;
+          if (start > lastEnd) {
+            rewritten.push({ type: "text", value: node.value.slice(lastEnd, start) });
+          }
+          rewritten.push({
+            type: "element",
+            tagName: "mark",
+            properties: { className: ["document-view-search-match"], dataSearchMatchIndex: matchIndex },
+            children: [{ type: "text", value: match[0] }],
+          });
+          matchIndex += 1;
+          lastEnd = end;
+        } while (matchIndex < MAX_DOCUMENT_SEARCH_MATCHES && (match = pattern.exec(node.value)) !== null);
+        if (lastEnd < node.value.length) {
+          rewritten.push({ type: "text", value: node.value.slice(lastEnd) });
+        }
       }
-      if (lastEnd < node.value.length) {
-        replacement.push({ type: "text", value: node.value.slice(lastEnd) });
-      }
+      if (rewritten) parent.children = rewritten;
+    }
 
-      (parent as unknown as { children: unknown[] }).children.splice(index, 1, ...replacement);
-
-      // unist-util-visit-parents reads the parent's children array fresh on
-      // every loop iteration - after splicing 1 node into `replacement.length`
-      // nodes, its default "continue at index + 1" would walk straight back
-      // into the very nodes just inserted here, including the freshly built
-      // <mark>'s own text child (which trivially re-matches the same
-      // pattern) and would get wrapped in a second, nested <mark>. Returning
-      // the post-splice index explicitly (the documented mechanism for this
-      // exact case - see unist-util-visit's own Visitor jsdoc) skips past
-      // everything just inserted and resumes at the real next sibling.
-      return index + replacement.length;
-    });
+    highlightChildren(tree);
   };
 }

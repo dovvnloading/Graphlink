@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { IconButton } from "../ui/IconButton";
+import { MAX_DOCUMENT_SEARCH_MATCHES } from "./documentViewSearchHighlight";
 
 /**
  * Document View full redesign, stage 3 ("in-document search/find"). A
@@ -15,8 +16,8 @@ import { IconButton } from "../ui/IconButton";
  * DocumentViewPanel.tsx, so the "n of m" display can never drift from what's
  * actually highlighted on screen.
  *
- * The visible "n of m" count updates instantly on every keystroke/navigation
- * (no perceptible lag for sighted users), but what's actually announced to
+ * The visible count describes the rendered matches (or pending search),
+ * but what's actually announced to
  * screen readers is a SEPARATE, visually-hidden, debounced copy - caught by
  * adversarial review: an aria-live="polite" region on the same instantly-
  * updating text would queue a fresh announcement on every single keystroke
@@ -24,8 +25,7 @@ import { IconButton } from "../ui/IconButton";
  * queue's backlog out in full rather than skipping to the latest value -
  * flooding the user with several stale counts read out well after they've
  * already moved on. Debouncing only the ANNOUNCED copy (not the visible
- * text, and not the actual highlighting/navigation, which both stay
- * instant) keeps the visual experience responsive while giving assistive
+ * text) keeps the visual experience responsive while giving assistive
  * tech one settled announcement per pause in typing/navigation instead of
  * one per keystroke.
  */
@@ -36,6 +36,7 @@ export function DocumentViewSearch({
   query,
   onQueryChange,
   matchCount,
+  searchPending = false,
   currentMatchNumber,
   onNext,
   onPrevious,
@@ -45,12 +46,14 @@ export function DocumentViewSearch({
   query: string;
   onQueryChange: (query: string) => void;
   matchCount: number;
+  searchPending?: boolean;
   currentMatchNumber: number;
   onNext: () => void;
   onPrevious: () => void;
   onClose: () => void;
 }) {
-  const countText = query.trim() ? `${currentMatchNumber} of ${matchCount}` : "";
+  const countText = !query.trim() ? "" : searchPending ? "Searching…" :
+    `${currentMatchNumber} of ${matchCount}${matchCount === MAX_DOCUMENT_SEARCH_MATCHES ? " (limit)" : ""}`;
 
   // Hooks run unconditionally, before the `isOpen` early return below (Rules
   // of Hooks) - harmless when closed, since DocumentViewPanel resets `query`
@@ -84,12 +87,13 @@ export function DocumentViewSearch({
       onClose();
     } else if (event.key === "Enter") {
       event.preventDefault();
+      if (searchPending) return;
       if (event.shiftKey) onPrevious();
       else onNext();
     }
   }
 
-  const hasMatches = matchCount > 0;
+  const hasMatches = !searchPending && matchCount > 0;
 
   return (
     <div className="document-view-search" role="search">

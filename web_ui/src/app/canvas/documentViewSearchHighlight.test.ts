@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { escapeSearchRegExp, rehypeHighlightSearchMatches } from "./documentViewSearchHighlight";
+import { escapeSearchRegExp, MAX_DOCUMENT_SEARCH_MATCHES, rehypeHighlightSearchMatches } from "./documentViewSearchHighlight";
 
 interface TextNode {
   type: "text";
@@ -30,6 +30,12 @@ function marks(node: ElementNode): ElementNode[] {
     (child): child is ElementNode =>
       typeof child === "object" && child !== null && (child as ElementNode).tagName === "mark",
   );
+}
+
+function textContent(node: TextNode | ElementNode): string {
+  return node.type === "text"
+    ? node.value
+    : node.children.map((child) => textContent(child as TextNode | ElementNode)).join("");
 }
 
 describe("escapeSearchRegExp", () => {
@@ -124,6 +130,49 @@ describe("rehypeHighlightSearchMatches", () => {
       ...marks(tree.children[1] as ElementNode),
     ];
     expect(allMarks.map((m) => m.properties.dataSearchMatchIndex)).toEqual([0, 1]);
+  });
+
+  it("caps a large replacement without throwing or dropping any source text", () => {
+    const source = "a ".repeat(300_000) + "tail";
+    const p = paragraph(text(source));
+    const tree = root(p);
+    rehypeHighlightSearchMatches("a")(tree);
+
+    const found = marks(p);
+    expect(found).toHaveLength(MAX_DOCUMENT_SEARCH_MATCHES);
+    expect(found.map((mark) => mark.properties.dataSearchMatchIndex)).toEqual(
+      Array.from({ length: MAX_DOCUMENT_SEARCH_MATCHES }, (_, index) => index),
+    );
+    expect(textContent(p)).toBe(source);
+  });
+
+  it("shares the cap across nested elements and preserves all remaining siblings", () => {
+    const inline: ElementNode = {
+      type: "element", tagName: "strong", properties: {}, children: [text("CAT cat")],
+    };
+    const p = paragraph(text("cat ".repeat(MAX_DOCUMENT_SEARCH_MATCHES - 1)), inline, text("cat"));
+    const tail = paragraph(text("another cat"));
+    const originalText = textContent(p);
+    rehypeHighlightSearchMatches("cat")(root(p, tail));
+
+    expect(marks(p)).toHaveLength(MAX_DOCUMENT_SEARCH_MATCHES - 1);
+    expect(marks(inline)).toHaveLength(1);
+    expect(marks(inline)[0].properties.dataSearchMatchIndex).toBe(MAX_DOCUMENT_SEARCH_MATCHES - 1);
+    expect(textContent(p)).toBe(originalText);
+    expect(tail.children).toEqual([text("another cat")]);
+  });
+
+  it("keeps depth-first indices across inline formatting and resumes on a fresh search", () => {
+    const inline: ElementNode = {
+      type: "element", tagName: "em", properties: {}, children: [text("CAT")],
+    };
+    const p = paragraph(text("cat "), inline, text(" cat"));
+    rehypeHighlightSearchMatches("cat")(root(p));
+    expect(marks(p).map((mark) => mark.properties.dataSearchMatchIndex)).toEqual([0, 2]);
+    expect(marks(inline)[0].properties.dataSearchMatchIndex).toBe(1);
+    const fresh = paragraph(text("cat"));
+    rehypeHighlightSearchMatches("cat")(root(fresh));
+    expect(marks(fresh)[0].properties.dataSearchMatchIndex).toBe(0);
   });
 
   it("leaves a text node with no match completely untouched", () => {

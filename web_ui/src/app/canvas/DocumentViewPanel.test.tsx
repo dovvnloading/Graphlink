@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DocumentViewPanel } from "./DocumentViewPanel";
+import { MAX_DOCUMENT_SEARCH_MATCHES } from "./documentViewSearchHighlight";
 
 // jsdom implements no IntersectionObserver - DocumentViewToc.tsx's own
 // scrollspy effect needs one the moment its dropdown is actually opened
@@ -397,6 +398,36 @@ describe("DocumentViewPanel", () => {
       matches = container.querySelectorAll(".document-view-search-match");
       expect(matches[1]).toHaveClass("document-view-search-match-current");
       expect(countText(container)).toBe("2 of 2");
+    });
+
+    it("navigates only the capped matches, preserves all text and clears the limit on a new query", async () => {
+      const user = userEvent.setup();
+      const source = "a ".repeat(MAX_DOCUMENT_SEARCH_MATCHES + 500) + "unique";
+      const { container } = renderPanel({ content: source });
+      await user.click(screen.getByRole("button", { name: "Find in document" }));
+      const input = screen.getByRole("textbox", { name: "Search query" });
+      await user.type(input, "a");
+      await waitFor(() => {
+        expect(countText(container)).toBe(`1 of ${MAX_DOCUMENT_SEARCH_MATCHES} (limit)`);
+      }, LAZY_BODY_TIMEOUT);
+      const matches = container.querySelectorAll(".document-view-search-match");
+      expect(matches).toHaveLength(MAX_DOCUMENT_SEARCH_MATCHES);
+      expect(container.querySelector(".document-view-panel-scroll")?.textContent?.trim()).toBe(source);
+
+      await user.click(screen.getByRole("button", { name: "Previous match" }));
+      expect(countText(container)).toBe(`${MAX_DOCUMENT_SEARCH_MATCHES} of ${MAX_DOCUMENT_SEARCH_MATCHES} (limit)`);
+      expect(matches[MAX_DOCUMENT_SEARCH_MATCHES - 1]).toHaveClass("document-view-search-match-current");
+      expect(container.querySelectorAll(".document-view-search-match-current")).toHaveLength(1);
+
+      await user.click(screen.getByRole("button", { name: "Next match" }));
+      expect(matches[0]).toHaveClass("document-view-search-match-current");
+      expect(container.querySelectorAll(".document-view-search-match-current")).toHaveLength(1);
+
+      await user.clear(input);
+      await user.type(input, "unique");
+      await waitFor(() => expect(countText(container)).toBe("1 of 1"), LAZY_BODY_TIMEOUT);
+      expect(container.querySelectorAll(".document-view-search-match")).toHaveLength(1);
+      expect(container.querySelector(".document-view-search-match-current")).toHaveTextContent("unique");
     });
 
     it("closing the search bar clears all highlighting", async () => {
