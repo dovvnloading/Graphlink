@@ -11,7 +11,7 @@ import pytest
 from backend import knowledge_embedding_config as config
 from backend import knowledge_store as ks
 from backend.api import intents_global_search
-from backend.events import SessionBus
+from backend.events import IntentValidationError, SessionBus
 from backend.knowledge_chunking import chunk_text
 
 
@@ -85,6 +85,8 @@ def test_global_search_scope_before_candidate_cutoff(tmp_path, monkeypatch, mino
         return row["graphId"] is not None and row["sourceNodeId"] is not None
 
     mixed = search(query, 10)
+    assert mixed == search(query, 10, None)
+    assert mixed == search(query, 10, None, None)
     assert mixed == search(query, 10, None, "all")
     assert len(mixed) == 10
     assert all(is_graph(row) != (minority_scope == "graphs") for row in mixed)
@@ -100,3 +102,19 @@ def test_global_search_scope_before_candidate_cutoff(tmp_path, monkeypatch, mino
     all_hits = search(query, 50)
     assert any(is_graph(row) for row in all_hits)
     assert any(not is_graph(row) for row in all_hits)
+
+
+@pytest.mark.parametrize("scope", ["", "documents", "ALL"])
+def test_global_search_rejects_unknown_scope(scope):
+    bus = SessionBus("global-search-invalid-scope")
+    intents_global_search.register_global_search_intents(bus)
+    with pytest.raises(ValueError, match="Unknown global search scope"):
+        asyncio.run(bus.dispatch_intent("globalSearch", "search", ["needle", 10, None, scope]))
+
+
+@pytest.mark.parametrize("scope", [1, False, {}])
+def test_global_search_rejects_non_string_scope(scope):
+    bus = SessionBus("global-search-invalid-scope-type")
+    intents_global_search.register_global_search_intents(bus)
+    with pytest.raises(IntentValidationError, match="scope: expected string"):
+        asyncio.run(bus.dispatch_intent("globalSearch", "search", ["needle", 10, None, scope]))
