@@ -214,3 +214,35 @@ def test_cloud_opt_in_sends_indexed_passage_and_query_and_revocation_stops_calls
         path, "research", collection_id=0, settings_manager=manager,
     )
     assert len(requests) == sent_count
+
+
+@pytest.mark.parametrize("invalid", [[], [0.0, 0.0], [1e40, 0.0], [[1.0, 0.0]]])
+def test_connection_test_rejects_invalid_vectors(manager, monkeypatch, invalid):
+    monkeypatch.setattr(config.api_provider, "ollama_supports_embedding", lambda _model: True)
+
+    class Invalid(_FakeEmbeddingProvider):
+        def embed(self, texts):
+            return [invalid for _ in texts]
+
+    monkeypatch.setattr(config, "OllamaProvider", lambda **_kwargs: Invalid())
+    with pytest.raises(ValueError, match="Embedding connection test"):
+        config.test_embedding_choice(manager, "ollama", "nomic-embed-text:latest")
+
+
+def test_invalid_query_falls_back_to_keywords_without_evicting_cache(tmp_path, manager, monkeypatch):
+    path = _database(tmp_path)
+    model_id = "ollama:nomic-embed-text:latest"
+    manager.set_knowledge_embedding_settings("ollama", "nomic-embed-text:latest")
+    monkeypatch.setattr(config.api_provider, "ollama_supports_embedding", lambda _model: True)
+    embed_pending_chunks(path, _FakeEmbeddingProvider(), model_id)
+    before = list_embeddings_for_search(path, model_id)
+
+    class Invalid(_FakeEmbeddingProvider):
+        def embed(self, texts):
+            return [[float("nan"), 0.0] for _ in texts]
+
+    monkeypatch.setattr(config, "OllamaProvider", lambda **_kwargs: Invalid())
+    hits = config.configured_hybrid_search(path, "internal research", settings_manager=manager)
+    assert len(hits) == 1
+    assert hits[0]["rank_signals"] == {"fts5": 1}
+    assert list_embeddings_for_search(path, model_id) == before

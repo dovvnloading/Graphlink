@@ -231,7 +231,7 @@ class TestEmbedPendingChunks:
         for i in range(5):
             text = f"Document number {i}."
             _ingest(db_path, text=text, source_uri=f"doc{i}.txt")
-            vectors[text] = [float(i), 0.0]
+            vectors[text] = [float(i + 1), 0.0]
         provider = FakeEmbeddingProvider(vectors)
 
         count = embed_pending_chunks(db_path, provider, "fake-model", batch_size=2)
@@ -394,11 +394,154 @@ class TestVectorSearch:
         )
         embed_pending_chunks(db_path, provider, "fake-model")
 
-        from backend.knowledge_embeddings import _pack_vector
-        from backend.knowledge_store import upsert_embeddings, list_embeddings_for_search
+        from backend.knowledge_store import _connect, list_embeddings_for_search
 
         [row] = list_embeddings_for_search(db_path, "fake-model")
-        upsert_embeddings(db_path, "fake-model", [(row["chunk_id"], 4, _pack_vector([1.0, 0.0, 0.0, 0.0]))])
+        # Bypass the new write guards to simulate a pre-fix cache.
+        conn = _connect(db_path)
+        try:
+            with conn:
+                conn.execute(
+                    "UPDATE embeddings SET dim = ?, vector = ? WHERE chunk_id = ? AND model_id = ?",
+                    (4, _pack_vector([1.0, 0.0, 0.0, 0.0]), row["chunk_id"], "fake-model"),
+                )
+        finally:
+            conn.close()
 
         with pytest.raises(ValueError, match="mismatched dimension"):
             vector_search(db_path, provider, "query", model_id="fake-model")
+
+
+@pytest.mark.parametrize("invalid", [
+    [], 1.0, [[1.0, 0.0]], [[1.0], [0.0, 1.0]], ["1", "0"],
+    [True, 1.0], [1 + 2j, 0], [1.0, float("nan")], [float("inf"), 0.0],
+    [1e40, 0.0], [0.0, 0.0], [1e-100, 0.0], [1.0, 0.0, 0.0],
+])
+def test_invalid_embedding_batch_writes_nothing_and_can_retry(tmp_path, invalid):
+    from backend.knowledge_store import chunks_pending_embedding, list_embeddings_for_search
+
+    db_path = tmp_path / "knowledge.db"
+    _ingest(db_path, text="First passage.", source_uri="first.txt")
+    _ingest(db_path, text="Second passage.", source_uri="second.txt")
+    provider = FakeEmbeddingProvider({
+        "First passage.": [1.0, 0.0], "Second passage.": invalid,
+        "paraphrase": [0.0, 1.0],
+    })
+    committed = []
+    with pytest.raises(ValueError, match="Embedding model 'fake-model'"):
+        embed_pending_chunks(db_path, provider, "fake-model", on_batch=committed.append)
+    assert list_embeddings_for_search(db_path, "fake-model") == []
+    assert len(chunks_pending_embedding(db_path, "fake-model")) == 2
+    assert committed == []
+
+    provider.vectors["Second passage."] = [0.0, 1.0]
+    assert embed_pending_chunks(db_path, provider, "fake-model", on_batch=committed.append) == 2
+    assert committed == [2]
+    hits = vector_search(db_path, provider, "paraphrase", model_id="fake-model")
+    assert hits[0]["source_uri"] == "second.txt"
+    assert hits[0]["score"] == pytest.approx(1.0)
+
+
+def test_dimension_change_between_batches_keeps_committed_batch(tmp_path):
+    from backend.knowledge_store import chunks_pending_embedding, list_embeddings_for_search
+
+    db_path = tmp_path / "knowledge.db"
+    _ingest(db_path, text="First passage.", source_uri="first.txt")
+    _ingest(db_path, text="Second passage.", source_uri="second.txt")
+    provider = FakeEmbeddingProvider({
+        "First passage.": [1.0, 0.0], "Second passage.": [0.0, 1.0, 0.0],
+    })
+    with pytest.raises(ValueError, match="mismatched dimension"):
+        embed_pending_chunks(db_path, provider, "fake-model", batch_size=1)
+    [cached] = list_embeddings_for_search(db_path, "fake-model")
+    assert cached["source_uri"] == "first.txt"
+    [pending] = chunks_pending_embedding(db_path, "fake-model")
+    assert pending["text"] == "Second passage."
+
+    provider.vectors["Second passage."] = [0.0, 1.0]
+    assert embed_pending_chunks(db_path, provider, "fake-model", batch_size=1) == 1
+
+
+def test_dimension_mismatch_across_collections_requires_explicit_reset(tmp_path):
+    from backend.knowledge_store import (
+        chunks_pending_embedding, list_embeddings_for_search, reset_model_embeddings, search_chunks,
+    )
+
+    db_path = tmp_path / "knowledge.db"
+    _ingest(db_path, text="First passage.", collection_id=1, source_uri="first.txt")
+    provider = FakeEmbeddingProvider({"First passage.": [1.0, 0.0]})
+    embed_pending_chunks(db_path, provider, "fake-model", collection_id=1)
+    embed_pending_chunks(db_path, provider, "other-model", collection_id=1)
+    _ingest(db_path, text="Second passage.", collection_id=2, source_uri="second.txt")
+
+    provider.vectors.update({
+        "First passage.": [1.0, 0.0, 0.0],
+        "Second passage.": [0.0, 1.0, 0.0],
+        "paraphrase": [0.0, 1.0, 0.0],
+    })
+    with pytest.raises(ValueError, match="mismatched dimension"):
+        embed_pending_chunks(db_path, provider, "fake-model", collection_id=2)
+    assert len(list_embeddings_for_search(db_path, "fake-model")) == 1
+    assert len(chunks_pending_embedding(db_path, "fake-model", collection_id=2)) == 1
+
+    assert reset_model_embeddings(db_path, "fake-model") == 1
+    assert len(list_embeddings_for_search(db_path, "other-model")) == 1
+    assert len(search_chunks(db_path, "passage")) == 2
+    assert embed_pending_chunks(db_path, provider, "fake-model") == 2
+    hits = vector_search(db_path, provider, "paraphrase", model_id="fake-model")
+    assert hits[0]["source_uri"] == "second.txt"
+
+
+@pytest.mark.parametrize("bad_blob", [
+    _pack_vector([0.0, 0.0]), _pack_vector([float("nan"), 0.0]),
+    _pack_vector([float("inf"), 0.0]), b"bad",
+])
+def test_legacy_invalid_cache_reports_repair_and_reindexes(tmp_path, bad_blob):
+    from backend.knowledge_store import _connect, reset_model_embeddings
+
+    db_path = tmp_path / "knowledge.db"
+    _ingest(db_path, text="First passage.")
+    provider = FakeEmbeddingProvider({"First passage.": [1.0, 0.0], "query": [1.0, 0.0]})
+    embed_pending_chunks(db_path, provider, "fake-model")
+    conn = _connect(db_path)
+    try:
+        with conn:
+            conn.execute("UPDATE embeddings SET vector = ?", (bad_blob,))
+    finally:
+        conn.close()
+    with pytest.raises(ValueError, match="reset the model cache"):
+        vector_search(db_path, provider, "query", model_id="fake-model")
+    assert reset_model_embeddings(db_path, "fake-model") == 1
+    assert embed_pending_chunks(db_path, provider, "fake-model") == 1
+    [hit] = vector_search(db_path, provider, "query", model_id="fake-model")
+    assert hit["score"] == pytest.approx(1.0)
+
+
+@pytest.mark.parametrize("invalid_query", [[], [[1.0, 0.0]], [0.0, 0.0], [float("nan"), 0.0], [1e40, 0.0]])
+def test_invalid_query_does_not_change_the_cache(tmp_path, invalid_query):
+    from backend.knowledge_store import list_embeddings_for_search
+
+    db_path = tmp_path / "knowledge.db"
+    _ingest(db_path, text="First passage.")
+    provider = FakeEmbeddingProvider({"First passage.": [1.0, 0.0], "query": invalid_query})
+    embed_pending_chunks(db_path, provider, "fake-model")
+    before = list_embeddings_for_search(db_path, "fake-model")
+    with pytest.raises(ValueError, match="query"):
+        vector_search(db_path, provider, "query", model_id="fake-model")
+    assert list_embeddings_for_search(db_path, "fake-model") == before
+
+
+@pytest.mark.parametrize("magnitude", [1e-45, 1e38])
+def test_finite_extreme_vectors_have_correct_cosine_scores(tmp_path, magnitude):
+    db_path = tmp_path / "knowledge.db"
+    _ingest(db_path, text="First passage.", source_uri="first.txt")
+    _ingest(db_path, text="Second passage.", source_uri="second.txt")
+    provider = FakeEmbeddingProvider({
+        "First passage.": [magnitude, 0.0],
+        "Second passage.": [0.0, magnitude],
+        "query": [magnitude, 0.0],
+    })
+    embed_pending_chunks(db_path, provider, "fake-model")
+    hits = vector_search(db_path, provider, "query", model_id="fake-model")
+    assert [hit["source_uri"] for hit in hits] == ["first.txt", "second.txt"]
+    assert [hit["score"] for hit in hits] == pytest.approx([1.0, 0.0])

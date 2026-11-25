@@ -13,7 +13,6 @@ from __future__ import annotations
 from contextlib import contextmanager
 from hashlib import sha256
 import logging
-import math
 from pathlib import Path
 from typing import Iterator
 from urllib.parse import urlsplit
@@ -21,7 +20,7 @@ from urllib.parse import urlsplit
 import api_provider
 from graphlink_cloud_providers import CLOUD_PROVIDERS
 
-from backend.knowledge_embeddings import DEFAULT_BATCH_SIZE, embed_pending_chunks
+from backend.knowledge_embeddings import DEFAULT_BATCH_SIZE, embed_pending_chunks, validate_embedding_vector
 from backend.knowledge_retrieval import hybrid_search
 from backend.knowledge_store import cold_collection_embedding_batch
 from backend.providers.base import ProviderCapabilities
@@ -128,9 +127,9 @@ def test_embedding_choice(
         if provider is None:
             return 0
         vectors = provider.embed([_TEST_TEXT])
-        if len(vectors) != 1 or not vectors[0] or not all(math.isfinite(float(v)) for v in vectors[0]):
-            raise ValueError("Embedding model returned an invalid vector.")
-        return len(vectors[0])
+        if len(vectors) != 1:
+            raise ValueError("Embedding model did not return exactly one vector.")
+        return validate_embedding_vector(vectors[0], context="Embedding connection test").size
 
 
 def configured_hybrid_search(

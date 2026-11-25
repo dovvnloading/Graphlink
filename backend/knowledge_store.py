@@ -1673,26 +1673,67 @@ def delete_graph_index(db_path: Path, graph_id: int) -> bool:
 # codebase is, plain CRUD with no ML-library dependency.
 
 
-def upsert_embeddings(db_path: Path, model_id: str, rows: list[tuple[int, int, bytes]]) -> None:
-    """`rows`: `(chunk_id, dim, vector_blob)` tuples, all for the SAME
-    `model_id` (the cache key's other half). ON CONFLICT DO UPDATE rather
-    than INSERT OR IGNORE - defensive, not load-bearing today: every real
-    caller (knowledge_embeddings.embed_pending_chunks) only ever passes
-    chunk_ids that chunks_pending_embedding() just confirmed have no row
-    yet, so this is a plain insert in practice, but a caller that DOES
-    pass an already-embedded chunk_id (e.g. a forced re-embed) gets a
-    correct overwrite instead of a silently-ignored no-op or a UNIQUE-
-    constraint crash."""
+def upsert_embeddings(
+    db_path: Path, model_id: str, rows: list[tuple[int, int, bytes]], *,
+    check_all_cached_dimensions: bool = True,
+) -> None:
+    """Atomically write a batch of packed vectors for one model.
+
+    The first batch of a job checks all cached dimensions, including across
+    collections, to detect mixed legacy caches. Subsequent batches can check
+    a single row: all normal writers enforce the same dimension under the
+    SQLite write lock, so a concurrent first writer cannot introduce a
+    different vector space. The store stays byte-level; float32 value
+    validation belongs to knowledge_embeddings before this call.
+    """
     if not rows:
         return
+    dim = rows[0][1]
+    if dim < 1 or any(row_dim != dim or len(blob) != dim * 4 for _, row_dim, blob in rows):
+        raise ValueError(f"Embedding model {model_id!r} returned a batch of mismatched dimensions.")
     conn = _connect(db_path)
     try:
         with conn:
+            conn.execute("BEGIN IMMEDIATE")
+            if check_all_cached_dimensions:
+                cached = conn.execute(
+                    "SELECT dim FROM embeddings WHERE model_id = ? AND dim != ? LIMIT 1",
+                    (model_id, dim),
+                ).fetchone()
+            else:
+                cached = conn.execute(
+                    "SELECT dim FROM embeddings WHERE model_id = ? LIMIT 1", (model_id,),
+                ).fetchone()
+            if cached is not None and cached[0] != dim:
+                raise ValueError(
+                    f"Embedding model {model_id!r} has mismatched dimension "
+                    f"(received {dim}, cached {cached[0]}) - verify the provider model or "
+                    "reset the model cache and re-embed as described in docs/KNOWLEDGE_RETRIEVAL.md."
+                )
             conn.executemany(
                 "INSERT INTO embeddings (chunk_id, model_id, dim, vector) VALUES (?, ?, ?, ?) "
                 "ON CONFLICT(chunk_id, model_id) DO UPDATE SET dim = excluded.dim, vector = excluded.vector",
-                [(chunk_id, model_id, dim, vector_blob) for chunk_id, dim, vector_blob in rows],
+                [(chunk_id, model_id, row_dim, vector_blob) for chunk_id, row_dim, vector_blob in rows],
             )
+    finally:
+        conn.close()
+
+
+def reset_model_embeddings(db_path: Path, model_id: str) -> int:
+    """Explicit offline repair: discard only the selected model's derived cache.
+
+    Stop Graphlink before calling this so an in-flight job cannot repopulate
+    the cache with the old model. Documents, chunks, FTS and other models
+    are untouched; the normal pending-embedding path rebuilds the vectors.
+    """
+    if not db_path.is_file():
+        raise ValueError("Knowledge database does not exist.")
+    if not model_id:
+        raise ValueError("An exact embedding model ID is required.")
+    conn = _connect(db_path)
+    try:
+        with conn:
+            return conn.execute("DELETE FROM embeddings WHERE model_id = ?", (model_id,)).rowcount
     finally:
         conn.close()
 
