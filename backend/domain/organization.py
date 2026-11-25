@@ -21,6 +21,7 @@ from backend.domain.geometry_safety import validate_layout_geometry
 from backend.domain.layout_invariants import validate_no_new_false_containment
 from backend.domain.layout import NODE_GAP_X, _rects_clear
 from backend.domain.dag_layout import dag_layout_supported, organize_dag_layout
+from backend.domain.layout_quality import connection_diagnostics
 from backend.domain.model import SceneError, SceneNode
 from backend.domain.node_states import FrameState, GroupSizedState
 from backend.domain.structure import primary_parent_edges
@@ -358,7 +359,29 @@ class OrganizationPlan:
             bottom = max(y + h for _, y, _, h in rects)
             return max(0.0, right - left) * max(0.0, bottom - top)
 
+        edge_rows = [
+            {"id": edge.id, "source": edge.source, "target": edge.target}
+            for edge in document.edges.values()
+            if edge.source in visible_ids and edge.target in visible_ids
+        ]
+        pairs = [(edge["source"], edge["target"]) for edge in edge_rows]
+        before_rects = {
+            row["id"]: (row["previousX"], row["previousY"],
+                        row["previousWidth"], row["previousHeight"])
+            for row in rows
+        }
+        after_rects = {
+            row["id"]: (row["x"], row["y"], row["width"], row["height"])
+            for row in rows
+        }
+        quality_before = connection_diagnostics(before_rects, pairs)
+        quality_after = connection_diagnostics(after_rects, pairs)
         return {
+            "crossingsBefore": quality_before["crossings"],
+            "crossingsAfter": quality_after["crossings"],
+            "meanEdgeLengthBefore": quality_before["meanEdgeLength"],
+            "meanEdgeLengthAfter": quality_after["meanEdgeLength"],
+            "measuredEdges": quality_after["measuredEdges"],
             "fingerprint": self.source_fingerprint,
             "planId": self.plan_id,
             "scope": self.scope,
@@ -372,11 +395,7 @@ class OrganizationPlan:
             "areaBefore": area(before_bounds),
             "areaAfter": area(after_bounds),
             "nodes": rows,
-            "edges": [
-                {"id": edge.id, "source": edge.source, "target": edge.target}
-                for edge in document.edges.values()
-                if edge.source in visible_ids and edge.target in visible_ids
-            ],
+            "edges": edge_rows,
         }
 
 

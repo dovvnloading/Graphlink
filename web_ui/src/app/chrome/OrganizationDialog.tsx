@@ -362,6 +362,16 @@ export function OrganizationDialog({ store }: { store: SceneStore }) {
           <span>Diagram area: {formatCount(preview.data.areaBefore)} → {formatCount(preview.data.areaAfter)} px²</span>
           <span>Effective layout: {preview.data.effectiveLayoutStyle === "dag" ? "Directed graph" : "Conversation tree"}</span>
           {preview.data.layoutNote && <span role="status">{preview.data.layoutNote}</span>}
+          {preview.data.crossingsBefore !== undefined && <span>
+            Straight-line connection crossings: {preview.data.crossingsBefore === null ? "Not measured" : formatCount(preview.data.crossingsBefore)}
+            {" → "}
+            {preview.data.crossingsAfter === null ? "Not measured" : formatCount(preview.data.crossingsAfter ?? 0)}
+          </span>}
+          {preview.data.meanEdgeLengthBefore !== undefined && <span>
+            Mean center-to-center link length:
+            {" " + Math.round(preview.data.meanEdgeLengthBefore ?? 0).toLocaleString("en-US")}
+            {" → " + Math.round(preview.data.meanEdgeLengthAfter ?? 0).toLocaleString("en-US") + " px"}
+          </span>}
         </div>
         <div className="organization-preview-controls">
           <SegmentedControl size="sm" label="Preview layout view" value={viewMode}

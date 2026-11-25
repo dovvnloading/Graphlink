@@ -33,3 +33,15 @@ This is a first deterministic DAG layout option, not full ELK compound
 port-constrained routing. Future stages may replace the restricted fallback
 with an ELK-style compound solver after cross-group and large-graph
 invariants are benchmarked.
+
+## Preview diagnostics
+
+Every preview reports the original and proposed **proper centreline
+crossing count** (excluding edge pairs sharing a node) and the mean
+straight-line distance between linked node centres. These are transparent
+geometric diagnostics, not claims about the actual rendered orthogonal
+ports and wire routing. The crossings are measured exactly for at most
+180 eligible visible edges, then shown as *Not measured* rather than
+pretending an unrepresentative subset is precise. Mean link length covers
+all visible edges. The preview does not optimize or change coordinates
+based on these metrics; the layout remains deterministic and undoable.

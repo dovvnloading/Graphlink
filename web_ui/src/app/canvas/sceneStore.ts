@@ -191,6 +191,11 @@ export interface OrganizationPreview {
   movedCount: number;
   areaBefore: number;
   areaAfter: number;
+  crossingsBefore?: number | null;
+  crossingsAfter?: number | null;
+  meanEdgeLengthBefore?: number | null;
+  meanEdgeLengthAfter?: number | null;
+  measuredEdges?: number;
   nodes: Array<{
     id: string;
     kind: string;
