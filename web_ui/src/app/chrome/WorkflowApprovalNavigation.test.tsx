@@ -1,5 +1,5 @@
 import { ReactFlowProvider } from "@xyflow/react";
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, it, vi } from "vitest";
 import type { WorkflowSpec } from "../../lib/workflow-contract/generated/workflow";
@@ -214,4 +214,68 @@ it("uses only summaries until a receipt is opened and stops detail polling on an
   expect(detailCall?.[1]?.signal?.aborted).toBe(false);
   await user.click(dialog.getByRole("tab", { name: /^Workflows/ }));
   expect(detailCall?.[1]?.signal?.aborted).toBe(true);
+});
+
+it("uses fast polling only for active runs and slows inactive or idle history", async () => {
+  vi.useFakeTimers();
+  try {
+    const { fetchMock } = setup({ firstRuns: [other, waiting] });
+    const count = (path: string) => fetchMock.mock.calls.filter(([url]) => url === path).length;
+    const runsPath = "/api/workflows/3/runs?summary=true";
+    const presetsPath = "/api/workflows/3/presets?summary=true";
+    const click = async (element: HTMLElement) => { await act(async () => { fireEvent.click(element); }); };
+    const advance = async (ms: number) => { await act(async () => { await vi.advanceTimersByTimeAsync(ms); }); };
+    await click(screen.getByRole("button", { name: "Open library" }));
+    const dialog = within(screen.getByRole("dialog", { name: "Workflow library" }));
+    expect(count(runsPath)).toBeGreaterThan(0);
+    expect(count(presetsPath)).toBeGreaterThan(0);
+    const initialRuns = count(runsPath), initialPresets = count(presetsPath);
+    await advance(6000);
+    expect(count(runsPath)).toBe(initialRuns);
+    expect(count(presetsPath)).toBe(initialPresets);
+
+    await click(dialog.getByRole("tab", { name: /^Runs/ }));
+    const activeRuns = count(runsPath), inactivePresets = count(presetsPath);
+    expect(activeRuns).toBeGreaterThan(initialRuns);
+    await advance(2000);
+    expect(count(runsPath)).toBe(activeRuns + 1);
+    expect(count(presetsPath)).toBe(inactivePresets);
+
+    await click(dialog.getByRole("button", { name: /^Other workflow,/ }));
+    const completedPath = "/api/workflows/3/runs/other";
+    expect(dialog.getByRole("heading", { name: "Other workflow" })).toBeVisible();
+    const completedReads = count(completedPath);
+    expect(completedReads).toBe(1);
+    await advance(6000);
+    expect(count(completedPath)).toBe(completedReads);
+
+    await click(dialog.getByRole("tab", { name: /^Presets/ }));
+    const visiblePresets = count(presetsPath);
+    await advance(14000);
+    expect(count(presetsPath)).toBe(visiblePresets);
+    await advance(1000);
+    expect(count(presetsPath)).toBe(visiblePresets + 1);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("polls idle history less often even on the Runs tab", async () => {
+  vi.useFakeTimers();
+  try {
+    const { fetchMock } = setup({ firstRuns: [other] });
+    const path = "/api/workflows/3/runs?summary=true";
+    const count = () => fetchMock.mock.calls.filter(([url]) => url === path).length;
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Open library" })); });
+    const dialog = within(screen.getByRole("dialog", { name: "Workflow library" }));
+    await act(async () => { fireEvent.click(dialog.getByRole("tab", { name: /^Runs/ })); });
+    const initial = count();
+    expect(initial).toBeGreaterThan(0);
+    await act(async () => { await vi.advanceTimersByTimeAsync(14000); });
+    expect(count()).toBe(initial);
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+    expect(count()).toBe(initial + 1);
+  } finally {
+    vi.useRealTimers();
+  }
 });

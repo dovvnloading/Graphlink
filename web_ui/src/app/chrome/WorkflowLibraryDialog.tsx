@@ -115,6 +115,7 @@ function Library({ store }: { store: SceneStore }) {
       try {
         const next = await workflowRequest<RunSummary[]>(workspacePath(workspace!) + "/runs?summary=true", { signal: controller.signal });
         if (!live()) return;
+        if (!Array.isArray(next)) throw new Error("The workflow service returned an invalid run list.");
         setRuns(next);
         setRunsLoaded(true);
         if (tab === "runs" && next.some(runActive)) delay = 2000;
@@ -138,6 +139,7 @@ function Library({ store }: { store: SceneStore }) {
       try {
         const next = await workflowRequest<PresetSummary[]>(workspacePath(workspace!) + "/presets?summary=true", { signal: controller.signal });
         if (!live()) return;
+        if (!Array.isArray(next)) throw new Error("The workflow service returned an invalid preset list.");
         setPresets(next);
         setPresetsLoaded(true);
       } catch (err) {
@@ -161,6 +163,7 @@ function Library({ store }: { store: SceneStore }) {
       try {
         const next = await workflowRequest<DetachedRun>(workspacePath(workspace!) + "/runs/" + encodeURIComponent(selectedRun), { signal: controller.signal });
         if (!live()) return;
+        if (next?.run_id !== selectedRun) throw new Error("The workflow service returned an unexpected run.");
         setRunDetail(next);
         setDetailLoaded(true);
         retry = runActive(next);
