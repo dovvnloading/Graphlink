@@ -120,6 +120,38 @@ describe("ChartRenderer", () => {
     expect(screen.getByText(/both be lists/)).toBeInTheDocument();
   });
 
+  it("renders equal enormous pie values with accurate shares and a bounded total label", () => {
+    const { container } = render(<ChartRenderer chartType="pie"
+      chartData={{ type: "pie", labels: ["A", "B"], values: [1e308, 1e308] }} />);
+    const svg = container.querySelector(".chart-canvas-svg")!;
+    expect(svg).not.toBeNull();
+    expect(svg.textContent?.match(/50\.0%/g)).toHaveLength(2);
+    expect(svg.textContent).toContain(">1.79e308");
+    const paths = Array.from(svg.querySelectorAll("path"));
+    expect(paths).toHaveLength(2);
+    expect(paths[0].getAttribute("d")).not.toBe(paths[1].getAttribute("d"));
+    expect(paths.every(path => !/NaN|Infinity/.test(path.getAttribute("d") ?? ""))).toBe(true);
+    fireEvent.pointerMove(paths[0], { clientX: 50, clientY: 50 });
+    expect(screen.getByRole("tooltip")).toHaveTextContent("1.00e+308");
+    expect(screen.getByRole("tooltip")).toHaveTextContent("50.0%");
+  });
+
+  it("renders an overflowing Other bucket with a correct tooltip share", () => {
+    const { container } = render(<ChartRenderer chartType="pie" chartData={{
+      type: "pie", labels: Array.from({ length: 12 }, (_, index) => "L" + index),
+      values: Array<number>(12).fill(1e308),
+    }} />);
+    const svg = container.querySelector(".chart-canvas-svg")!;
+    expect(svg.textContent).toContain("Other  25.0%");
+    const paths = Array.from(svg.querySelectorAll("path"));
+    expect(paths).toHaveLength(10);
+    fireEvent.pointerMove(paths[9], { clientX: 50, clientY: 50 });
+    const tooltip = screen.getByRole("tooltip");
+    expect(tooltip).toHaveTextContent("Other");
+    expect(tooltip).toHaveTextContent(">1.79e308");
+    expect(tooltip).toHaveTextContent("25.0%");
+  });
+
   it("shows a tooltip on hovering a bar and hides it again on pointer leave", () => {
     const { container } = render(<ChartRenderer chartType="bar" chartData={SAMPLE_DATA.bar} />);
     const bar = container.querySelector(".chart-canvas-svg rect")!;

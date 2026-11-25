@@ -639,21 +639,34 @@ def _render_heatmap(figure, ax, chart_data: dict[str, Any],
     return True
 
 
+def _format_pie_value(value: float) -> str:
+    if not math.isfinite(value):
+        return ">1.79e308"
+    if value >= 1e9 or 0 < value < 0.01:
+        return f"{value:.2e}"
+    return _format_value(value)
+
+
 def _render_pie_chart(figure, ax, chart_data: dict[str, Any], theme: dict[str, Any]) -> bool:
     values = chart_data["values"]
     labels = chart_data["labels"]
-    if len(values) > 10:
-        ranked = sorted(zip(values, labels), reverse=True)
-        top = ranked[:9]
-        remainder = sum(value for value, _ in ranked[9:])
-        values = [value for value, _ in top] + [remainder]
-        labels = [label for _, label in top] + ["Other"]
-    colors = [theme["cycle"][index % len(theme["cycle"])] for index in range(len(values))]
     total = sum(values)
+    # Matplotlib converts pie inputs to float32. Scale before summing or
+    # collapsing Other, keeping its input finite even for extreme doubles.
+    scale = max(values)
+    weights = [value / scale for value in values]
+    if len(values) > 10:
+        # Stable value-only ordering matches the interactive renderer for ties.
+        ranked = sorted(zip(weights, values, labels), key=lambda entry: entry[1], reverse=True)
+        top = ranked[:9]
+        weights = [weight for weight, _, _ in top] + [sum(weight for weight, _, _ in ranked[9:])]
+        labels = [label for _, _, label in top] + ["Other"]
+    colors = [theme["cycle"][index % len(theme["cycle"])] for index in range(len(weights))]
+    weight_total = sum(weights)
 
     figure.subplots_adjust(left=0.06, right=0.66, top=0.92, bottom=0.08)
     wedges, _ = ax.pie(
-        values,
+        weights,
         startangle=90,
         counterclock=False,
         labels=None,
@@ -669,7 +682,7 @@ def _render_pie_chart(figure, ax, chart_data: dict[str, Any], theme: dict[str, A
     ax.text(
         0,
         0.05,
-        _format_value(total),
+        _format_pie_value(total),
         ha="center",
         va="center",
         color=theme["text"],
@@ -687,12 +700,13 @@ def _render_pie_chart(figure, ax, chart_data: dict[str, Any], theme: dict[str, A
     )
 
     legend_labels = []
-    for label, value in zip(labels, values):
-        percentage = (value / total) * 100 if total else 0
+    for label, weight in zip(labels, weights):
+        share = weight / weight_total
+        percentage = "<0.1%" if share < 0.001 else f"{share * 100:.1f}%"
         clean = " ".join(str(label).split())
         wrapped = (clean if theme.get("publication") else
                    textwrap.shorten(clean, width=24, placeholder="..."))
-        legend_labels.append(f"{wrapped}  {percentage:.1f}%")
+        legend_labels.append(f"{wrapped}  {percentage}")
 
     legend = ax.legend(
         wedges,
