@@ -122,7 +122,7 @@ class TestHybridSearchBeatsEitherIndexAlone:
         vectors = {
             "The error code is XJ7Q92-FAULT.": [0.0, 1.0],
             "The feline sat quietly upon the mat.": [1.0, 0.0],
-            "Unrelated content about tax filings.": [0.0, 0.0],
+            "Unrelated content about tax filings.": [-1.0, -1.0],
             "XJ7Q92-FAULT": [0.01, 0.02],  # embeds nowhere near either real vector
             "a cat resting on a rug": [0.99, 0.01],  # close to the "feline" vector
         }

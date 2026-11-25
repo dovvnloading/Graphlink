@@ -44,8 +44,6 @@ const COLUMN_GAP = 0.03;
 const CHART_HEIGHT = 0.82;
 const X_START = 0.08;
 const X_END = 0.92;
-const FALLBACK_SCALE = 0.04;
-const MIN_FLOW_THICKNESS = 0.008;
 
 export function computeSankeyLayout(flows: ChartFlowRow[]): SankeyLayout {
   const outgoing = new Map<string, ChartFlowRow[]>();
@@ -87,27 +85,34 @@ export function computeSankeyLayout(flows: ChartFlowRow[]): SankeyLayout {
     }
   }
 
+  // Normalize before summing: even individually finite flow values can
+  // overflow a node or column total. Use the same unit for every port.
+  const maxFlowValue = flows.reduce((max, flow) => Math.max(max, flow.value), 0) || 1;
   const nodeWeights = new Map<string, number>();
   const columnMap = new Map<number, string[]>();
   for (const node of nodes) {
-    const outWeight = (outgoing.get(node) ?? []).reduce((sum, flow) => sum + flow.value, 0);
-    const inWeight = (incoming.get(node) ?? []).reduce((sum, flow) => sum + flow.value, 0);
-    nodeWeights.set(node, Math.max(outWeight, inWeight, 1.0));
+    const outWeight = (outgoing.get(node) ?? []).reduce((sum, flow) => sum + flow.value / maxFlowValue, 0);
+    const inWeight = (incoming.get(node) ?? []).reduce((sum, flow) => sum + flow.value / maxFlowValue, 0);
+    nodeWeights.set(node, Math.max(outWeight, inWeight));
     const level = levels.get(node) ?? 0;
     if (!columnMap.has(level)) columnMap.set(level, []);
     columnMap.get(level)!.push(node);
   }
 
   const availableColumns = columnMap.size ? Math.max(...columnMap.keys()) + 1 : 1;
+  // Preserve ordinary spacing, but reserve at least half the chart height
+  // for nodes even in the densest column.
+  const largestColumn = Math.max(1, ...[...columnMap.values()].map((column) => column.length));
+  const columnGap = Math.min(COLUMN_GAP, CHART_HEIGHT / (2 * Math.max(1, largestColumn - 1)));
   let globalScale: number | null = null;
   for (const columnNodes of columnMap.values()) {
     const totalWeight = columnNodes.reduce((sum, node) => sum + (nodeWeights.get(node) ?? 0), 0);
-    const availableHeight = CHART_HEIGHT - COLUMN_GAP * Math.max(0, columnNodes.length - 1);
+    const availableHeight = CHART_HEIGHT - columnGap * Math.max(0, columnNodes.length - 1);
     if (totalWeight <= 0 || availableHeight <= 0) continue;
     const columnScale = availableHeight / totalWeight;
     globalScale = globalScale === null ? columnScale : Math.min(globalScale, columnScale);
   }
-  const scale = globalScale ?? FALLBACK_SCALE;
+  const scale = globalScale ?? 0;
 
   const step = (X_END - X_START) / Math.max(1, availableColumns - 1);
   const nodeWidth = Math.min(0.05, step * 0.28);
@@ -120,12 +125,12 @@ export function computeSankeyLayout(flows: ChartFlowRow[]): SankeyLayout {
     });
     const totalHeight =
       columnNodes.reduce((sum, node) => sum + (nodeWeights.get(node) ?? 0) * scale, 0) +
-      COLUMN_GAP * Math.max(0, columnNodes.length - 1);
+      columnGap * Math.max(0, columnNodes.length - 1);
     let currentY = 0.5 - totalHeight / 2;
     for (const node of columnNodes) {
       const height = (nodeWeights.get(node) ?? 0) * scale;
       nodeLayout.set(node, { name: node, x: X_START + level * step, y: currentY, width: nodeWidth, height, level });
-      currentY += height + COLUMN_GAP;
+      currentY += height + columnGap;
     }
   }
 
@@ -148,7 +153,9 @@ export function computeSankeyLayout(flows: ChartFlowRow[]): SankeyLayout {
   const flowLayouts: SankeyFlowLayout[] = sortedFlows.map((flow) => {
     const sourceLayout = nodeLayout.get(flow.source)!;
     const targetLayout = nodeLayout.get(flow.target)!;
-    const thickness = Math.max(flow.value * scale, MIN_FLOW_THICKNESS);
+    // A minimum filled width would misstate the value and overflow ports.
+    // The renderer's stroke is independent of the quantitative ribbon area.
+    const thickness = (flow.value / maxFlowValue) * scale;
 
     const startY0 = outgoingCursor.get(flow.source)!;
     const startY1 = startY0 + thickness;

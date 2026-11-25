@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { Select, type SelectOption } from "./Select";
@@ -45,6 +45,33 @@ describe("kit Select", () => {
     expect(onChange).toHaveBeenCalledWith("e");
     expect(screen.queryByRole("listbox")).toBeNull();
     expect(trigger).toHaveFocus();
+  });
+
+  it("keeps the keyboard target when a stationary pointer enters an opening panel", async () => {
+    const { user, onChange, trigger } = setup();
+    trigger.focus();
+    await user.keyboard("{Home}");
+    const listbox = screen.getByRole("listbox");
+    const first = screen.getByRole("option", { name: "Alpha" });
+    const selected = screen.getByRole("option", { name: /Beta/ });
+    expect(listbox).toHaveAttribute("aria-activedescendant", first.id);
+    // Chromium can synthesize mouseenter when layout places a menu under
+    // a stationary pointer, even though the user is navigating by keyboard.
+    fireEvent.mouseEnter(selected);
+    expect(listbox).toHaveAttribute("aria-activedescendant", first.id);
+    await user.keyboard("{Enter}");
+    expect(onChange).toHaveBeenCalledWith("a");
+  });
+
+  it("still moves the active option on real pointer movement", async () => {
+    const { user, onChange, trigger } = setup();
+    trigger.focus();
+    await user.keyboard("{Home}");
+    const delta = screen.getByRole("option", { name: "Delta" });
+    fireEvent.pointerMove(delta, { pointerType: "mouse", clientX: 10, clientY: 20 });
+    expect(screen.getByRole("listbox")).toHaveAttribute("aria-activedescendant", delta.id);
+    await user.keyboard("{Enter}");
+    expect(onChange).toHaveBeenCalledWith("d");
   });
 
   it("supports incremental type-ahead by option label", async () => {

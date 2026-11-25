@@ -354,3 +354,33 @@ Document View at the indexed passage; external source links remain separate.
 Document-list pagination, search status and destructive-action
 confirmations have keyboard controls and screen-reader announcements.
 The side reader becomes inert when closed and restores focus on exit.
+
+## Repairing a stale or corrupt embedding cache
+
+Malformed provider responses are rejected before a batch is committed. Retry
+the embedding job after correcting the provider; previously valid batches
+remain cached. Search falls back to keywords if the configured semantic
+search encounters an invalid cached vector. Check the application log for the
+exact model ID and diagnostic.
+
+For a cache written before validation was added, or an intentional change
+of a model's dimensions under the same ID, first verify that the provider is
+healthy and that you really intend to replace the cached vector space. Stop
+Graphlink completely (including its background embedding jobs) and back up
+the knowledge database. From the repository root or an installed Graphlink
+Python environment, run the following, substituting the exact model ID from
+the log (for example, `ollama:nomic-embed-text`):
+
+```sh
+python -c "import sys; from backend.knowledge_store import DEFAULT_DB_PATH, reset_model_embeddings; print(reset_model_embeddings(DEFAULT_DB_PATH, sys.argv[1]))" "ollama:nomic-embed-text"
+```
+
+For a nondefault database, pass its explicit `Path` to
+`reset_model_embeddings` instead of `DEFAULT_DB_PATH`. The command reports
+the number of deleted derived vector rows; it does not delete documents,
+chunks, keyword indexes, or other model caches. It clears the selected model
+across all workspaces, so the next normal embedding pass can rebuild a
+consistent vector space. Restart Graphlink and resume indexing in the
+affected workspaces. Rebuilding a cloud model cache re-embeds document
+content under the existing explicit cloud consent and may incur charges.
+Do not reset automatically in response to a transient provider error.

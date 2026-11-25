@@ -809,18 +809,22 @@ def _render_sankey_chart(figure, ax, chart_data: dict[str, Any], theme: dict[str
         if node not in levels:
             levels[node] = max((levels.get(flow["source"], 0) + 1 for flow in incoming[node]), default=0)
 
+    # Normalize before summing to avoid overflowing finite flow values.
+    # Keep these geometry rules in sync with sankeyLayout.ts.
+    max_flow_value = max((flow["value"] for flow in flows), default=1.0) or 1.0
     column_map = defaultdict(list)
     node_weights = {}
     for node in nodes:
         node_weights[node] = max(
-            sum(flow["value"] for flow in outgoing[node]),
-            sum(flow["value"] for flow in incoming[node]),
-            1.0,
+            sum(flow["value"] / max_flow_value for flow in outgoing[node]),
+            sum(flow["value"] / max_flow_value for flow in incoming[node]),
         )
         column_map[levels[node]].append(node)
 
-    column_gap = 0.03
     chart_height = 0.82
+    # Keep at least half the height available for nodes in the densest column.
+    largest_column = max((len(column) for column in column_map.values()), default=1)
+    column_gap = min(0.03, chart_height / (2 * max(1, largest_column - 1)))
     available_columns = max(column_map.keys()) + 1 if column_map else 1
     global_scale = None
     for column_nodes in column_map.values():
@@ -830,7 +834,7 @@ def _render_sankey_chart(figure, ax, chart_data: dict[str, Any], theme: dict[str
             continue
         column_scale = available_height / total_weight
         global_scale = column_scale if global_scale is None else min(global_scale, column_scale)
-    scale = global_scale or 0.04
+    scale = global_scale if global_scale is not None else 0.0
 
     x_start = 0.08
     x_end = 0.92
@@ -876,7 +880,8 @@ def _render_sankey_chart(figure, ax, chart_data: dict[str, Any], theme: dict[str
     for flow in sorted_flows:
         source_layout = node_layout[flow["source"]]
         target_layout = node_layout[flow["target"]]
-        thickness = max(flow["value"] * scale, 0.008)
+        # The stroke can aid visibility without inflating the filled area.
+        thickness = (flow["value"] / max_flow_value) * scale
 
         start_y0 = outgoing_cursor[flow["source"]]
         start_y1 = start_y0 + thickness
@@ -934,7 +939,7 @@ def _render_sankey_chart(figure, ax, chart_data: dict[str, Any], theme: dict[str
                 (layout["x"], layout["y"]),
                 layout["width"],
                 layout["height"],
-                boxstyle="round,pad=0.003,rounding_size=0.01",
+                boxstyle=f"round,pad=0,rounding_size={min(0.01, layout['width'] / 2, layout['height'] / 2)}",
                 facecolor=node_color,
                 edgecolor=_mpl_rgba(theme["text"], 70 / 255),
                 linewidth=1.0,

@@ -90,7 +90,7 @@ export function SankeyChartMarks({ chartData, theme, width, height, onHover, wra
               x={node.x}
               y={node.y}
               width={node.width}
-              height={Math.max(1, node.height)}
+              height={node.height}
               fill={colorByNode.get(node.name)}
               stroke={theme.text}
               strokeOpacity={0.28}

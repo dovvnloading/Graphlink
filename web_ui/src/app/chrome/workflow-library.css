@@ -4,7 +4,7 @@
 .workflow-library-dialog { height: min(88vh, 56rem); max-height: min(88vh, 56rem); }
 .workflow-library-dialog .overlay-dialog-body { padding: 0; }
 .workflow-library { display: grid; min-height: 0; }
-.workflow-library > .gl-inline-alert { margin: var(--gl-space-3) var(--gl-space-4) 0; }
+.workflow-library > .gl-inline-alert, .workflow-library > .gl-toaster--inline { margin: var(--gl-space-3) var(--gl-space-4) 0; }
 .workflow-library .gl-tabs-list { padding-inline: var(--gl-space-4); }
 .workflow-panel {
   display: grid;

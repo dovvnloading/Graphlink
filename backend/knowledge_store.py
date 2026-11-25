@@ -1673,26 +1673,67 @@ def delete_graph_index(db_path: Path, graph_id: int) -> bool:
 # codebase is, plain CRUD with no ML-library dependency.
 
 
-def upsert_embeddings(db_path: Path, model_id: str, rows: list[tuple[int, int, bytes]]) -> None:
-    """`rows`: `(chunk_id, dim, vector_blob)` tuples, all for the SAME
-    `model_id` (the cache key's other half). ON CONFLICT DO UPDATE rather
-    than INSERT OR IGNORE - defensive, not load-bearing today: every real
-    caller (knowledge_embeddings.embed_pending_chunks) only ever passes
-    chunk_ids that chunks_pending_embedding() just confirmed have no row
-    yet, so this is a plain insert in practice, but a caller that DOES
-    pass an already-embedded chunk_id (e.g. a forced re-embed) gets a
-    correct overwrite instead of a silently-ignored no-op or a UNIQUE-
-    constraint crash."""
+def upsert_embeddings(
+    db_path: Path, model_id: str, rows: list[tuple[int, int, bytes]], *,
+    check_all_cached_dimensions: bool = True,
+) -> None:
+    """Atomically write a batch of packed vectors for one model.
+
+    The first batch of a job checks all cached dimensions, including across
+    collections, to detect mixed legacy caches. Subsequent batches can check
+    a single row: all normal writers enforce the same dimension under the
+    SQLite write lock, so a concurrent first writer cannot introduce a
+    different vector space. The store stays byte-level; float32 value
+    validation belongs to knowledge_embeddings before this call.
+    """
     if not rows:
         return
+    dim = rows[0][1]
+    if dim < 1 or any(row_dim != dim or len(blob) != dim * 4 for _, row_dim, blob in rows):
+        raise ValueError(f"Embedding model {model_id!r} returned a batch of mismatched dimensions.")
     conn = _connect(db_path)
     try:
         with conn:
+            conn.execute("BEGIN IMMEDIATE")
+            if check_all_cached_dimensions:
+                cached = conn.execute(
+                    "SELECT dim FROM embeddings WHERE model_id = ? AND dim != ? LIMIT 1",
+                    (model_id, dim),
+                ).fetchone()
+            else:
+                cached = conn.execute(
+                    "SELECT dim FROM embeddings WHERE model_id = ? LIMIT 1", (model_id,),
+                ).fetchone()
+            if cached is not None and cached[0] != dim:
+                raise ValueError(
+                    f"Embedding model {model_id!r} has mismatched dimension "
+                    f"(received {dim}, cached {cached[0]}) - verify the provider model or "
+                    "reset the model cache and re-embed as described in docs/KNOWLEDGE_RETRIEVAL.md."
+                )
             conn.executemany(
                 "INSERT INTO embeddings (chunk_id, model_id, dim, vector) VALUES (?, ?, ?, ?) "
                 "ON CONFLICT(chunk_id, model_id) DO UPDATE SET dim = excluded.dim, vector = excluded.vector",
-                [(chunk_id, model_id, dim, vector_blob) for chunk_id, dim, vector_blob in rows],
+                [(chunk_id, model_id, row_dim, vector_blob) for chunk_id, row_dim, vector_blob in rows],
             )
+    finally:
+        conn.close()
+
+
+def reset_model_embeddings(db_path: Path, model_id: str) -> int:
+    """Explicit offline repair: discard only the selected model's derived cache.
+
+    Stop Graphlink before calling this so an in-flight job cannot repopulate
+    the cache with the old model. Documents, chunks, FTS and other models
+    are untouched; the normal pending-embedding path rebuilds the vectors.
+    """
+    if not db_path.is_file():
+        raise ValueError("Knowledge database does not exist.")
+    if not model_id:
+        raise ValueError("An exact embedding model ID is required.")
+    conn = _connect(db_path)
+    try:
+        with conn:
+            return conn.execute("DELETE FROM embeddings WHERE model_id = ?", (model_id,)).rowcount
     finally:
         conn.close()
 
@@ -1815,8 +1856,23 @@ def pending_embedding_batch(
         conn.close()
 
 
+def _source_scope_filter(scope: str) -> str:
+    """A fixed SQL predicate on the joined chunk, before any candidate limit.
+
+    Only reindex_graph_content writes source_node_id; ordinary ingested
+    documents (even with a graph-like URI) have NULL there.
+    """
+    if scope == "all":
+        return ""
+    if scope == "graphs":
+        return " AND c.source_node_id IS NOT NULL"
+    if scope == "knowledge":
+        return " AND c.source_node_id IS NULL"
+    raise ValueError(f"Unknown search scope: {scope!r}")
+
+
 def has_embeddings_for_search(
-    db_path: Path, model_id: str, *, collection_id: int | None = None,
+    db_path: Path, model_id: str, *, collection_id: int | None = None, scope: str = "all",
 ) -> bool:
     """Avoid a provider request when the selected model/workspace has no vectors."""
     conn = _connect(db_path)
@@ -1831,14 +1887,14 @@ def has_embeddings_for_search(
         if collection_id is not None:
             query += " AND d.collection_id = ?"
             params.append(collection_id)
-        return conn.execute(query + " LIMIT 1", params).fetchone() is not None
+        return conn.execute(query + _source_scope_filter(scope) + " LIMIT 1", params).fetchone() is not None
     finally:
         conn.close()
 
 
 def iter_embedding_vector_batches(
     db_path: Path, model_id: str, *, collection_id: int | None = None,
-    batch_size: int = 256,
+    batch_size: int = 256, scope: str = "all",
 ):
     """Stream compact (id, dimension, vector) records, not the corpus's text.
 
@@ -1860,7 +1916,7 @@ def iter_embedding_vector_batches(
         if collection_id is not None:
             query += " AND d.collection_id = ?"
             params.append(collection_id)
-        cursor = conn.execute(query, params)
+        cursor = conn.execute(query + _source_scope_filter(scope), params)
         while batch := cursor.fetchmany(batch_size):
             yield batch
     finally:
@@ -1869,6 +1925,7 @@ def iter_embedding_vector_batches(
 
 def embedding_hit_metadata(
     db_path: Path, chunk_ids: list[int], *, collection_id: int | None = None,
+    scope: str = "all",
 ) -> dict[int, dict[str, Any]]:
     """Retrieve passage text and citation fields for top-k IDs only."""
     if not chunk_ids:
@@ -1886,7 +1943,7 @@ def embedding_hit_metadata(
         if collection_id is not None:
             query += " AND d.collection_id = ?"
             params.append(collection_id)
-        rows = conn.execute(query, params).fetchall()
+        rows = conn.execute(query + _source_scope_filter(scope), params).fetchall()
         return {
             int(row[0]): {
                 "chunk_id": row[0], "document_id": row[1], "ordinal": row[2],
@@ -1978,6 +2035,7 @@ def _fts5_match_expression(query: str) -> str:
 
 def search_chunks(
     db_path: Path, query: str, *, collection_id: int | None = None, k: int = 10,
+    scope: str = "all",
 ) -> list[dict[str, Any]]:
     """Lexical (BM25) search over every ingested chunk's text, ranked best
     match first. Returns a list of dicts carrying enough to both display a
@@ -2020,6 +2078,7 @@ def search_chunks(
         if collection_id is not None:
             collection_filter = "AND d.collection_id = ?"
             params = (match_expression, collection_id)
+        collection_filter += _source_scope_filter(scope)
         rows = conn.execute(
             f"""
             SELECT c.id, c.document_id, c.ordinal, c.text, c.token_count, c.offset_start, c.offset_end,

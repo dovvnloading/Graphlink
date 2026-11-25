@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, expect, it, vi } from "vitest";
 import type { WorkflowSpec } from "../../lib/workflow-contract/generated/workflow";
 import { WorkflowRunsPanel } from "./WorkflowRunsPanel";
-import type { DetachedRun } from "./workflowApi";
+import { runWaiting, type DetachedRun, type RunSummary } from "./workflowApi";
 import type { ExternalizedValue } from "./workflowRunValues";
 import { downloadBlob } from "../canvas/downloadTextFile";
 
@@ -33,6 +33,11 @@ function run(overrides: Partial<DetachedRun>): DetachedRun {
     ...overrides,
   };
 }
+function summary(record: DetachedRun): RunSummary {
+  const { run_id, preset_id, status, created_at, started_at, finished_at, cost_usd, spec } = record;
+  return { run_id, preset_id, status, created_at, started_at, finished_at, cost_usd,
+    spec: { name: spec.name }, waiting_for_approval: runWaiting(record) };
+}
 function mockFetch() {
   const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({ accepted: true }) });
   vi.stubGlobal("fetch", fetchMock);
@@ -44,7 +49,7 @@ it("explains an unattended pause and approves it once with the run's nonce", asy
   const fetchMock = mockFetch();
   const onChanged = vi.fn();
   render(<WorkflowRunsPanel workspace={3} loaded presets={[]} selected="run-1" onSelect={() => {}} onChanged={onChanged}
-    runs={[run({ awaiting_approval: { step_id: "write_notes", nonce: "n-42", side_effect_class: "executes", preview_fingerprint: "f" } })]} />);
+    runs={[]} detailLoaded detail={run({ awaiting_approval: { step_id: "write_notes", nonce: "n-42", side_effect_class: "executes", preview_fingerprint: "f" } })} />);
   const review = screen.getByRole("group", { name: "Review Write notes" });
   expect(review).toHaveTextContent("runs a model, code or an agent on this computer, using Ollama · qwen3:8b");
   expect(review).toHaveTextContent("only lets pure steps run without you");
@@ -59,10 +64,10 @@ it("explains an unattended pause and approves it once with the run's nonce", asy
 it("approves an Approval step through its own endpoint and keeps inputs collapsed", async () => {
   const fetchMock = mockFetch();
   render(<WorkflowRunsPanel workspace={3} loaded presets={[]} selected="run-1" onSelect={() => {}} onChanged={() => {}}
-    runs={[run({ steps: {
+    runs={[]} detailLoaded detail={run({ steps: {
       write_notes: { step_id: "write_notes", status: "completed", error: null, outputs: { value: { kind: "text", text: "Draft ready" } } },
       sign_off: { step_id: "sign_off", status: "running", error: null, approval: { status: "pending", message: "Check the notes" } },
-    } })]} />);
+    } })} />);
   expect(screen.getByText("secret draft")).not.toBeVisible();
   await userEvent.click(screen.getByRole("button", { name: "Approve step" }));
   expect(fetchMock).toHaveBeenCalledWith("/api/workflows/3/runs/run-1/step-approval", expect.objectContaining({
@@ -71,10 +76,10 @@ it("approves an Approval step through its own endpoint and keeps inputs collapse
 });
 
 it("lists runs as rows that say what is waiting", () => {
-  render(<WorkflowRunsPanel workspace={3} loaded presets={[{ preset_id: "p1", name: "Nightly", trigger: null, cost_usd: 0, allowed_effects: ["pure"], request: {} }]}
+  render(<WorkflowRunsPanel workspace={3} loaded presets={[{ preset_id: "p1", name: "Nightly", trigger: null, cost_usd: 0, allowed_effects: ["pure"] }]} detail={null} detailLoaded={false}
     selected="" onSelect={() => {}} onChanged={() => {}}
     runs={[run({ preset_id: "p1", awaiting_approval: { step_id: "write_notes", nonce: "n", side_effect_class: "executes", preview_fingerprint: "f" } }),
-      run({ run_id: "run-2", status: "completed", finished_at: "2026-11-24T10:00:08Z", started_at: "2026-11-24T10:00:00Z" })]} />);
+      run({ run_id: "run-2", status: "completed", finished_at: "2026-11-24T10:00:08Z", started_at: "2026-11-24T10:00:00Z" })].map(summary)} />);
   expect(screen.getByText("2 runs · 1 waiting for you")).toHaveAttribute("role", "status");
   const rows = screen.getAllByRole("button", { name: /^Release notes,/ });
   expect(rows[0]).toHaveAccessibleName(/waiting for approval/);
@@ -99,9 +104,9 @@ it.each(largeValues)("keeps externalized $kind results, inputs and step outputs 
   fetchMock.mockResolvedValueOnce({ ok: true, blob: async () => blob });
   window.location.hash = "token=fixture-token";
   render(<WorkflowRunsPanel workspace={3} loaded presets={[]} selected="run-1" onSelect={() => {}} onChanged={() => {}}
-    runs={[run({ status: "completed", inputs: { value: stored }, outputs: { value: stored }, steps: {
+    runs={[]} detailLoaded detail={run({ status: "completed", inputs: { value: stored }, outputs: { value: stored }, steps: {
       write_notes: { step_id: "write_notes", status: "completed", error: null, outputs: { value: stored } },
-    } })]} />);
+    } })} />);
   const result = screen.getByRole("region", { name: "Result" });
   expect(within(result).getByText(/Stored separately · 64\./)).toBeVisible();
   await userEvent.click(screen.getByRole("button", { name: "Inputs (1)" }));
@@ -126,7 +131,7 @@ it("keeps the run usable after a missing asset, and allows an explicit retry", a
     .mockResolvedValueOnce({ ok: true, blob: async () => new Blob(["wrong size"]) })
     .mockResolvedValueOnce({ ok: true, blob: async () => blob });
   render(<WorkflowRunsPanel workspace={3} loaded presets={[]} selected="run-1" onSelect={() => {}} onChanged={() => {}}
-    runs={[run({ status: "completed", outputs: { value: externalized("text", blob) } })]} />);
+    runs={[]} detailLoaded detail={run({ status: "completed", outputs: { value: externalized("text", blob) } })} />);
   const download = screen.getByRole("button", { name: "Download value (JSON)" });
   await userEvent.click(download);
   expect(await screen.findByText("The stored value is missing or corrupt.")).toBeVisible();
@@ -143,9 +148,9 @@ it("keeps the run usable after a missing asset, and allows an explicit retry", a
 it("rejects invalid reference metadata before making a request", async () => {
   const fetchMock = mockFetch();
   render(<WorkflowRunsPanel workspace={3} loaded presets={[]} selected="run-1" onSelect={() => {}} onChanged={() => {}}
-    runs={[run({ status: "completed", outputs: { value: {
+    runs={[]} detailLoaded detail={run({ status: "completed", outputs: { value: {
       kind: "table", asset_ref: "../invalid", mime_type: "application/json", size_bytes: 65_537,
-    } } })]} />);
+    } } })} />);
   expect(screen.getByText("Stored value reference is invalid.")).toBeVisible();
   await userEvent.click(screen.getByRole("button", { name: "Download value (JSON)" }));
   expect(await screen.findByText("This stored value reference is invalid.")).toBeVisible();
@@ -158,7 +163,7 @@ it("still displays inline values at the text threshold and ordinary file metadat
   const asset = { asset_id: "file", sha256: "a".repeat(64), media_type: "application/octet-stream", filename: "sample.bin", size_bytes: 4 };
   const file = { kind: "file" as const, asset, asset_ref: asset.sha256, mime_type: asset.media_type };
   render(<WorkflowRunsPanel workspace={3} loaded presets={[]} selected="run-1" onSelect={() => {}} onChanged={() => {}}
-    runs={[run({ status: "completed", outputs: { value: { kind: "text", text }, file } })]} />);
+    runs={[]} detailLoaded detail={run({ status: "completed", outputs: { value: { kind: "text", text }, file } })} />);
   const result = screen.getByRole("region", { name: "Result" });
   expect(within(result).getByRole("region", { name: "Value" }).textContent).toBe(text);
   expect(within(result).getByText("sample.bin (application/octet-stream)")).toBeVisible();

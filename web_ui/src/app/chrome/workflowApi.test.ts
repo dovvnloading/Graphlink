@@ -30,8 +30,56 @@ describe("workflow input drafts", () => {
 
   it("round-trips a table example back into an editable draft", () => {
     const value = { kind: "table", columns: ["name", "note"], rows: [["a", "x, y"], ["b", null]] } as const;
-    expect(parseCsv(draftFor(ports[1], value))).toEqual({ columns: ["name", "note"], rows: [["a", "x, y"], ["b", null]] });
+    expect(typedInputs([ports[1]], { rows: draftFor(ports[1], value) }).rows).toEqual(value);
     expect(money(0)).toBe("$0.00");
     expect(money(1.5)).toBe("$1.50");
+  });
+
+  it("preserves identifiers, whitespace, quoted empties and blank rows", () => {
+    expect(parseCsv('id,description\n00123,"  padded  "\n,\n9007199254740993,"123"\n"",  ')).toEqual({
+      columns: ["id", "description"],
+      rows: [["00123", "  padded  "], [null, null], ["9007199254740993", "123"], ["", "  "]],
+    });
+    expect(parseCsv("a\n\n")).toEqual({ columns: ["a"], rows: [[null]] });
+    expect(parseCsv("a,b,c\n-1.25,2e3,1e-999").rows).toEqual([[-1.25, 2000, "1e-999"]]);
+  });
+
+  it("supports CRLF, embedded CR and escaped quotes", () => {
+    expect(parseCsv('a,b\r\n"x\ry","a""b"\r\n')).toEqual({
+      columns: ["a", "b"], rows: [["x\ry", 'a"b']],
+    });
+  });
+
+  it.each([
+    ["a,b\n7,ok,extra", "CSV row 2, column 3"],
+    ["a,b\n7", "CSV row 2, column 2"],
+    ['a,b\n7,"oops', "Unterminated quoted field"],
+    ['a\nab"c', "quote may only start"],
+    ['a\n"x"y', "after the closing quote"],
+  ])("rejects malformed CSV %j rather than changing its shape", (csv, error) => {
+    expect(() => parseCsv(csv)).toThrow(error);
+    const drafts = { draft: "x", rows: csv };
+    expect(() => typedInputs(ports, drafts)).toThrow(error);
+    expect(() => plainInputs(ports, drafts)).toThrow(error);
+  });
+
+  it("round-trips typed table drafts through both run and preset requests", () => {
+    const value = {
+      kind: "table",
+      columns: ["id", "note", "flag", "empty", "missing", "number"],
+      rows: [["00123", "a\rb", true, "", null, 7], ["123", "  padded  ", false, "", null, 1.25]],
+    } as const;
+    const drafts = { draft: "x", rows: draftFor(ports[1], value) };
+    expect(typedInputs(ports, drafts).rows).toEqual(value);
+    expect(plainInputs(ports, drafts).rows).toEqual({ columns: value.columns, rows: value.rows });
+  });
+
+  it.each([
+    ['{"columns":["a"],"rows":[[1,2]]}', "row 1"],
+    ['{"columns":["a"],"rows":[[{}]]}', "column 1"],
+    ['{"columns":["a"],"rows":[[9007199254740993]]}', "safe numeric range"],
+    ['{"columns":["a"],"rows":[[1e999]]}', "JSON scalar"],
+  ])("rejects invalid typed table JSON %j", (json, error) => {
+    expect(() => typedInputs(ports, { draft: "x", rows: json })).toThrow(error);
   });
 });

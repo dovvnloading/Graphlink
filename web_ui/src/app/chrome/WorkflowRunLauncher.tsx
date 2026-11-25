@@ -9,6 +9,7 @@ import {
   draftFor, errorText, typedInputs, workflowRequest, workspacePath,
   type DetachedRequest, type InputDrafts, type WorkflowPreview,
 } from "./workflowApi";
+import { draftsForRequest, parseDetachedRequest, requestFromDrafts } from "./workflowRunDrafts";
 
 export function initialDrafts(ports: readonly PortSpec[], examples?: Record<string, PortValue>): InputDrafts {
   return Object.fromEntries(ports.map(port => [port.name, draftFor(port, examples?.[port.name])]));
@@ -17,7 +18,7 @@ export function initialDrafts(ports: readonly PortSpec[], examples?: Record<stri
 const kindHelp: Record<string, string | undefined> = {
   text: undefined,
   json: "A JSON value, for example {\"limit\": 5} or [1, 2, 3]",
-  table: "Comma-separated values. The first row names the columns.",
+  table: "CSV: first row names columns, quote text (including numeric identifiers), unquoted empty cells are null. Or enter a JSON object with columns and rows for exact types.",
 };
 
 /** One field per workflow input, typed by its port. */
@@ -45,21 +46,21 @@ export function WorkflowRunLauncher({ spec, examples, workspace, onStarted, json
   onStarted: (runId: string) => void; jsonOnly?: boolean; previewLabel?: string; title?: string; note?: ReactNode;
 }) {
   const [drafts, setDrafts] = useState<InputDrafts>(() => initialDrafts(spec?.inputs ?? [], examples));
-  const [asJson, setAsJson] = useState(jsonOnly);
+  const [asJson, setAsJson] = useState(() => {
+    if (jsonOnly) return true;
+    if (!spec || !examples) return false;
+    // Do not start in a form that would silently drop a typed example (e.g. an asset).
+    try { draftsForRequest(spec, { spec, parameters: examples }); return false; }
+    catch { return true; }
+  });
   const [json, setJson] = useState(() => spec ? JSON.stringify({ spec, parameters: examples ?? {} }, null, 2) : "");
   const [review, setReview] = useState<{ request: DetachedRequest; preview: WorkflowPreview } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [modeError, setModeError] = useState("");
 
   function request(): DetachedRequest {
-    if (asJson || !spec) {
-      let parsed: unknown;
-      try { parsed = JSON.parse(json); } catch { throw new Error("The request isn't valid JSON. Check for a missing comma or quote."); }
-      if (!parsed || typeof parsed !== "object" || !("spec" in parsed) || !("parameters" in parsed)) {
-        throw new Error("The request needs a \"spec\" and a \"parameters\" object.");
-      }
-      return parsed as DetachedRequest;
-    }
+    if (asJson || !spec) return parseDetachedRequest(json);
     return { spec, parameters: typedInputs(spec.inputs, drafts) };
   }
   async function preview() {
@@ -84,21 +85,29 @@ export function WorkflowRunLauncher({ spec, examples, workspace, onStarted, json
     } catch (err) { setError(errorText(err)); setReview(null); }
     finally { setBusy(false); }
   }
-  const edit = (fn: () => void) => { fn(); setReview(null); };
+  const edit = (fn: () => void) => { fn(); setReview(null); setModeError(""); setError(""); };
+
+  function switchEditor(next: boolean) {
+    if (!spec || next === asJson) return;
+    try {
+      if (next) {
+        const body = requestFromDrafts(spec, drafts);
+        edit(() => { setJson(JSON.stringify(body, null, 2)); setAsJson(true); });
+      } else {
+        const nextDrafts = draftsForRequest(spec, parseDetachedRequest(json));
+        edit(() => { setDrafts(nextDrafts); setAsJson(false); });
+      }
+    } catch (err) {
+      // A failed conversion leaves the current editor, its draft and review intact.
+      setModeError(errorText(err));
+    }
+  }
 
   return <div className="workflow-launcher">
     <div className="workflow-card-header">
     {title && <h4>{title}</h4>}
     {!jsonOnly && spec && <Switch label="Edit as JSON" checked={asJson} disabled={busy}
-      onCheckedChange={next => {
-        edit(() => {
-          if (next) {
-            try { setJson(JSON.stringify({ spec, parameters: typedInputs(spec.inputs, drafts) }, null, 2)); }
-            catch { setJson(JSON.stringify({ spec, parameters: examples ?? {} }, null, 2)); }
-          }
-          setAsJson(next);
-        });
-      }} />}
+      onCheckedChange={switchEditor} />}
     </div>
     {note}
     {asJson || !spec
@@ -106,6 +115,7 @@ export function WorkflowRunLauncher({ spec, examples, workspace, onStarted, json
           description="A frozen spec and one typed value per input. Only run a spec you trust."
           value={json} onValueChange={value => edit(() => setJson(value))} />
       : <WorkflowInputsForm ports={spec.inputs} drafts={drafts} disabled={busy} onChange={next => edit(() => setDrafts(next))} />}
+    {modeError && <InlineAlert variant="error" title="Couldn't switch input editors" body={modeError} />}
     {error && <InlineAlert variant="error" title="Couldn't preview or start this run" body={error} />}
     {workspace === null && <InlineAlert title="No workspace" body="Create a workspace in the chat library first. Runs are stored per workspace." />}
     {review

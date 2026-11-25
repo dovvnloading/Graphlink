@@ -61,6 +61,30 @@ def _unpack_vector(blob: bytes) -> np.ndarray:
     return np.frombuffer(blob, dtype=_VECTOR_DTYPE)
 
 
+def validate_embedding_vector(vector: object, *, context: str) -> np.ndarray:
+    """Validate the actual float32 representation before it can enter the cache."""
+    error = f"{context}: expected a nonempty, one-dimensional, finite numeric embedding"
+    try:
+        raw = np.asarray(vector)
+        if raw.ndim != 1 or raw.size == 0 or raw.dtype.kind not in "iuf":
+            raise ValueError(error)
+        if isinstance(vector, (list, tuple)) and any(
+            isinstance(value, (bool, np.bool_)) for value in vector
+        ):
+            raise ValueError(error)
+        # A finite float64 may overflow to infinity (or underflow to zero)
+        # when packed as float32. Validate the stored representation.
+        with np.errstate(over="ignore", under="ignore", invalid="ignore"):
+            array = raw.astype(_VECTOR_DTYPE, copy=False)
+    except (TypeError, ValueError, OverflowError):
+        raise ValueError(error) from None
+    if not np.isfinite(array).all():
+        raise ValueError(f"{context}: embedding contains nonfinite float32 values")
+    if not np.any(array):
+        raise ValueError(f"{context}: embedding has zero norm after float32 conversion")
+    return array
+
+
 def embed_pending_chunks(
     db_path: Path,
     provider: "Provider",
@@ -136,11 +160,19 @@ def embed_pending_chunks(
         # not persist an in-flight batch after the model/consent changed.
         if should_cancel is not None and should_cancel():
             break
-        rows = [
-            (row["chunk_id"], len(vector), _pack_vector(vector))
-            for row, vector in zip(batch, vectors)
-        ]
-        upsert_embeddings(db_path, model_id, rows)
+        # Validate every vector before writing any row. A malformed response
+        # must leave the entire batch pending so a healthy provider can retry.
+        rows = []
+        for row, vector in zip(batch, vectors):
+            array = validate_embedding_vector(
+                vector, context=f"Embedding model {model_id!r}, chunk {row['chunk_id']}",
+            )
+            rows.append((row["chunk_id"], array.size, array.tobytes()))
+        if should_cancel is not None and should_cancel():
+            break
+        upsert_embeddings(
+            db_path, model_id, rows, check_all_cached_dimensions=embedded_count == 0,
+        )
         embedded_count += len(rows)
         if on_batch is not None:
             on_batch(len(rows))
@@ -155,6 +187,7 @@ def vector_search(
     model_id: str,
     collection_id: int | None = None,
     k: int = 10,
+    scope: str = "all",
 ) -> list[dict]:
     """Stream a flat cosine scan and materialize only the best k passages.
 
@@ -167,7 +200,9 @@ def vector_search(
         raise ValueError(f"k must be >= 1, got {k!r}.")
     if not provider.capabilities.embedding:
         raise ValueError(f"Provider for model {model_id!r} does not support embeddings.")
-    if not query.strip() or not has_embeddings_for_search(db_path, model_id, collection_id=collection_id):
+    if not query.strip() or not has_embeddings_for_search(
+        db_path, model_id, collection_id=collection_id, scope=scope,
+    ):
         return []
 
     query_vectors = cast(_EmbeddingCapable, provider).embed([query])
@@ -176,16 +211,20 @@ def vector_search(
             f"provider.embed() returned {len(query_vectors)} vector(s) for a single query "
             f"(model_id={model_id!r}) - expected exactly 1."
         )
-    query_array = np.asarray(query_vectors[0], dtype=_VECTOR_DTYPE)
+    # Use float64 for the norm and dot products so even extreme finite
+    # float32 vectors do not overflow or underflow during cosine scoring.
+    query_array = validate_embedding_vector(
+        query_vectors[0], context=f"Embedding model {model_id!r}, query",
+    ).astype(np.float64)
     query_norm = np.linalg.norm(query_array)
-    if query_norm == 0.0:
-        return []
 
     # A min-heap holds at most k (similarity, negative chunk id) pairs.
     # Negative IDs give deterministic ties without relying on SQLite scan
     # order or numpy's unstable default argsort.
     winners: list[tuple[float, int]] = []
-    for batch in iter_embedding_vector_batches(db_path, model_id, collection_id=collection_id):
+    for batch in iter_embedding_vector_batches(
+        db_path, model_id, collection_id=collection_id, scope=scope,
+    ):
         mismatched = next(
             ((chunk_id, dim) for chunk_id, dim, vector in batch
              if dim != query_array.size or len(vector) != dim * 4), None,
@@ -194,16 +233,21 @@ def vector_search(
             raise ValueError(
                 f"model_id {model_id!r} has embeddings of mismatched dimension "
                 f"(query dimension {query_array.size}, stored chunk {mismatched[0]} "
-                f"has dim={mismatched[1]}) - re-embed stale chunks."
+                f"has dim={mismatched[1]}) - reset the model cache and re-embed "
+                "as described in docs/KNOWLEDGE_RETRIEVAL.md."
             )
-        matrix = np.stack([_unpack_vector(vector) for _, _, vector in batch])
+        matrix = np.stack([_unpack_vector(vector) for _, _, vector in batch]).astype(np.float64)
         norms = np.linalg.norm(matrix, axis=1)
-        safe_norms = np.where(norms == 0.0, np.finfo(np.float32).eps, norms)
-        similarities = (matrix @ query_array) / (safe_norms * query_norm)
+        invalid = np.flatnonzero(~np.isfinite(norms) | (norms == 0.0))
+        if invalid.size:
+            chunk_id = batch[int(invalid[0])][0]
+            raise ValueError(
+                f"model_id {model_id!r} has an invalid cached embedding for chunk {chunk_id} "
+                "- reset the model cache and re-embed as described in docs/KNOWLEDGE_RETRIEVAL.md."
+            )
+        similarities = np.clip((matrix @ query_array) / (norms * query_norm), -1.0, 1.0)
         for (chunk_id, _, _), similarity in zip(batch, similarities):
             score = float(similarity)
-            if not np.isfinite(score):
-                score = -1.0
             rank = (score, -int(chunk_id))
             if len(winners) < k:
                 heappush(winners, rank)
@@ -212,7 +256,7 @@ def vector_search(
 
     ranked = sorted(winners, reverse=True)
     metadata = embedding_hit_metadata(
-        db_path, [-chunk_id for _, chunk_id in ranked], collection_id=collection_id,
+        db_path, [-chunk_id for _, chunk_id in ranked], collection_id=collection_id, scope=scope,
     )
     return [
         {**metadata[-negative_id], "score": score}

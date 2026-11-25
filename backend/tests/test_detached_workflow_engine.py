@@ -370,6 +370,8 @@ def test_authenticated_detached_file_run_and_save(tmp_path):
     auth = {"Authorization": "Bearer workflow-admin"}
     with TestClient(app, base_url="http://127.0.0.1", headers={"host": "127.0.0.1"}) as client:
         assert client.get(prefix + "/runs").status_code == 401
+        assert client.get(prefix + "/runs", params={"summary": "true"}).status_code == 401
+        assert client.get(prefix + "/presets", params={"summary": "true"}).status_code == 401
         upload = client.post(prefix + "/files", params={"filename": "data.bin"},
                              content=b"binary-data", headers=auth)
         assert upload.status_code == 201
@@ -391,6 +393,15 @@ def test_authenticated_detached_file_run_and_save(tmp_path):
                 break
             assert time.monotonic() < deadline, record
             time.sleep(0.01)
+        summaries = client.get(prefix + "/runs", params={"summary": "true"}, headers=auth).json()
+        assert summaries == [{
+            "run_id": record["run_id"], "status": "completed", "created_at": record["created_at"],
+            "preset_id": None, "spec": {"name": "File"}, "started_at": record["started_at"],
+            "finished_at": record["finished_at"], "cost_usd": record["cost_usd"], "waiting_for_approval": False,
+        }]
+        assert client.get(prefix + "/runs", headers=auth).json() == [record]
+        assert client.get(prefix + "/presets", params={"summary": "true"}, headers=auth).json() == []
+        assert client.get(run_url.replace(prefix, f"/api/workflows/{ws + 1}"), headers=auth).status_code == 404
         ref = record["outputs"]["file"]["asset_ref"]
         assert client.get(run_url + "/assets/" + ref, headers=auth).content == b"binary-data"
         result = client.post(run_url + "/save-as-graph", headers=auth)

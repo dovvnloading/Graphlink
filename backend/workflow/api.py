@@ -5,6 +5,7 @@ No active SessionBus or SceneDocument is resolved or mutated.
 """
 from __future__ import annotations
 
+import asyncio
 import sqlite3
 from collections.abc import Callable
 from dataclasses import asdict
@@ -126,12 +127,18 @@ def register_workflow_api(app: FastAPI, service: WorkflowService) -> None:
         )})
 
     @app.get(prefix + "/runs")
-    async def list_runs(workspace_id: int):
-        return service.engine().store.list(workspace_id)
+    async def list_runs(workspace_id: int, summary: bool = False):
+        # Resolve the single engine on its owning event loop, then move the
+        # synchronous SQLite read and JSON decoding onto a worker.
+        store = service.engine().store
+        return await asyncio.to_thread(store.list_summaries if summary else store.list, workspace_id)
 
     @app.get(prefix + "/runs/{run_id}")
     async def get_run(workspace_id: int, run_id: str):
-        return _require_run(service.engine(), workspace_id, run_id)
+        record = await asyncio.to_thread(service.engine().store.read_visible, workspace_id, run_id)
+        if record is None:
+            raise HTTPException(404, "Workflow run not found.")
+        return record
 
     @app.post(prefix + "/runs/{run_id}/cancel")
     async def cancel(workspace_id: int, run_id: str):
@@ -169,8 +176,9 @@ def register_workflow_api(app: FastAPI, service: WorkflowService) -> None:
         return _checked(lambda: service.automation.save(workspace_id, body))
 
     @app.get(prefix + "/presets")
-    async def list_presets(workspace_id: int):
-        return service.automation.list(workspace_id)
+    async def list_presets(workspace_id: int, summary: bool = False):
+        automation = service.automation
+        return await asyncio.to_thread(automation.list_summaries if summary else automation.list, workspace_id)
 
     @app.delete(prefix + "/presets/{preset_id}")
     async def delete_preset(workspace_id: int, preset_id: str):

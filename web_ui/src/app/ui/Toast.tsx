@@ -21,6 +21,8 @@ export type ToastOptions = {
   type?: ToastVariant;
   details?: string;
   action?: ToastAction;
+  /** An optional modal scope for persistent, actionable notifications. */
+  scope?: string;
   onDismiss?: () => void;
 };
 
@@ -30,6 +32,7 @@ export type ToastItem = {
   variant: ToastVariant;
   details?: string;
   action?: ToastAction;
+  scope?: string;
   onDismiss?: () => void;
 };
 
@@ -49,7 +52,7 @@ export const toast = {
     const id = "client-toast-" + nextId++;
     clientToasts = [{
       id, title: options.title ?? options.message ?? "", variant: options.variant ?? options.type ?? "info",
-      details: options.details, action: options.action, onDismiss: options.onDismiss,
+      details: options.details, action: options.action, scope: options.scope, onDismiss: options.onDismiss,
     }, ...clientToasts];
     notify();
     return id;
@@ -168,15 +171,19 @@ export type BackendToast = {
   onDismiss: () => void;
 };
 
-export function Toaster({ backendNotification }: { backendNotification?: BackendToast | null }) {
+export function Toaster({ backendNotification, inlineScope, excludeScope }: {
+  backendNotification?: BackendToast | null;
+  inlineScope?: string;
+  excludeScope?: string;
+}) {
   const client = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
   const [expandedSignature, setExpandedSignature] = useState<string | null>(null);
   const all: ToastItem[] = [
-    ...(backendNotification ? [{
+    ...(!inlineScope && backendNotification ? [{
       id: backendNotification.id, title: backendNotification.message,
       variant: backendNotification.msgType, onDismiss: backendNotification.onDismiss,
     }] : []),
-    ...client,
+    ...client.filter((item) => inlineScope ? item.scope === inlineScope : !excludeScope || item.scope !== excludeScope),
   ];
   const hidden = Math.max(0, all.length - 3);
   const signature = all.map((item) => item.id).join("|");
@@ -184,8 +191,10 @@ export function Toaster({ backendNotification }: { backendNotification?: Backend
   const expanded = hidden > 0 && expandedSignature === signature;
   const visible = expanded ? all : all.slice(0, 3);
 
-  return createPortal(
-    <div className="gl-toaster" role="region" aria-label="Notifications">
+  if (inlineScope && all.length === 0) return null;
+  // Scoped approval actions must be inside the dialog's focus trap, not behind its scrim.
+  const content = (
+    <div className={inlineScope ? "gl-toaster gl-toaster--inline" : "gl-toaster"} role="region" aria-label="Notifications">
       {visible.map((item) => (
         <Toast key={item.id} title={item.title} variant={item.variant}
           details={item.details} action={item.action}
@@ -198,7 +207,7 @@ export function Toaster({ backendNotification }: { backendNotification?: Backend
           {expanded ? "Show fewer" : "+" + formatCount(hidden) + " more"}
         </button>
       )}
-    </div>,
-    document.body,
+    </div>
   );
+  return inlineScope ? content : createPortal(content, document.body);
 }

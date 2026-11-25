@@ -1,5 +1,5 @@
 import { useReactFlow } from "@xyflow/react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { WsTransport } from "../../lib/ws/transport";
 import { motionDuration } from "../reducedMotion";
 import { Dialog, useOverlays } from "../overlays/overlays";
@@ -43,7 +43,7 @@ import "./GlobalSearchDialog.css";
  *
  * Wire contract note (frontend/backend built concurrently against ADR-020
  * stage 20.4's shared design doc, no live handshake): this file calls
- * transport.request("globalSearch", "search", [query, k]) and
+ * transport.request("globalSearch", "search", [query, k, null, scope]) and
  * transport.request("app-chat-library", "loadGraphAndFocusNode",
  * [graphId, nodeId]) - the exact topic/intent names and result field names
  * (chunkId/documentId/documentTitle/sourceUri/text/offsetStart/offsetEnd,
@@ -209,14 +209,15 @@ export function GlobalSearchDialog({ transport }: { transport: WsTransport }) {
   const latestRequestId = useRef(0);
   const lastRequested = useRef("");
 
-  const runSearch = useCallback((searchText: string) => {
+  const runSearch = useCallback((searchText: string, searchScope: SearchScope) => {
     const trimmed = searchText.trim();
-    if (!trimmed || lastRequested.current === trimmed) return;
-    lastRequested.current = trimmed;
+    const requestKey = JSON.stringify([trimmed, searchScope]);
+    if (!trimmed || lastRequested.current === requestKey) return;
+    lastRequested.current = requestKey;
     const requestId = ++latestRequestId.current;
     setSearching(true);
     setError(null);
-    transport.request("globalSearch", "search", [trimmed, 10])
+    transport.request("globalSearch", "search", [trimmed, 10, null, searchScope])
       .then((value) => {
         if (requestId !== latestRequestId.current) return;
         const payload = value as { results: GlobalSearchResult[] };
@@ -239,27 +240,36 @@ export function GlobalSearchDialog({ transport }: { transport: WsTransport }) {
 
   useEffect(() => {
     if (!isOpen || !query.trim()) return;
-    const timer = window.setTimeout(() => runSearch(query), SEARCH_DEBOUNCE_MS);
+    const timer = window.setTimeout(() => runSearch(query, scope), SEARCH_DEBOUNCE_MS);
     return () => window.clearTimeout(timer);
-  }, [isOpen, query, runSearch]);
+  }, [isOpen, query, scope, runSearch]);
 
-  const visible = useMemo(() => (results ?? []).filter((result) =>
-    scope === "all" || (scope === "graphs" ? isGraphHit(result) : !isGraphHit(result)),
-  ), [results, scope]);
+  const visible = results ?? [];
   const graphs = visible.filter(isGraphHit);
   const knowledge = visible.filter((result) => !isGraphHit(result));
   const activeIndex = Math.min(selectedIndex, Math.max(visible.length - 1, 0));
   const selected = visible[activeIndex];
 
-  function changeQuery(value: string) {
-    if (value === query) return;
-    ++latestRequestId.current; // Invalidates a reply sent for earlier text, immediately.
+  function resetSearch() {
+    ++latestRequestId.current; // Invalidates replies for earlier text or scope immediately.
     lastRequested.current = "";
-    setQuery(value);
     setResults(null);
     setError(null);
     setSearching(false);
     setSelectedIndex(0);
+  }
+
+  function changeQuery(value: string) {
+    if (value === query) return;
+    resetSearch();
+    setQuery(value);
+  }
+
+  function changeScope(next: SearchScope) {
+    if (next === scope) return;
+    resetSearch();
+    setScope(next);
+    runSearch(query, next);
   }
 
   async function activateResult(result: GlobalSearchResult) {
@@ -298,10 +308,10 @@ export function GlobalSearchDialog({ transport }: { transport: WsTransport }) {
             } else if (event.key === "Enter") {
               event.preventDefault();
               if (results && selected) void activateResult(selected);
-              else runSearch(query);
+              else runSearch(query, scope);
             }
           }} />
-        <Button variant="primary" iconStart="search" onClick={() => runSearch(query)}
+        <Button variant="primary" iconStart="search" onClick={() => runSearch(query, scope)}
           disabled={!query.trim() || searching} loading={searching}>Search</Button>
       </div>
       <SegmentedControl label="Search scope" size="sm" value={scope}
@@ -310,13 +320,13 @@ export function GlobalSearchDialog({ transport }: { transport: WsTransport }) {
           { value: "graphs", label: "Graphs", icon: "workspace" },
           { value: "knowledge", label: "Knowledge", icon: "knowledge" },
         ]}
-        onChange={(next) => { setScope(next as SearchScope); setSelectedIndex(0); }} />
+        onChange={(next) => changeScope(next as SearchScope)} />
       {!query.trim() && recents.length > 0 && <section className="global-search-recent">
         <h3>Recent searches</h3>
         <div className="global-search-recent-items">{recents.map((item) => (
           <Button key={item} size="sm" variant="ghost" iconStart="history" onClick={() => {
             changeQuery(item);
-            runSearch(item);
+            runSearch(item, scope);
           }}>{item}</Button>
         ))}</div>
       </section>}

@@ -13,6 +13,14 @@
   overflow-y: auto;
   pointer-events: none;
 }
+/* In a modal the scoped notifications flow with the dialog content and remain keyboard reachable. */
+.gl-toaster--inline {
+  position: static;
+  width: auto;
+  max-height: none;
+  overflow: visible;
+  pointer-events: auto;
+}
 .gl-toast {
   display: flex;
   align-items: flex-start;
