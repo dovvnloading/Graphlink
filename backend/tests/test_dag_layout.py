@@ -187,3 +187,44 @@ def test_preview_apply_wire_accepts_dag_only_with_matching_plan_and_undo():
         assert doc.redo().command_type == "organizeNodes"
 
     asyncio.run(run())
+
+
+def test_crossing_diagnostics_are_exact_bounded_and_nonmutating():
+    from backend.domain.layout_quality import (
+        MAX_MEASURED_CROSSING_EDGES, connection_diagnostics,
+    )
+    rects = {
+        "A": (0, 0, 10, 10), "B": (100, 0, 10, 10),
+        "C": (0, 100, 10, 10), "D": (100, 100, 10, 10),
+    }
+    crossing = [("A", "D"), ("B", "C")]
+    before = deepcopy(rects)
+    metrics = connection_diagnostics(rects, crossing)
+    assert metrics["crossings"] == 1
+    assert metrics["measuredEdges"] == 2
+    assert metrics["meanEdgeLength"] == pytest.approx(math.sqrt(20000))
+    # Shared endpoints are not spurious crossings. Moving C/D to align the
+    # actual links removes the one crossing, without touching the source.
+    assert connection_diagnostics(rects, [("A", "D"), ("A", "C")])["crossings"] == 0
+    swapped = {**rects, "C": rects["D"], "D": rects["C"]}
+    assert connection_diagnostics(swapped, crossing)["crossings"] == 0
+    assert rects == before
+    many = [("A", "D")] * (MAX_MEASURED_CROSSING_EDGES + 1)
+    large = connection_diagnostics(rects, many)
+    assert large["crossings"] is None
+    assert large["measuredEdges"] == len(many)
+    assert large["meanEdgeLength"] == pytest.approx(math.sqrt(20000))
+
+
+def test_dag_preview_reports_real_geometry_diagnostics_without_changing_scene():
+    doc, ids = make_converging_scene()
+    before = [(node.id, node.x, node.y) for node in doc.nodes.values()]
+    plan = make_organization_plan(doc, layout_style="dag")
+    preview = plan.preview(doc)
+    assert preview["measuredEdges"] == len(doc.edges)
+    for key in ("crossingsBefore", "crossingsAfter",
+                "meanEdgeLengthBefore", "meanEdgeLengthAfter"):
+        assert isinstance(preview[key], (int, float))
+        assert math.isfinite(preview[key])
+        assert preview[key] >= 0
+    assert before == [(node.id, node.x, node.y) for node in doc.nodes.values()]
