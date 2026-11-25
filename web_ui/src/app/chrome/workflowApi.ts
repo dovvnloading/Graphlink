@@ -2,6 +2,7 @@ import { authHeaders } from "../../lib/auth/token";
 import type { PortSpec, PortValue, WorkflowSpec } from "../../lib/workflow-contract/generated/workflow";
 import type { StatusWord } from "../ui/Badge";
 import { formatDuration } from "../ui/format";
+import type { StoredPortValue } from "./workflowRunValues";
 
 /** Shapes returned by the detached workflow HTTP API (backend/workflow/api.py). */
 export type Workspace = { id: number; name: string };
@@ -18,7 +19,7 @@ export type WorkflowPreview = {
 export type RunStep = {
   step_id: string; status: string; error: string | null; cost_usd?: number;
   started_at?: string | null; finished_at?: string | null; side_effect_class?: string;
-  outputs?: Record<string, PortValue>; skipped_outputs?: string[];
+  outputs?: Record<string, StoredPortValue>; skipped_outputs?: string[];
   approval?: { status: string; message: string };
   map_items?: Record<string, { status: string; error: string | null; cost_usd: number }>;
 };
@@ -27,7 +28,7 @@ export type RunEvent = { sequence: number; kind: string; step_id: string | null;
 export type DetachedRun = {
   run_id: string; preset_id?: string | null; status: string; error: string | null; cost_usd: number;
   created_at: string; started_at?: string | null; finished_at?: string | null;
-  spec: WorkflowSpec; inputs: Record<string, PortValue>; outputs: Record<string, PortValue>;
+  spec: WorkflowSpec; inputs: Record<string, StoredPortValue>; outputs: Record<string, StoredPortValue>;
   steps: Record<string, RunStep>; awaiting_approval?: UnattendedPause | null;
   preview: WorkflowPreview; events?: RunEvent[]; unattended_effects?: string[] | null;
 };

@@ -1,6 +1,5 @@
 /* eslint-disable jsx-a11y/no-noninteractive-tabindex -- output and input values are scrollable, read-only regions that must be keyboard focusable (WCAG 2.1.1), not button or link stand-ins. */
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import type { PortValue } from "../../lib/workflow-contract/generated/workflow";
 import { Badge, StatusPill } from "../ui/Badge";
 import { Button } from "../ui/Button";
 import { Disclosure } from "../ui/Disclosure";
@@ -13,13 +12,47 @@ import {
   valueSummary, valueText, when, workflowRequest, workspacePath,
   type DetachedRun, type Preset, type RunEvent, type RunStep,
 } from "./workflowApi";
+import { downloadStoredValue, externalValueSummary, isExternalizedValue, type ExternalizedValue, type StoredPortValue } from "./workflowRunValues";
 
 function RunStatus({ run }: { run: DetachedRun }) {
   const word = statusWord(run.status, runWaiting(run));
   return word ? <StatusPill status={word} announce={false} /> : <Badge>{statusText(run.status)}</Badge>;
 }
 
-function ValueBlock({ name, value, open = false }: { name: string; value: PortValue; open?: boolean }) {
+function ExternalValueBlock({ name, value, runPath }: { name: string; value: ExternalizedValue; runPath: string }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const request = useRef<AbortController | null>(null);
+  useEffect(() => () => { request.current?.abort(); }, []);
+  async function download() {
+    if (request.current) return;
+    const controller = new AbortController();
+    request.current = controller;
+    setBusy(true); setError("");
+    try { await downloadStoredValue(runPath, value, controller.signal); }
+    catch (err) { if (!controller.signal.aborted) setError(errorText(err)); }
+    finally {
+      request.current = null;
+      if (!controller.signal.aborted) setBusy(false);
+    }
+  }
+  return <div className="workflow-value">
+    <div className="workflow-value-head">
+      <span className="workflow-value-name">{stepName(name)}</span>
+      <span className="workflow-muted">{value.kind}</span>
+    </div>
+    <p className="workflow-value-summary">{externalValueSummary(value)}</p>
+    <Button size="sm" variant="secondary" loading={busy} disabled={busy}
+      onClick={() => void download()}>Download {stepName(name).toLowerCase()} (JSON)</Button>
+    {error && <InlineAlert variant="error" title="Couldn't download stored value" body={error} />}
+  </div>;
+}
+
+function ValueBlock({ name, value, runPath, open = false }: { name: string; value: StoredPortValue; runPath: string; open?: boolean }) {
+  if (isExternalizedValue(value)) {
+    return <ExternalValueBlock key={runPath + ":" + value.kind + ":" + value.asset_ref + ":" + value.size_bytes}
+      name={name} value={value} runPath={runPath} />;
+  }
   const text = valueText(value);
   const long = text.length > 280 || text.split("\n").length > 6;
   const preClass = "workflow-pre" + (value.kind === "text" ? " is-text" : "");
@@ -48,8 +81,8 @@ function eventLine(event: RunEvent) {
   return (event.step_id ? stepName(event.step_id) + ": " + what.toLowerCase() : what) + (event.message ? " · " + event.message : "");
 }
 
-function StepRow({ id, step, adapter, gate, paused = false }: {
-  id: string; step: RunStep | undefined; adapter: string; gate?: ReactNode; paused?: boolean;
+function StepRow({ id, step, adapter, runPath, gate, paused = false }: {
+  id: string; step: RunStep | undefined; adapter: string; runPath: string; gate?: ReactNode; paused?: boolean;
 }) {
   const status = step?.status ?? "pending";
   const waiting = paused || (step?.approval?.status === "pending" && (status === "pending" || status === "running"));
@@ -74,7 +107,7 @@ function StepRow({ id, step, adapter, gate, paused = false }: {
         {items.some(item => item.status === "failed") && ` · ${items.filter(item => item.status === "failed").length} failed`}
       </p>}
       {outputs.length > 0 && <Disclosure title={"Outputs (" + outputs.length + ")"}>
-        <div className="workflow-values">{outputs.map(([name, value]) => <ValueBlock key={name} name={name} value={value} />)}</div>
+        <div className="workflow-values">{outputs.map(([name, value]) => <ValueBlock key={name} name={name} value={value} runPath={runPath} />)}</div>
       </Disclosure>}
     </div>
   </li>;
@@ -142,7 +175,7 @@ function RunDetail({ run, workspace, presetName, onChanged }: {
     </div>}
     {outputs.length > 0 && <section className="workflow-card" aria-label="Result">
       <h4>Result</h4>
-      <div className="workflow-values">{outputs.map(([name, value]) => <ValueBlock key={name} name={name} value={value} open />)}</div>
+      <div className="workflow-values">{outputs.map(([name, value]) => <ValueBlock key={name} name={name} value={value} runPath={base} open />)}</div>
     </section>}
     <section aria-label="Steps">
       <h4>Steps</h4>
@@ -150,7 +183,7 @@ function RunDetail({ run, workspace, presetName, onChanged }: {
         {run.spec.steps.map(spec => {
           const step = run.steps[spec.step_id];
           const gate = gates.find(item => item.step_id === spec.step_id);
-          return <StepRow key={spec.step_id} id={spec.step_id} step={step} adapter={spec.adapter.adapter_id}
+          return <StepRow key={spec.step_id} id={spec.step_id} step={step} adapter={spec.adapter.adapter_id} runPath={base}
             paused={pause?.step_id === spec.step_id}
             gate={gate && <div className="workflow-actions">
               <Button size="sm" variant="primary" disabled={busy} onClick={() => void act(() => workflowRequest(base + "/step-approval",
@@ -162,7 +195,7 @@ function RunDetail({ run, workspace, presetName, onChanged }: {
       </ol>
     </section>
     {inputs.length > 0 && <Disclosure title={"Inputs (" + inputs.length + ")"}>
-      <div className="workflow-values">{inputs.map(([name, value]) => <ValueBlock key={name} name={name} value={value} />)}</div>
+      <div className="workflow-values">{inputs.map(([name, value]) => <ValueBlock key={name} name={name} value={value} runPath={base} />)}</div>
     </Disclosure>}
     <Disclosure title="Reviewed preview"><WorkflowPreviewSummary preview={run.preview} spec={run.spec} label="Reviewed preview" /></Disclosure>
     {!!run.events?.length && <Disclosure title={"Event log (" + run.events.length + ")"}>
@@ -201,7 +234,7 @@ export function WorkflowRunsPanel({ workspace, runs, loaded, presets, selected, 
       <Button variant="ghost" iconStart="chevron-left" className="workflow-back" onClick={back}>All runs</Button>
       <h3 ref={heading} tabIndex={-1} className="visually-hidden">Selected run</h3>
       {run && workspace !== null
-        ? <RunDetail key={run.run_id} run={run} workspace={workspace} presetName={presetName(run.preset_id)} onChanged={onChanged} />
+        ? <RunDetail key={workspace + ":" + run.run_id} run={run} workspace={workspace} presetName={presetName(run.preset_id)} onChanged={onChanged} />
         : <p className="workflow-muted" role="status">Loading the run…</p>}
     </div>;
   }

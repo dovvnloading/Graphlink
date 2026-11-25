@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { readFile } from "node:fs/promises";
 import { openTable, editHours } from "./table-workflow-helpers";
 import type { WorkflowSpec } from "../src/lib/workflow-contract/generated/workflow";
 
@@ -153,3 +154,59 @@ test("a reviewed human approval gate waits until explicit keyboard approval", as
   await expect(history.getByRole("status").filter({ hasText: "Keyboard approval audit: Completed" })).toBeAttached();
   await expect(inspector.getByRole("button", { name: "Approve step", exact: true })).toHaveCount(0);
 });
+
+const inspectorValues = [
+  { name: "inline text", payload: { kind: "text", text: "x".repeat(65_536) }, external: false },
+  { name: "external text", payload: { kind: "text", text: "x".repeat(65_537) }, external: true },
+  { name: "external JSON", payload: { kind: "json", value: { text: "x".repeat(65_537) } }, external: true },
+  { name: "external table", payload: { kind: "table", columns: ["id", "data"], rows: [["001", "x".repeat(65_537)]] }, external: true },
+] as const;
+
+for (const { name, payload, external } of inspectorValues) {
+  test(`detached run inspector preserves ${name} through the real backend`, async ({ page }) => {
+    await openTable(page);
+    let assetRequests = 0;
+    page.on("request", request => { if (/\/api\/workflows\/\d+\/runs\/[^/]+\/assets\//.test(request.url())) assetRequests++; });
+    await page.locator('[data-overlay-trigger="workflow-library"]').press("Enter");
+    const library = page.getByRole("dialog", { name: "Workflow library" });
+    await library.getByRole("tab", { name: /^Runs/ }).press("Enter");
+    await library.getByRole("button", { name: "Run from JSON" }).press("Enter");
+    const port = { name: "value", kind: payload.kind, required: true } as const;
+    const spec: WorkflowSpec = {
+      schema_version: 1, workflow_id: "inspector-artifact-audit", revision: "v1", name: "Inspector " + name,
+      inputs: [port],
+      steps: [{ step_id: "review", adapter: {
+        adapter_id: "control.approval", adapter_version: "1", side_effect_class: "pure",
+        ports: { inputs: [port], outputs: [port] },
+      }, config_json: JSON.stringify({ kind: payload.kind, message: "Check the synthetic input" }),
+      bindings: [{ port: "value", source: { kind: "input", port: "value" } }] }],
+      outputs: [{ port, source: { kind: "step", step_id: "review", port: "value" } }],
+    };
+    await library.getByRole("textbox", { name: "Workflow request JSON (spec and parameters)" })
+      .fill(JSON.stringify({ spec, parameters: { value: payload } }));
+    await library.getByRole("button", { name: "Preview workflow", exact: true }).press("Enter");
+    await expect(library.getByRole("region", { name: "Workflow preview", exact: true })).toContainText("Check the synthetic input");
+    await library.getByRole("button", { name: /^(Start reviewed workflow|Approve preview and start)$/ }).press("Enter");
+    const inspector = library.getByRole("region", { name: "Run detail" });
+    await inspector.getByRole("button", { name: "Approve step", exact: true }).press("Enter");
+    await expect(library.getByRole("status").filter({ hasText: "Inspector " + name + ": Completed" })).toBeAttached();
+    const result = inspector.getByRole("region", { name: "Result" });
+    await expect(inspector.getByRole("button", { name: "Save result as graph" })).toBeEnabled();
+    if (external) {
+      await expect(result.getByText(/Stored separately · 64\./)).toBeVisible();
+      await inspector.getByRole("button", { name: "Inputs (1)" }).press("Enter");
+      await inspector.getByRole("button", { name: "Outputs (1)" }).press("Enter");
+      await expect(inspector.getByRole("button", { name: "Download value (JSON)" })).toHaveCount(3);
+      expect(assetRequests).toBe(0);
+      const download = page.waitForEvent("download");
+      await result.getByRole("button", { name: "Download value (JSON)" }).press("Enter");
+      const artifact = await download;
+      expect(JSON.parse(await readFile(await artifact.path(), "utf8"))).toEqual(payload);
+      expect(assetRequests).toBe(1);
+    } else {
+      await expect(result.getByRole("region", { name: "Value" })).toHaveText("x".repeat(65_536));
+      await expect(result.getByRole("button", { name: /Download/ })).toHaveCount(0);
+      expect(assetRequests).toBe(0);
+    }
+  });
+}

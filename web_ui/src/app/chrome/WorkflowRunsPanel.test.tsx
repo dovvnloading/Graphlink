@@ -1,9 +1,15 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, it, vi } from "vitest";
 import type { WorkflowSpec } from "../../lib/workflow-contract/generated/workflow";
 import { WorkflowRunsPanel } from "./WorkflowRunsPanel";
 import type { DetachedRun } from "./workflowApi";
+import type { ExternalizedValue } from "./workflowRunValues";
+import { downloadBlob } from "../canvas/downloadTextFile";
+
+vi.mock("../canvas/downloadTextFile", async importOriginal => ({
+  ...await importOriginal<typeof import("../canvas/downloadTextFile")>(), downloadBlob: vi.fn(),
+}));
 
 const port = { name: "value", kind: "text", required: true } as const;
 const spec: WorkflowSpec = {
@@ -32,7 +38,7 @@ function mockFetch() {
   vi.stubGlobal("fetch", fetchMock);
   return fetchMock;
 }
-afterEach(() => { vi.unstubAllGlobals(); });
+afterEach(() => { vi.unstubAllGlobals(); vi.clearAllMocks(); window.location.hash = ""; });
 
 it("explains an unattended pause and approves it once with the run's nonce", async () => {
   const fetchMock = mockFetch();
@@ -74,4 +80,88 @@ it("lists runs as rows that say what is waiting", () => {
   expect(rows[0]).toHaveAccessibleName(/waiting for approval/);
   expect(rows[0]).toHaveTextContent("preset “Nightly”");
   expect(rows[1]).toHaveTextContent("8 s");
+});
+
+const largeValues = [
+  { kind: "text", text: "x".repeat(65_537) },
+  { kind: "json", value: { text: "x".repeat(65_537) } },
+  { kind: "table", columns: ["id", "data"], rows: [["001", "x".repeat(65_537)]] },
+] as const;
+
+function externalized(kind: ExternalizedValue["kind"], blob: Blob): ExternalizedValue {
+  return { kind, asset_ref: "a".repeat(64), mime_type: "application/json", size_bytes: blob.size };
+}
+
+it.each(largeValues)("keeps externalized $kind results, inputs and step outputs inspectable without eager downloads", async payload => {
+  const blob = new Blob([JSON.stringify(payload)]);
+  const stored = externalized(payload.kind, blob);
+  const fetchMock = mockFetch();
+  fetchMock.mockResolvedValueOnce({ ok: true, blob: async () => blob });
+  window.location.hash = "token=fixture-token";
+  render(<WorkflowRunsPanel workspace={3} loaded presets={[]} selected="run-1" onSelect={() => {}} onChanged={() => {}}
+    runs={[run({ status: "completed", inputs: { value: stored }, outputs: { value: stored }, steps: {
+      write_notes: { step_id: "write_notes", status: "completed", error: null, outputs: { value: stored } },
+    } })]} />);
+  const result = screen.getByRole("region", { name: "Result" });
+  expect(within(result).getByText(/Stored separately · 64\./)).toBeVisible();
+  await userEvent.click(screen.getByRole("button", { name: "Inputs (1)" }));
+  await userEvent.click(screen.getByRole("button", { name: "Outputs (1)" }));
+  expect(screen.getAllByRole("button", { name: "Download value (JSON)" })).toHaveLength(3);
+  expect(fetchMock).not.toHaveBeenCalled();
+  await userEvent.click(within(result).getByRole("button", { name: "Download value (JSON)" }));
+  await waitFor(() => expect(downloadBlob).toHaveBeenCalledWith(blob, `workflow-${payload.kind}-aaaaaaaaaaaa.json`));
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+  expect(fetchMock).toHaveBeenCalledWith("/api/workflows/3/runs/run-1/assets/" + stored.asset_ref, expect.objectContaining({
+    headers: { Authorization: "Bearer fixture-token" },
+  }));
+  await userEvent.click(screen.getByRole("button", { name: "Save result as graph" }));
+  expect(fetchMock).toHaveBeenLastCalledWith("/api/workflows/3/runs/run-1/save-as-graph", expect.objectContaining({ method: "POST" }));
+  expect(await screen.findByText("Saved as a new graph")).toBeVisible();
+});
+
+it("keeps the run usable after a missing asset, and allows an explicit retry", async () => {
+  const blob = new Blob([JSON.stringify(largeValues[0])]);
+  const fetchMock = mockFetch();
+  fetchMock.mockResolvedValueOnce({ ok: false, status: 404 })
+    .mockResolvedValueOnce({ ok: true, blob: async () => new Blob(["wrong size"]) })
+    .mockResolvedValueOnce({ ok: true, blob: async () => blob });
+  render(<WorkflowRunsPanel workspace={3} loaded presets={[]} selected="run-1" onSelect={() => {}} onChanged={() => {}}
+    runs={[run({ status: "completed", outputs: { value: externalized("text", blob) } })]} />);
+  const download = screen.getByRole("button", { name: "Download value (JSON)" });
+  await userEvent.click(download);
+  expect(await screen.findByText("The stored value is missing or corrupt.")).toBeVisible();
+  expect(downloadBlob).not.toHaveBeenCalled();
+  expect(screen.getByRole("button", { name: "Save result as graph" })).toBeEnabled();
+  await userEvent.click(download);
+  expect(await screen.findByText("The stored value has an unexpected size.")).toBeVisible();
+  expect(downloadBlob).not.toHaveBeenCalled();
+  await userEvent.click(download);
+  await waitFor(() => expect(downloadBlob).toHaveBeenCalledTimes(1));
+  expect(screen.queryByText("Couldn't download stored value")).not.toBeInTheDocument();
+});
+
+it("rejects invalid reference metadata before making a request", async () => {
+  const fetchMock = mockFetch();
+  render(<WorkflowRunsPanel workspace={3} loaded presets={[]} selected="run-1" onSelect={() => {}} onChanged={() => {}}
+    runs={[run({ status: "completed", outputs: { value: {
+      kind: "table", asset_ref: "../invalid", mime_type: "application/json", size_bytes: 65_537,
+    } } })]} />);
+  expect(screen.getByText("Stored value reference is invalid.")).toBeVisible();
+  await userEvent.click(screen.getByRole("button", { name: "Download value (JSON)" }));
+  expect(await screen.findByText("This stored value reference is invalid.")).toBeVisible();
+  expect(fetchMock).not.toHaveBeenCalled();
+});
+
+it("still displays inline values at the text threshold and ordinary file metadata", () => {
+  const fetchMock = mockFetch();
+  const text = "x".repeat(65_536);
+  const asset = { asset_id: "file", sha256: "a".repeat(64), media_type: "application/octet-stream", filename: "sample.bin", size_bytes: 4 };
+  const file = { kind: "file" as const, asset, asset_ref: asset.sha256, mime_type: asset.media_type };
+  render(<WorkflowRunsPanel workspace={3} loaded presets={[]} selected="run-1" onSelect={() => {}} onChanged={() => {}}
+    runs={[run({ status: "completed", outputs: { value: { kind: "text", text }, file } })]} />);
+  const result = screen.getByRole("region", { name: "Result" });
+  expect(within(result).getByRole("region", { name: "Value" }).textContent).toBe(text);
+  expect(within(result).getByText("sample.bin (application/octet-stream)")).toBeVisible();
+  expect(within(result).queryByRole("button", { name: /Download/ })).not.toBeInTheDocument();
+  expect(fetchMock).not.toHaveBeenCalled();
 });
