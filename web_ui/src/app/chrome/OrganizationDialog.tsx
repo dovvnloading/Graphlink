@@ -236,6 +236,7 @@ export function OrganizationDialog({ store }: { store: SceneStore }) {
   const isOpen = overlays.isOpen("organize");
   const [wasOpen, setWasOpen] = useState(isOpen);
   const [scope, setScope] = useState<Scope>("all");
+  const [layoutStyle, setLayoutStyle] = useState<"tree" | "dag">("tree");
   const [preserveFrameSizes, setPreserveFrameSizes] = useState(true);
   const [pinSelection, setPinSelection] = useState(false);
   const [showConnections, setShowConnections] = useState(true);
@@ -280,6 +281,7 @@ export function OrganizationDialog({ store }: { store: SceneStore }) {
       nodeIds: scope === "selection" ? selected : null,
       fixedNodeIds: pinSelection && (scope === "all" || scope === "branch") ? selected : null,
       preserveFrameSizes,
+      layoutStyle,
     };
   }
 
@@ -339,6 +341,13 @@ export function OrganizationDialog({ store }: { store: SceneStore }) {
             { value: "branch", label: "Selected branch and descendants" },
             { value: "group", label: "Selected frame/container contents" },
           ]} />
+        <Select label="Layout model" value={layoutStyle} disabled={busy}
+          onChange={value => { setLayoutStyle(value as "tree" | "dag"); setPreview(null); setError(""); }}
+          options={[
+            { value: "tree", label: "Conversation tree — stable" },
+            { value: "dag", label: "Directed graph — convergence-aware",
+              description: "Uses every eligible directed connection; grouped canvases fall back safely" },
+          ]} />
         <Checkbox label="Preserve manually resized frame dimensions" checked={preserveFrameSizes}
           disabled={busy} onChange={(event) => { setPreserveFrameSizes(event.target.checked); setPreview(null); setError(""); }} />
         <Checkbox label="Keep currently selected nodes fixed (hard constraint)"
@@ -351,6 +360,18 @@ export function OrganizationDialog({ store }: { store: SceneStore }) {
           <strong>{formatCount(preview.data.movedCount)} nodes or group bounds change</strong>
           <span>{formatCount(preview.data.selectedCount)} content nodes in scope</span>
           <span>Diagram area: {formatCount(preview.data.areaBefore)} → {formatCount(preview.data.areaAfter)} px²</span>
+          <span>Effective layout: {preview.data.effectiveLayoutStyle === "dag" ? "Directed graph" : "Conversation tree"}</span>
+          {preview.data.layoutNote && <span role="status">{preview.data.layoutNote}</span>}
+          {preview.data.crossingsBefore !== undefined && <span>
+            Straight-line connection crossings: {preview.data.crossingsBefore === null ? "Not measured" : formatCount(preview.data.crossingsBefore)}
+            {" → "}
+            {preview.data.crossingsAfter === null ? "Not measured" : formatCount(preview.data.crossingsAfter ?? 0)}
+          </span>}
+          {preview.data.meanEdgeLengthBefore !== undefined && <span>
+            Mean center-to-center link length:
+            {" " + Math.round(preview.data.meanEdgeLengthBefore ?? 0).toLocaleString("en-US")}
+            {" → " + Math.round(preview.data.meanEdgeLengthAfter ?? 0).toLocaleString("en-US") + " px"}
+          </span>}
         </div>
         <div className="organization-preview-controls">
           <SegmentedControl size="sm" label="Preview layout view" value={viewMode}
