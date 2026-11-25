@@ -29,6 +29,7 @@ from typing import TYPE_CHECKING
 import graphlink_task_config as config
 
 from backend.api._settings_shared import SettingsSessionState, run_locked
+from backend.domain.model import UserFacingError
 from backend.events import IntentValidationError, SessionBus
 from backend.mcp_client import McpError
 from backend.mcp_http import validate_http_endpoint, validate_http_headers
@@ -137,12 +138,22 @@ def register_settings_general_intents(
     # are GIL-atomic, and every mutation republishes on completion, so a
     # snapshot that races a write is immediately superseded by a settled one.
 
+    async def persist_general_setting(mutation, *args):
+        try:
+            await asyncio.to_thread(run_locked, mutation, *args)
+        except OSError as exc:
+            # The persistence layer logs the technical details. Do not send
+            # filesystem paths or raw exception text to the client.
+            raise UserFacingError(
+                "Could not save settings. Check disk space and settings folder permissions, then try again."
+            ) from exc
+
     async def set_show_token_counter(enabled: bool):
-        await asyncio.to_thread(run_locked, manager.set_show_token_counter, bool(enabled))
+        await persist_general_setting(manager.set_show_token_counter, bool(enabled))
         await bus.publish("app-settings")
 
     async def set_enable_system_prompt(enabled: bool):
-        await asyncio.to_thread(run_locked, manager.set_enable_system_prompt, bool(enabled))
+        await persist_general_setting(manager.set_enable_system_prompt, bool(enabled))
         await bus.publish("app-settings")
 
     async def set_log_level(level: str):
@@ -153,8 +164,13 @@ def register_settings_general_intents(
         # (same closed-vocabulary posture as manager.set_log_level itself),
         # so a malformed intent arg is silently ignored rather than raising.
         level = str(level)
-        await asyncio.to_thread(run_locked, manager.set_log_level, level)
-        apply_log_level(level)
+        def persist_and_apply() -> None:
+            manager.set_log_level(level)
+            apply_log_level(level)
+
+        # Keep the live effect after a successful save and in the same
+        # serialized mutation, so overlapping requests cannot reorder it.
+        await persist_general_setting(persist_and_apply)
         await bus.publish("app-settings")
 
     async def set_auto_model_policy(policy: str):
@@ -162,7 +178,7 @@ def register_settings_general_intents(
         # set_log_level - manager.set_auto_model_policy itself already
         # silently ignores an unrecognized string (see its own docstring),
         # so a malformed intent arg just leaves the setting unchanged.
-        await asyncio.to_thread(run_locked, manager.set_auto_model_policy, str(policy))
+        await persist_general_setting(manager.set_auto_model_policy, str(policy))
         await bus.publish("app-settings")
 
     async def set_theme(theme: str):
@@ -170,7 +186,7 @@ def register_settings_general_intents(
         # above - unlike set_log_level, there is no backend-side live-apply
         # step, since theme is purely a frontend DOM concern (App.tsx's own
         # applyTheme reads it straight off the republished snapshot below).
-        await asyncio.to_thread(run_locked, manager.set_theme, str(theme))
+        await persist_general_setting(manager.set_theme, str(theme))
         await bus.publish("app-settings")
 
     async def set_has_completed_onboarding(completed: bool):
@@ -178,12 +194,12 @@ def register_settings_general_intents(
         # OnboardingDialog.tsx fires this the moment it closes (any
         # dismissal, not only a "Done" click) so the wizard never auto-opens
         # again once the user has seen it once.
-        await asyncio.to_thread(run_locked, manager.set_has_completed_onboarding, bool(completed))
+        await persist_general_setting(manager.set_has_completed_onboarding, bool(completed))
         await bus.publish("app-settings")
 
     async def set_notification_preference(notification_type: str, enabled: bool):
-        await asyncio.to_thread(
-            run_locked, manager.set_notification_preferences, {str(notification_type): bool(enabled)}
+        await persist_general_setting(
+            manager.set_notification_preferences, {str(notification_type): bool(enabled)}
         )
         await bus.publish("app-settings")
 

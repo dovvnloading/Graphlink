@@ -34,20 +34,25 @@ def _knowledge_cloud_destination(profile, base_url: str) -> str:
 
 class GeneralSettingsOps(SettingsManagerParts):
 
+    def _save_general_settings(self, **changes) -> None:
+        """Publish a candidate state only after the atomic file save succeeds."""
+        new_state = dict(self.state)
+        new_state.update(changes)
+        self._save_state(new_state, raise_on_error=True)
+        self.state = new_state
+
     def get_show_token_counter(self):
         # R8a: off by default - the overlay is opt-in now, not opt-out.
         return self.state.get("show_token_counter", False)
 
     def set_show_token_counter(self, show: bool):
-        self.state['show_token_counter'] = show
-        self._save_state()
+        self._save_general_settings(show_token_counter=show)
 
     def get_enable_system_prompt(self):
         return self.state.get("enable_system_prompt", True)
 
     def set_enable_system_prompt(self, enabled: bool):
-        self.state["enable_system_prompt"] = bool(enabled)
-        self._save_state()
+        self._save_general_settings(enable_system_prompt=bool(enabled))
 
     def get_has_completed_onboarding(self):
         # ADR-012 stage 12.6: False by default so a fresh machine's first
@@ -58,8 +63,7 @@ class GeneralSettingsOps(SettingsManagerParts):
         return self.state.get("has_completed_onboarding", False)
 
     def set_has_completed_onboarding(self, completed: bool):
-        self.state["has_completed_onboarding"] = bool(completed)
-        self._save_state()
+        self._save_general_settings(has_completed_onboarding=bool(completed))
 
     def get_auto_model_policy(self):
         # ADR-018 stage 18.4. "cheapest-capable" by default - matching the
@@ -73,8 +77,7 @@ class GeneralSettingsOps(SettingsManagerParts):
         from graphlink_model_catalog import AUTO_POLICIES
 
         if policy in AUTO_POLICIES:
-            self.state["auto_model_policy"] = policy
-            self._save_state()
+            self._save_general_settings(auto_model_policy=policy)
 
     def get_log_level(self):
         # ADR-016 stage 16.1. INFO by default - matches
@@ -85,8 +88,7 @@ class GeneralSettingsOps(SettingsManagerParts):
 
     def set_log_level(self, level: str):
         if level in self.LOG_LEVELS:
-            self.state["log_level"] = level
-            self._save_state()
+            self._save_general_settings(log_level=level)
 
     def get_theme(self):
         # ADR-012 stage 12.2. "system" by default - the app never forces a
@@ -95,8 +97,7 @@ class GeneralSettingsOps(SettingsManagerParts):
 
     def set_theme(self, theme: str):
         if theme in self.THEMES:
-            self.state["theme"] = theme
-            self._save_state()
+            self._save_general_settings(theme=theme)
 
 
     def get_knowledge_embedding_settings(self) -> dict:
@@ -182,20 +183,19 @@ class GeneralSettingsOps(SettingsManagerParts):
         for notification_type in self.NOTIFICATION_TYPES:
             if notification_type in preferences:
                 current_preferences[notification_type] = bool(preferences[notification_type])
-        self.state["notification_preferences"] = current_preferences
-        self._save_state()
+        self._save_general_settings(notification_preferences=current_preferences)
 
     def get_update_notifications_enabled(self):
         return self.state.get("update_notifications_enabled", False)
 
     def set_update_notifications_enabled(self, enabled: bool):
-        self.state["update_notifications_enabled"] = bool(enabled)
+        changes = {"update_notifications_enabled": bool(enabled)}
         if enabled and self.state.get("update_status_message") == "Automatic update checks are off.":
-            self.state["update_status_message"] = "Automatic update checks are enabled."
+            changes["update_status_message"] = "Automatic update checks are enabled."
         elif not enabled:
-            self.state["update_status_message"] = "Automatic update checks are off."
-            self.state["update_status_level"] = "info"
-        self._save_state()
+            changes["update_status_message"] = "Automatic update checks are off."
+            changes["update_status_level"] = "info"
+        self._save_general_settings(**changes)
 
     def get_update_status_message(self):
         return self.state.get("update_status_message", "Automatic update checks are off.")
@@ -214,11 +214,10 @@ class GeneralSettingsOps(SettingsManagerParts):
 
     def record_update_check_result(self, result: dict):
         result = result or {}
-        self.state["update_status_message"] = str(result.get("message", "Update check finished.")).strip()
-        self.state["update_status_level"] = str(result.get("level", "info")).strip() or "info"
-        self.state["update_last_checked_at"] = str(
-            result.get("checked_at") or datetime.now(timezone.utc).isoformat()
+        self._save_general_settings(
+            update_status_message=str(result.get("message", "Update check finished.")).strip(),
+            update_status_level=str(result.get("level", "info")).strip() or "info",
+            update_last_checked_at=str(result.get("checked_at") or datetime.now(timezone.utc).isoformat()),
+            update_latest_version=str(result.get("remote_version", "")).strip(),
+            update_available=bool(result.get("update_available", False)),
         )
-        self.state["update_latest_version"] = str(result.get("remote_version", "")).strip()
-        self.state["update_available"] = bool(result.get("update_available", False))
-        self._save_state()
