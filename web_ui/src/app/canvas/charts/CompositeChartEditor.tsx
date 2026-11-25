@@ -3,6 +3,7 @@
  */
 import { useState } from "react";
 import { Button } from "../../ui/Button";
+import { Select } from "../../ui/Select";
 import type { ChartDataRow, ChartCompositeLayerRow } from "../../../lib/bridge-core/generated/scene-state";
 import { compositeDesignOf, withCompositeDesign, type CompositeDesign } from "./compositeDesign";
 import { recommendCompositeDesigns } from "./compositeRecommendations";
@@ -88,45 +89,24 @@ export function CompositeChartEditor({ chartData, onPreview, onSave, onClose }: 
           <span>{suggestion.reason}</span>
         </div>)}
     </div>}
-    <label>Facet panels
-      <select aria-label="Facet panels" value={draft.facetBy ?? ""}
-        onChange={event => modify({ ...draft, facetBy: event.currentTarget.value || null })}>
-        {categoricalOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
-      </select>
-    </label>
+    <Select label="Facet panels" value={draft.facetBy ?? ""} options={categoricalOptions}
+      onChange={value => modify({ ...draft, facetBy: value || null })} />
     {draft.layers.map((layer, index) =>
       <fieldset key={index} className="chart-composite-edit-layer">
         <legend>{"Layer " + (index + 1)}</legend>
-        <label>Mark
-          <select aria-label={`Mark ${index + 1}`} value={layer.mark}
-            onChange={event => changeLayer(index, { mark: event.currentTarget.value as ChartCompositeLayerRow["mark"] })}>
-            {marks.map(mark => <option key={mark} value={mark}>{mark}</option>)}
-          </select>
-        </label>
-        <label>X
-          <select aria-label={`X ${index + 1}`} value={layer.x}
-            onChange={event => changeLayer(index, { x: event.currentTarget.value })}>
-            {numericOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
-          </select>
-        </label>
-        <label>Y
-          <select aria-label={`Y ${index + 1}`} value={layer.y}
-            onChange={event => changeLayer(index, { y: event.currentTarget.value })}>
-            {numericOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
-          </select>
-        </label>
-        {layer.mark === "band" && <label>Upper bound
-          <select aria-label={`Upper bound ${index + 1}`} value={layer.y2 ?? ""}
-            onChange={event => changeLayer(index, { y2: event.currentTarget.value })}>
-            {numericOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
-          </select>
-        </label>}
-        <label>Color by
-          <select aria-label={`Color by ${index + 1}`} value={layer.colorBy ?? ""}
-            onChange={event => changeLayer(index, { colorBy: event.currentTarget.value || undefined })}>
-            {categoricalOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
-          </select>
-        </label>
+        <Select label={`Mark ${index + 1}`} value={layer.mark}
+          options={marks.map(mark => ({ value: mark, label: mark }))}
+          onChange={value => changeLayer(index, { mark: value as ChartCompositeLayerRow["mark"] })} />
+        <Select label={`X ${index + 1}`} value={layer.x} options={numericOptions}
+          onChange={value => changeLayer(index, { x: value })} />
+        <Select label={`Y ${index + 1}`} value={layer.y} options={numericOptions}
+          onChange={value => changeLayer(index, { y: value })} />
+        {layer.mark === "band" && <Select label={`Upper bound ${index + 1}`}
+          value={layer.y2 ?? ""} options={numericOptions}
+          onChange={value => changeLayer(index, { y2: value })} />}
+        <Select label={`Color by ${index + 1}`} value={layer.colorBy ?? ""}
+          options={categoricalOptions}
+          onChange={value => changeLayer(index, { colorBy: value || undefined })} />
         <label>Legend label
           <input aria-label={`Legend label ${index + 1}`} maxLength={160}
             value={layer.label ?? ""} onChange={event => changeLayer(index, { label: event.currentTarget.value })} />
