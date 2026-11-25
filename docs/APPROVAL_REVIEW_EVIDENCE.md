@@ -130,6 +130,38 @@ unavailable, `GRAPHLINK_E2E_CHROMIUM_EXECUTABLE` may point to an already install
 Chromium. Record this override and the actual browser version; it is not the
 same browser-version gate as CI's default bundled Chromium.
 
+### Investigating intermittent Python review failures (#1039)
+
+The [November 22 run](https://github.com/dovvnloading/Graphlink/actions/runs/45036239862/job/137250511801)
+failed at the counter-file assertion. Its retained trace shows that the first
+approved tool returned "Could not prepare Python environment" with
+`Errno 11` during managed virtualenv creation, rather than executing the
+counter code. Main already [prebuilds the fixed stdlib fixture environment](https://github.com/dovvnloading/Graphlink/commit/13484536332d06be8758ab78eca04e8d5d3df894)
+before Chromium starts, retaining the real managed interpreter lookup and
+execution guard. The test now explicitly checks the preceding tool outcomes
+before checking the exact counter bytes.
+
+The [November 23 run](https://github.com/dovvnloading/Graphlink/actions/runs/45244148329/job/137936393504)
+failed with 223 pixels remaining after End. Its failure snapshot showed the
+source region still focused; the cause of the browser's missed native scroll
+was not conclusively reproduced. The source now handles unmodified Home/End
+locally without relying on a native animated scroll, and the browser scenario
+checks actual focus and the same scroll threshold and captures the geometry.
+Neither the approval protocol nor the full-source and tail-selection checks
+are changed.
+
+After the production SPA build and Chromium installation above, run the
+focused scenario repeatedly against the real backend, with no retries:
+
+```sh
+npm run test:e2e:safety -- --grep "full Python source, existing session grant" --repeat-each=10 --retries=0
+```
+
+Preserve the JSON report and any retained failure traces before starting
+another run, which reuses the output directory. Run the entire safety suite
+separately afterward. A passing isolated scroll check or a single focused
+run is not evidence that the intermittent failure is resolved.
+
 The safety config uses no retries. Its JSON report is
 `web_ui/test-results/safety-results.json`. Every passing case attaches
 `safety-evidence.json` with source HEAD, working-tree cleanliness, OS, Python,
