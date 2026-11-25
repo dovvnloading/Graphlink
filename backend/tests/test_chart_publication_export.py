@@ -121,11 +121,53 @@ def test_basic_chart_mark_geometry_is_the_same_as_interactive_fixture(fmt, kind,
         assert list(args[0]) == [0, 1]  # Category centers in interactive SVG
         assert list(args[1]) == [2, 4]  # Values, no normalization or rebinning
     elif kind == "pie":
-        assert list(args[0]) == [2, 4]  # Same slice areas, total 6
+        # Pie weights are max-scaled to protect Matplotlib's float32 input;
+        # the relative areas (1:2) and raw displayed total (6) are unchanged.
+        assert list(args[0]) == [0.5, 1.0]
         assert opts["startangle"] == 90 and opts["counterclock"] is False
     else:
         assert list(args[0]) == [1, 2, 3, 4]
         assert opts["bins"] == 4
+
+
+@pytest.mark.parametrize("fmt", ["svg", "pdf", "png"])
+@pytest.mark.parametrize("values,angles,shares,total_text", [
+    ([1e308, 1e308], [180, 180], ["50.0%", "50.0%"], ">1.79e308"),
+    ([1e308] * 12, [30] * 9 + [90], ["8.3%"] * 9 + ["25.0%"], ">1.79e308"),
+    ([1e308, 1e-308], [360, 0], ["100.0%", "<0.1%"], "1.00e+308"),
+    ([5e-324, 5e-324], [180, 180], ["50.0%", "50.0%"], "9.88e-324"),
+    ([2, 4], [120, 240], ["33.3%", "66.7%"], "6"),
+])
+def test_pie_extreme_magnitudes_preserve_export_geometry_and_labels(
+    fmt, values, angles, shares, total_text, monkeypatch,
+):
+    observed = []
+    original = Axes.pie
+
+    def spy(ax, *args, **kwargs):
+        wedges, labels = original(ax, *args, **kwargs)
+        observed.append((ax, wedges))
+        return wedges, labels
+
+    monkeypatch.setattr(Axes, "pie", spy)
+    labels = [f"L{i}" for i in range(len(values))]
+    spec = {"type": "pie", "labels": labels, "values": values}
+    snapshot = deepcopy(spec)
+    data = render_chart_publication("pie", spec, width_mm=85, height_mm=70, fmt=fmt)
+    assert spec == snapshot
+    assert data.lstrip().startswith({
+        "svg": b"<?xml", "pdf": b"%PDF-", "png": b"\x89PNG\r\n\x1a\n",
+    }[fmt])
+    ax, wedges = observed[0]
+    actual_angles = [wedge.theta2 - wedge.theta1 for wedge in wedges]
+    assert all(math.isfinite(angle) for angle in actual_angles)
+    assert actual_angles == pytest.approx(angles, abs=1e-4)
+    assert total_text in [item.get_text() for item in ax.texts]
+    legend = [item.get_text() for item in ax.get_legend().get_texts()]
+    expected_labels = labels if len(labels) <= 10 else labels[:9] + ["Other"]
+    assert legend == [f"{label}  {share}" for label, share in zip(expected_labels, shares)]
+    if fmt == "svg":
+        assert total_text in texts(data)
 
 
 @pytest.mark.parametrize("fmt", ["png", "svg", "pdf"])

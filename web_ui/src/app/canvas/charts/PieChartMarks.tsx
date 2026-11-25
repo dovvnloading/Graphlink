@@ -12,9 +12,17 @@ import type { ChartMarksProps } from "./BarChartMarks";
 import { formatValue } from "./chartScales";
 import { tooltipPositionFromEvent } from "./chartLayout";
 
-import { buildSlices } from "./pieSlices";
+import { buildSlices, formatPieShare } from "./pieSlices";
 const RING_WIDTH_FRACTION = 0.38;
 const LEGEND_ITEM_HEIGHT = 18;
+
+// Raw values remain unchanged. A grouped value or total may exceed the
+// finite double range; show a truthful bound rather than "Infinity".
+function formatPieValue(value: number): string {
+  if (!Number.isFinite(value)) return ">1.79e308";
+  if (value >= 1e9 || (value > 0 && value < 0.01)) return value.toExponential(2);
+  return formatValue(value);
+}
 
 function polarToCartesian(cx: number, cy: number, radius: number, angleDeg: number): { x: number; y: number } {
   const rad = ((angleDeg - 90) * Math.PI) / 180;
@@ -44,7 +52,7 @@ export function PieChartMarks({ chartData, theme, width, height, onHover, wrappe
   );
   if (slices.length === 0 || width <= 0 || height <= 0) return null;
 
-  const total = slices.reduce((sum, slice) => sum + slice.value, 0);
+  const total = (chartData.values ?? []).reduce((sum, value) => sum + value, 0);
   const legendWidth = width > 380 ? Math.min(180, width * 0.34) : 0;
   const plotWidth = width - legendWidth;
   const cx = plotWidth / 2;
@@ -56,7 +64,7 @@ export function PieChartMarks({ chartData, theme, width, height, onHover, wrappe
     <g>
       {slices.map((slice, index) => {
         const color = theme.categorical[index % theme.categorical.length];
-        const percentage = total ? (slice.value / total) * 100 : 0;
+        const percentage = formatPieShare(slice.share);
         return (
           <path
             key={`${slice.label}-${index}`}
@@ -69,8 +77,8 @@ export function PieChartMarks({ chartData, theme, width, height, onHover, wrappe
               onHover({
                 title: slice.label,
                 rows: [
-                  { label: "Value", value: formatValue(slice.value) },
-                  { label: "Share", value: `${percentage.toFixed(1)}%` },
+                  { label: "Value", value: formatPieValue(slice.value) },
+                  { label: "Share", value: percentage },
                 ],
                 ...position,
               });
@@ -80,7 +88,7 @@ export function PieChartMarks({ chartData, theme, width, height, onHover, wrappe
         );
       })}
       <text x={cx} y={cy - 4} textAnchor="middle" fontSize={18} fontWeight={700} fill={theme.text}>
-        {formatValue(total)}
+        {formatPieValue(total)}
       </text>
       <text x={cx} y={cy + 16} textAnchor="middle" fontSize={11} fill={theme.textMuted}>
         Total
@@ -88,13 +96,13 @@ export function PieChartMarks({ chartData, theme, width, height, onHover, wrappe
       {legendWidth > 0 && (
         <g transform={`translate(${plotWidth + 16} ${height / 2 - (slices.length * LEGEND_ITEM_HEIGHT) / 2})`}>
           {slices.map((slice, index) => {
-            const percentage = total ? (slice.value / total) * 100 : 0;
+            const percentage = formatPieShare(slice.share);
             return (
               <g key={`${slice.label}-legend-${index}`} transform={`translate(0 ${index * LEGEND_ITEM_HEIGHT})`}>
                 <rect width={10} height={10} y={-9} fill={theme.categorical[index % theme.categorical.length]} rx={2} />
                 <text x={16} fontSize={11} fill={theme.text}>
                   {slice.label.length > 20 ? `${slice.label.slice(0, 19)}…` : slice.label}
-                  <tspan fill={theme.textMuted}>{`  ${percentage.toFixed(1)}%`}</tspan>
+                  <tspan fill={theme.textMuted}>{`  ${percentage}`}</tspan>
                 </text>
               </g>
             );
