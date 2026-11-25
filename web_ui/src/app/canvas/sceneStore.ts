@@ -184,6 +184,9 @@ export interface OrganizationPreview {
   fingerprint: string;
   planId: string;
   scope: "all" | "selection" | "branch" | "group";
+  layoutStyle?: "tree" | "dag";
+  effectiveLayoutStyle?: "tree" | "dag";
+  layoutNote?: string;
   selectedCount: number;
   movedCount: number;
   areaBefore: number;
@@ -314,6 +317,7 @@ export interface OrganizationOptions {
   nodeIds: string[] | null;
   fixedNodeIds: string[] | null;
   preserveFrameSizes: boolean;
+  layoutStyle?: "tree" | "dag";
 }
 
 type SubmissionPhase = "submitting" | "running" | "checking" | "finished";
@@ -2124,18 +2128,23 @@ export class SceneStore {
 
   /** Request the current server-side layout without changing the canvas. */
   async previewOrganize(options: OrganizationOptions): Promise<OrganizationPreview> {
-    return this.transport.request("scene", "previewOrganize", [
+    const args: unknown[] = [
       options.scope, options.rootId, options.nodeIds, options.fixedNodeIds,
       options.preserveFrameSizes,
-    ]) as Promise<OrganizationPreview>;
+    ];
+    // Omit the optional tail for existing tree callers/protocol fixtures.
+    if (options.layoutStyle === "dag") args.push("dag");
+    return this.transport.request("scene", "previewOrganize", args) as Promise<OrganizationPreview>;
   }
 
   /** Apply only if the same backend-calculated plan still matches the graph. */
   async applyOrganize(options: OrganizationOptions, planId: string): Promise<void> {
-    await this.transport.request("scene", "applyOrganize", [
+    const args: unknown[] = [
       options.scope, options.rootId, options.nodeIds, options.fixedNodeIds,
       options.preserveFrameSizes, planId,
-    ]);
+    ];
+    if (options.layoutStyle === "dag") args.push("dag");
+    await this.transport.request("scene", "applyOrganize", args);
   }
 
 
