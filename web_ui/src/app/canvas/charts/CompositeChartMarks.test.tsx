@@ -99,6 +99,14 @@ describe("ChartSpec V2 composite figures", () => {
     } })).toThrow(/2000/);
   });
 
+  it("respects the figure-wide mark budget when faceting is dense", () => {
+    const spec = canonicalizeChartSpec(SOURCE).composite!;
+    const sample = compositeSample(spec, spec.layers[1], [0, 1, 2, 3, 4, 5], 3);
+    expect(sample.length).toBeLessThanOrEqual(3);
+    expect(sample).toContain(0);
+    expect(sample).toContain(5);
+  });
+
   it("rejects invalid, unsafe, ambiguous or scientifically misleading encodings", () => {
     const base = SOURCE.composite;
     const cases: unknown[] = [

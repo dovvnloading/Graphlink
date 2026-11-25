@@ -52,7 +52,9 @@ export function CompositeChartMarks({ chartData, theme, width, height, onHover, 
     lines: [chartData.xScale === "log10" ? formatLogTick(value) : formatScientificTick(value)],
   }));
   const yTicks = ticks("y");
-  const marksBudget = Math.max(24, Math.floor((compact ? 180 : 1200) / (facets.length * spec.layers.length)));
+  const groupCount = facets.reduce((sum, facet) => sum
+    + spec.layers.reduce((total, layer) => total + compositeGroups(spec, layer, facet).length, 0), 0);
+  const marksBudget = Math.max(2, Math.floor((compact ? 180 : 1200) / Math.max(1, groupCount)));
   const escapeName = (facet: string | null) => facet ?? "all";
   return (
     <g className={compact ? "chart-composite-overview" : "chart-composite-marks"}>

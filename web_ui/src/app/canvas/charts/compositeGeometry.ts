@@ -87,6 +87,22 @@ export function compositeColorKeys(spec: CompositeSpec): { key: string; label: s
 
 export function compositeSample(spec: CompositeSpec, layer: CompositeLayer, indices: number[], budget: number): number[] {
   if (indices.length <= budget) return indices;
+  // Very small panel budgets still preserve endpoints and at least one
+  // dominant excursion; the generic extrema sampler needs six slots.
+  if (budget < 6) {
+    let low = indices[0], high = indices[0];
+    for (const index of indices) {
+      if (spec.numbers[layer.y][index] < spec.numbers[layer.y][low]) low = index;
+      if (spec.numbers[layer.y2 ?? layer.y][index] > spec.numbers[layer.y2 ?? layer.y][high]) high = index;
+    }
+    const picked = budget <= 2
+      ? [indices[0], indices[indices.length - 1]]
+      : budget === 3
+        ? [indices[0], high, indices[indices.length - 1]]
+        : [indices[0], low, high, indices[indices.length - 1]];
+    const set = new Set(picked);
+    return indices.filter(index => set.has(index));
+  }
   const xx = indices.map(i => spec.numbers[layer.x][i]);
   const yy = indices.map(i => spec.numbers[layer.y][i]);
   const error = layer.y2 ? indices.map(i => [0, spec.numbers[layer.y2!][i] - spec.numbers[layer.y][i]]) : null;
