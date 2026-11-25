@@ -63,6 +63,20 @@ function Library({ store }: { store: SceneStore }) {
   const [selectedRun, setSelectedRun] = useState("");
   const [presetStart, setPresetStart] = useState<PresetStart | null>(null);
   const [poke, setPoke] = useState(0);
+  const navigation = useRef(0);
+  const [navigationId, setNavigationId] = useState(0);
+  const [runsViewKey, setRunsViewKey] = useState(0);
+  const [fromNotification, setFromNotification] = useState(false);
+
+  // Invalidate both in-flight workspace reads and callbacks from the old form
+  // immediately, before React commits the new workspace or unmounts that form.
+  const navigate = useCallback((nextWorkspace: number, runId: string, notification = false) => {
+    setNavigationId(++navigation.current);
+    if (notification) setRunsViewKey(n => n + 1);
+    setRuns([]); setPresets([]); setRunsLoaded(false);
+    setError(""); setPresetStart(null);
+    setWorkspace(nextWorkspace); setSelectedRun(runId); setFromNotification(notification);
+  }, []);
   const heading = useRef<HTMLHeadingElement>(null);
   const focusHeading = useRef(false);
 
@@ -93,26 +107,30 @@ function Library({ store }: { store: SceneStore }) {
           workflowRequest<DetachedRun[]>(workspacePath(workspace!) + "/runs", { signal: controller.signal }),
           workflowRequest<Preset[]>(workspacePath(workspace!) + "/presets", { signal: controller.signal }),
         ]);
-        if (controller.signal.aborted) return;
+        if (controller.signal.aborted || navigation.current !== navigationId) return;
         setRuns(Array.isArray(nextRuns) ? nextRuns : []);
         setPresets(Array.isArray(nextPresets) ? nextPresets : []);
         setRunsLoaded(true);
-      } catch (err) { if (!controller.signal.aborted) setError(errorText(err)); }
-      finally { if (!controller.signal.aborted) timer = window.setTimeout(() => void load(), 2000); }
+      } catch (err) {
+        if (!controller.signal.aborted && navigation.current === navigationId) setError(errorText(err));
+      } finally {
+        if (!controller.signal.aborted && navigation.current === navigationId) timer = window.setTimeout(() => void load(), 2000);
+      }
     }
     void load();
     return () => { controller.abort(); window.clearTimeout(timer); };
-  }, [workspace, poke]);
+  }, [workspace, poke, navigationId]);
   // A "waiting for approval" notification opens this dialog on that run.
   useEffect(() => {
     function follow() {
       const target = takeApprovalTarget();
       if (!target) return;
-      setWorkspace(target.workspaceId); setTab("runs"); setSelectedRun(target.runId);
+      navigate(target.workspaceId, target.runId, true);
+      setTab("runs");
     }
     follow();
     return subscribeApprovalTarget(follow);
-  }, []);
+  }, [navigate]);
   useEffect(() => {
     if (focusHeading.current) { focusHeading.current = false; heading.current?.focus(); }
   }, [view]);
@@ -162,10 +180,21 @@ function Library({ store }: { store: SceneStore }) {
     });
   }
   const center = () => rf.screenToFlowPosition({ x: window.innerWidth / 2, y: window.innerHeight / 2 });
-  const showRun = (runId: string) => { setSelectedRun(runId); setTab("runs"); setPoke(n => n + 1); };
+  const showRun = (runId: string) => {
+    // A previously submitted request may finish after a notification was
+    // followed. It must not take the user away from the run they chose.
+    if (navigation.current !== navigationId || workspace === null) return;
+    navigate(workspace, runId);
+    setTab("runs");
+  };
+  const selectRun = (runId: string) => {
+    if (navigation.current !== navigationId) return;
+    if (runId && !runs.some(run => run.run_id === runId)) { showRun(runId); return; }
+    setSelectedRun(runId); setFromNotification(false);
+  };
   const workspaceControl = workspaces.length > 1
     ? <Select ariaLabel="Workspace" value={workspace === null ? "" : String(workspace)} className="workflow-workspace"
-        onChange={value => { setRuns([]); setPresets([]); setRunsLoaded(false); setSelectedRun(""); setWorkspace(Number(value)); }}
+        onChange={value => navigate(Number(value), "")}
         options={workspaces.map(item => ({ value: String(item.id), label: item.name }))} />
     : null;
   const waiting = runs.filter(runWaiting).length;
@@ -288,12 +317,12 @@ function Library({ store }: { store: SceneStore }) {
           <Select label="Target workspace" value={workspace === null ? "" : String(workspace)}
             options={workspaces.map(item => ({ value: String(item.id), label: item.name }))}
             disabled={!workspaces.length}
-            onChange={value => { setRuns([]); setPresets([]); setRunsLoaded(false); setSelectedRun(""); setWorkspace(Number(value)); }} />
+            onChange={value => navigate(Number(value), "")} />
           <p className="workflow-muted">Runs are stored in the selected library workspace, which may differ from the current canvas.</p>
           <WorkflowRunLauncher key={doc.spec.revision + ":" + workspace} title="Run it" spec={doc.spec} workspace={workspace}
             note={starter ? <p className="workflow-muted">Filled with a sample. Model steps use the local Ollama model named in each step.</p>
               : doc.parameters.length > 0 ? <p className="workflow-muted">Runs use the saved settings of this version. Change them in a preset.</p> : null}
-            examples={starter ? doc.example_inputs : undefined} onStarted={runId => { setWorkspace(workspace); showRun(runId); }} />
+            examples={starter ? doc.example_inputs : undefined} onStarted={showRun} />
         </section>
       </div>
     </div>;
@@ -346,8 +375,8 @@ function Library({ store }: { store: SceneStore }) {
     <Tabs label="Workflow library sections" value={tab} items={[
       { id: "workflows", label: `Workflows (${rows.length})`, content: workflowsPanel },
       { id: "runs", label: waiting ? `Runs (${waiting} waiting)` : `Runs (${runs.length})`, content:
-        <WorkflowRunsPanel workspace={workspace} runs={runs} loaded={runsLoaded || workspace === null} presets={presets}
-          selected={selectedRun} onSelect={setSelectedRun} onChanged={() => setPoke(n => n + 1)} toolbar={workspaceControl} /> },
+        <WorkflowRunsPanel key={runsViewKey} workspace={workspace} runs={runs} loaded={runsLoaded || workspace === null} presets={presets}
+          selected={selectedRun} fromNotification={fromNotification} onSelect={selectRun} onChanged={() => setPoke(n => n + 1)} toolbar={workspaceControl} /> },
       { id: "presets", label: `Presets (${presets.length})`, content:
         <WorkflowPresetsPanel store={store} workspace={workspace} presets={presets} loaded={runsLoaded || workspace === null} rows={rows}
           startWith={presetStart} onFormClosed={() => setPresetStart(null)} onChanged={() => setPoke(n => n + 1)}

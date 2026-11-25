@@ -149,6 +149,22 @@ test("a reviewed human approval gate waits until explicit keyboard approval", as
   const inspector = history.getByRole("region", { name: "Run detail" });
   await expect(inspector.getByRole("button", { name: "Approve step", exact: true })).toBeEnabled();
   await expect(history.getByRole("status").filter({ hasText: "Waiting for approval: Review" })).toBeAttached();
+
+  // A notification must navigate even while the existing library dialog is open
+  // on an unsaved JSON launcher. Reviewing is not an approval or submission.
+  const notification = page.getByRole("region", { name: "Notifications" }).getByRole("status")
+    .filter({ hasText: "Keyboard approval audit is waiting for you" });
+  const review = notification.getByRole("button", { name: "Review run", exact: true });
+  await expect(review).toBeVisible();
+  await history.getByRole("button", { name: "All runs" }).press("Enter");
+  await history.getByRole("button", { name: "Run from JSON" }).press("Enter");
+  await history.getByRole("textbox", { name: "Workflow request JSON (spec and parameters)" }).fill("unsaved draft");
+  await review.click();
+  await expect(history.getByRole("textbox", { name: "Workflow request JSON (spec and parameters)" })).toHaveCount(0);
+  await expect(inspector.getByRole("heading", { name: "Keyboard approval audit" })).toBeVisible();
+  await expect(history.getByRole("heading", { name: "Selected run" })).toBeFocused();
+  await expect(inspector.getByRole("button", { name: "Approve step", exact: true })).toBeEnabled();
+  await expect(history.getByRole("status").filter({ hasText: "Waiting for approval: Review" })).toBeAttached();
   await inspector.getByRole("button", { name: "Approve step", exact: true }).press("Enter");
   await expect(history.getByRole("status").filter({ hasText: "Keyboard approval audit: Completed" })).toBeAttached();
   await expect(inspector.getByRole("button", { name: "Approve step", exact: true })).toHaveCount(0);
