@@ -1,5 +1,5 @@
 import { authHeaders } from "../../lib/auth/token";
-import type { PortSpec, PortValue, WorkflowSpec } from "../../lib/workflow-contract/generated/workflow";
+import type { JsonScalar, PortSpec, PortValue, WorkflowSpec } from "../../lib/workflow-contract/generated/workflow";
 import type { StatusWord } from "../ui/Badge";
 import { formatDuration } from "../ui/format";
 
@@ -147,41 +147,91 @@ export function valueSummary(value: PortValue): string {
 
 /** Form drafts are strings; convert them to the typed values a run needs. */
 export type InputDrafts = Record<string, string>;
-export function parseCsv(text: string): { columns: string[]; rows: (string | number | null)[][] } {
-  const lines: string[][] = [];
-  let row: string[] = [], cell = "", quoted = false;
+type CsvCell = { value: string; quoted: boolean };
+type TableDraft = { columns: string[]; rows: JsonScalar[][] };
+function csvCell(value: string, quoted: boolean): JsonScalar {
+  if (quoted) return value;
+  if (value === "") return null;
+  // Infer only ordinary, safely representable numbers. Quoted numbers, leading
+  // zeros and unsafe integer identifiers stay strings; whitespace is meaningful.
+  if (/^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?$/.test(value)) {
+    const number = Number(value);
+    const underflow = number === 0 && /[1-9]/.test(value.split(/[eE]/)[0]);
+    if (Number.isFinite(number) && !underflow && (!Number.isInteger(number) || Number.isSafeInteger(number))) return number;
+  }
+  return value;
+}
+export function parseCsv(text: string): TableDraft {
+  const records: CsvCell[][] = [];
+  let row: CsvCell[] = [], cell = "", state: "unquoted" | "quoted" | "closed" = "unquoted", wasQuoted = false, touched = false;
+  const fail = (message: string): never => { throw new Error(`CSV row ${records.length + 1}, column ${row.length + 1}: ${message}`); };
+  const endCell = () => { row.push({ value: cell, quoted: wasQuoted }); cell = ""; state = "unquoted"; wasQuoted = false; };
+  const endRow = () => { endCell(); records.push(row); row = []; touched = false; };
   for (let i = 0; i < text.length; i++) {
     const c = text[i];
-    if (quoted) {
+    if (state === "quoted") {
       if (c === '"' && text[i + 1] === '"') { cell += '"'; i++; }
-      else if (c === '"') quoted = false;
+      else if (c === '"') state = "closed";
       else cell += c;
-    } else if (c === '"') quoted = true;
-    else if (c === ",") { row.push(cell); cell = ""; }
+    } else if (c === ",") { endCell(); touched = true; }
     else if (c === "\n" || c === "\r") {
       if (c === "\r" && text[i + 1] === "\n") i++;
-      row.push(cell); cell = ""; if (row.some(v => v.trim())) lines.push(row); row = [];
-    } else cell += c;
+      endRow();
+    } else if (state === "closed") fail("Expected a comma or end of row after the closing quote.");
+    else if (c === '"') {
+      if (cell !== "") fail("A quote may only start a field; quote the entire field and double internal quotes.");
+      state = "quoted"; wasQuoted = true; touched = true;
+    } else { cell += c; touched = true; }
   }
-  row.push(cell); if (row.some(v => v.trim())) lines.push(row);
-  if (!lines.length) throw new Error("Add a header row and at least one data row.");
-  const columns = lines[0].map(c => c.trim());
-  if (columns.some(c => !c) || new Set(columns).size !== columns.length) {
+  if (state === "quoted") fail("Unterminated quoted field.");
+  // A trailing record separator terminates the preceding record, but a
+  // separate blank record (including an all-empty row) is not discarded.
+  if (touched) endRow();
+  if (!records.length) throw new Error("Add a header row.");
+  const columns = records[0].map(c => c.value);
+  if (columns.some(c => !c.trim()) || new Set(columns).size !== columns.length) {
     throw new Error("Column names must be unique and not empty.");
   }
-  const rows = lines.slice(1).map(cells => columns.map((_, index) => {
-    const raw = (cells[index] ?? "").trim();
-    if (!raw) return null;
-    const number = Number(raw);
-    return Number.isFinite(number) && /^-?\d/.test(raw) ? number : raw;
-  }));
+  const rows = records.slice(1).map((cells, index) => {
+    if (cells.length !== columns.length) {
+      throw new Error(`CSV row ${index + 2}, column ${Math.min(cells.length, columns.length) + 1}: expected ${columns.length} fields, found ${cells.length}.`);
+    }
+    return cells.map(c => csvCell(c.value, c.quoted));
+  });
+  return { columns, rows };
+}
+function parseTableDraft(text: string): TableDraft {
+  // A JSON object is the lossless alternative for typed tables. A CSV header
+  // starting with a literal opening brace can be quoted to disambiguate it.
+  if (!text.trimStart().startsWith("{")) return parseCsv(text);
+  let table;
+  try { table = JSON.parse(text); }
+  catch { throw new Error("Table must be valid JSON with columns and rows."); }
+  if (!table || !Array.isArray(table.columns) || !Array.isArray(table.rows)
+      || table.columns.some((c: unknown) => typeof c !== "string")
+      || new Set(table.columns).size !== table.columns.length) {
+    throw new Error("Table JSON needs unique string column names and an array of rows.");
+  }
+  const columns = table.columns;
+  const rows = table.rows.map((row: unknown, index: number) => {
+    if (!Array.isArray(row) || row.length !== columns.length) {
+      throw new Error(`Table JSON row ${index + 1}: expected ${columns.length} cells.`);
+    }
+    return row.map((cell, column) => {
+      if (cell === null || typeof cell === "string" || typeof cell === "boolean") return cell;
+      if (typeof cell === "number" && Number.isFinite(cell)
+          && (!Number.isInteger(cell) || Number.isSafeInteger(cell))) return cell;
+      throw new Error(`Table JSON row ${index + 1}, column ${column + 1}: use a JSON scalar, and quote integers outside the safe numeric range.`);
+    });
+  });
   return { columns, rows };
 }
 export function draftFor(port: PortSpec, value: PortValue | undefined): string {
   if (!value) return "";
   if (value.kind === "table") {
-    const quote = (v: unknown) => { const s = v === null || v === undefined ? "" : String(v); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
-    return [value.columns.map(quote).join(","), ...value.rows.map(r => r.map(quote).join(","))].join("\n");
+    // Use the typed representation for existing values: CSV cannot express
+    // every JSON scalar, and a preset must not change types when edited.
+    return JSON.stringify({ columns: value.columns, rows: value.rows }, null, 2);
   }
   return port.kind === value.kind ? valueText(value) : "";
 }
@@ -200,7 +250,7 @@ export function typedInputs(ports: readonly PortSpec[], drafts: InputDrafts,
     }
     if (port.kind === "text") values[port.name] = { kind: "text", text: draft };
     else if (port.kind === "json") values[port.name] = { kind: "json", value: parsedJson(port, draft) };
-    else if (port.kind === "table") values[port.name] = { kind: "table", ...parseCsv(draft) };
+    else if (port.kind === "table") values[port.name] = { kind: "table", ...parseTableDraft(draft) };
     else throw new Error(`“${port.name}” needs a ${port.kind}. Edit the request as JSON to supply it.`);
   }
   return values;

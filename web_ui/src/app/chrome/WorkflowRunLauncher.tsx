@@ -18,7 +18,7 @@ export function initialDrafts(ports: readonly PortSpec[], examples?: Record<stri
 const kindHelp: Record<string, string | undefined> = {
   text: undefined,
   json: "A JSON value, for example {\"limit\": 5} or [1, 2, 3]",
-  table: "Comma-separated values. The first row names the columns.",
+  table: "CSV: first row names columns, quote text (including numeric identifiers), unquoted empty cells are null. Or enter a JSON object with columns and rows for exact types.",
 };
 
 /** One field per workflow input, typed by its port. */
