@@ -312,3 +312,125 @@ for (const theme of ["Dark", "Light"] as const) {
     expect(mutations).toEqual([]);
   });
 }
+
+// Use real persisted receipts and approved, manual, pure presets. The browser
+// must never download the full history just to render badges or list rows.
+test("large workflow history uses bounded summaries and on-demand receipts", async ({ page }, testInfo) => {
+  test.setTimeout(180_000);
+  await openTable(page);
+  const workspaces = await page.request.get("/api/workflows/workspaces");
+  expect(workspaces.ok()).toBe(true);
+  const workspace = (await workspaces.json())[0].id as number;
+  const base = "/api/workflows/" + workspace;
+  const ports = [{ name: "first", kind: "text", required: true }, { name: "second", kind: "text", required: true }] as const;
+  const specFor = (index: number): WorkflowSpec => ({
+    schema_version: 1, workflow_id: "operator-history-bench-" + index, revision: "v1",
+    name: "History benchmark " + index, inputs: [...ports], steps: [],
+    outputs: ports.map(port => ({ port, source: { kind: "input", port: port.name } })),
+  });
+  const inline = "x".repeat(32 * 1024);
+  const parameters = { first: { kind: "text", text: inline }, second: { kind: "text", text: inline } };
+  const ids: string[] = [];
+  for (let i = 0; i < 50; i++) {
+    const started = await page.request.post(base + "/runs", { data: { spec: specFor(i), parameters } });
+    expect(started.status(), await started.text()).toBe(202);
+    const { run_id } = await started.json();
+    ids.push(run_id);
+    await started.dispose();
+    await expect.poll(async () => {
+      const response = await page.request.get(base + "/runs/" + run_id);
+      const status = response.ok() ? (await response.json()).status : response.status();
+      await response.dispose();
+      return status;
+    }).toBe("completed");
+  }
+  const presetRequest = { spec: specFor(50), parameters: {
+    ...parameters, first: { kind: "text", text: "p".repeat(900_000) },
+  } };
+  const preview = await page.request.post(base + "/presets/preview", { data: presetRequest });
+  expect(preview.ok(), await preview.text()).toBe(true);
+  const { fingerprint } = await preview.json();
+  await preview.dispose();
+  const presetIds: string[] = [];
+  for (let i = 0; i < 20; i++) {
+    const saved = await page.request.post(base + "/presets", { data: {
+      request: presetRequest, name: "History benchmark preset " + i, allowed_effects: ["pure"],
+      cost_usd: 0, trigger: null, fingerprint, approved: true,
+    } });
+    expect(saved.status(), await saved.text()).toBe(201);
+    presetIds.push((await saved.json()).preset_id);
+    await saved.dispose();
+  }
+
+  try {
+    const sizes: Record<string, { bytes: number; milliseconds: number }> = {};
+    for (const path of ["/runs", "/runs?summary=true", "/presets", "/presets?summary=true"]) {
+      const start = performance.now();
+      const response = await page.request.get(base + path);
+      expect(response.ok()).toBe(true);
+      sizes[path] = { bytes: (await response.body()).byteLength, milliseconds: performance.now() - start };
+      await response.dispose();
+    }
+    expect(sizes["/runs"].bytes).toBeGreaterThan(50 * 64 * 1024);
+    expect(sizes["/presets"].bytes).toBeGreaterThan(20 * 900_000);
+    expect(sizes["/runs?summary=true"].bytes).toBeLessThan(50_000);
+    expect(sizes["/presets?summary=true"].bytes).toBeLessThan(20_000);
+
+    const requests: string[] = [];
+    page.on("request", request => {
+      const url = new URL(request.url());
+      if (request.method() === "GET" && url.pathname.startsWith(base + "/")) {
+        requests.push(url.pathname.slice(base.length) + url.search);
+      }
+    });
+    const count = (path: string) => requests.filter(item => item === path).length;
+    const library = page.getByRole("dialog", { name: "Workflow library" });
+    const timings: Record<string, number> = {};
+    const start = performance.now();
+    await page.locator('[data-overlay-trigger="workflow-library"]').press("Enter");
+    await expect(library.getByRole("tab", { name: "Runs (50)", exact: true })).toBeVisible();
+    await expect(library.getByRole("tab", { name: "Presets (20)", exact: true })).toBeVisible();
+    timings.workflows = performance.now() - start;
+    const idleCounts = [count("/runs?summary=true"), count("/presets?summary=true")];
+    // Observe a complete former 2-second polling interval on an inactive tab.
+    await page.waitForTimeout(2500);
+    expect([count("/runs?summary=true"), count("/presets?summary=true")]).toEqual(idleCounts);
+
+    const runsStart = performance.now();
+    await library.getByRole("tab", { name: "Runs (50)", exact: true }).click();
+    const newest = library.getByRole("button", { name: /^History benchmark 49,/ });
+    await expect(newest).toBeVisible();
+    timings.runs = performance.now() - runsStart;
+    expect(requests.filter(path => /^\/runs\/[^/]+$/.test(path))).toEqual([]);
+    const detailStart = performance.now();
+    await newest.click();
+    await expect(library.getByRole("heading", { name: "History benchmark 49", exact: true })).toBeVisible();
+    timings.detail = performance.now() - detailStart;
+    const detailPath = "/runs/" + ids[49];
+    expect(count(detailPath)).toBe(1);
+    const runReads = count("/runs?summary=true");
+    await page.waitForTimeout(2500);
+    expect(count(detailPath)).toBe(1);
+    expect(count("/runs?summary=true")).toBe(runReads);
+
+    const presetsStart = performance.now();
+    await library.getByRole("tab", { name: "Presets (20)", exact: true }).click();
+    await expect(library.getByText("History benchmark preset 19", { exact: true })).toBeVisible();
+    timings.presets = performance.now() - presetsStart;
+    await page.waitForTimeout(2500);
+    expect(count(detailPath)).toBe(1);
+    expect(count("/runs")).toBe(0);
+    expect(count("/presets")).toBe(0);
+    expect(requests.filter(path => /^\/runs\/[^/]+$/.test(path))).toEqual([detailPath]);
+    await testInfo.attach("Large history HTTP sizes and browser interaction timings", {
+      body: JSON.stringify({ sizes, timings, requests }, null, 2), contentType: "application/json",
+    });
+    await page.keyboard.press("Escape");
+    await expect(library).toBeHidden();
+  } finally {
+    for (const id of presetIds) {
+      const deleted = await page.request.delete(base + "/presets/" + id);
+      await deleted.dispose();
+    }
+  }
+});
