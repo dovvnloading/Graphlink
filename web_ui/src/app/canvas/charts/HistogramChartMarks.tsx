@@ -7,7 +7,7 @@
 
 import { useId } from "react";
 import type { ChartMarksProps } from "./BarChartMarks";
-import { computeHistogramBins, createLinearScale, formatValue, mean, median, niceTicks } from "./chartScales";
+import { computeHistogramBins, createLinearScale, fitContinuousTicks, formatValue, mean, median, niceTicks } from "./chartScales";
 import { computeBottomMargin, computeLeftMargin, tooltipPositionFromEvent } from "./chartLayout";
 import { CartesianAxes, type XTick } from "./CartesianAxes";
 
@@ -41,7 +41,7 @@ export function HistogramChartMarks({ chartData, theme, width, height, onHover, 
 
   const xDomain: [number, number] = viewport?.x ?? [valueMin, valueMax];
   const xTickValues = niceTicks(...xDomain, 6).filter((tick) => tick >= xDomain[0] && tick <= xDomain[1]);
-  const xTicks: XTick[] = xTickValues.map((tick) => ({ position: xScale(tick), lines: [formatValue(tick)] }));
+  const xTicks: XTick[] = fitContinuousTicks(xTickValues, xScale, innerWidth);
 
   const avg = mean(values);
   const med = median(values);
@@ -56,6 +56,7 @@ export function HistogramChartMarks({ chartData, theme, width, height, onHover, 
         yScale={yScale}
         xAxisLabel={chartData.xAxis ?? ""}
         yAxisLabel={chartData.yAxis ?? ""}
+        yAxisTitleX={8 - marginLeft}
         xTicks={xTicks}
         rotateXTicks={false}
       />

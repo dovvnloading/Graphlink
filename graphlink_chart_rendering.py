@@ -194,6 +194,8 @@ def _build_theme() -> dict[str, Any]:
 
 
 def _format_value(value: float) -> str:
+    if value != 0 and (abs(value) < 0.01 or abs(value) >= 1e12):
+        return repr(float(value))
     if abs(value) >= 1000:
         return f"{value:,.0f}"
     if abs(value - round(value)) < 0.001:
@@ -284,8 +286,8 @@ def _render_bar_chart(ax, chart_data: dict[str, Any], theme: dict[str, Any], lay
             bar.set_edgecolor(theme["text"])
     ax.margins(x=0.04)
 
-    min_value = min(values)
-    max_value = max(values)
+    min_value = min(0, min(values))
+    max_value = max(0, max(values))
     if min_value >= 0:
         ax.set_ylim(0, max_value * 1.18 if max_value else 1)
     else:
@@ -339,9 +341,10 @@ def _render_line_chart(ax, chart_data: dict[str, Any], theme: dict[str, Any], la
     _set_categorical_ticks(ax, positions, labels, layout_width)
     ax.margins(x=0.04)
 
-    value_span = max(values) - min(values)
-    buffer = (value_span * 0.18) or max(abs(max(values)), 1) * 0.18 or 1
-    ax.set_ylim(min(values) - buffer, max(values) + buffer)
+    lo, hi = min(values), max(values)
+    magnitude = max(abs(lo), abs(hi))
+    buffer = (hi - lo) * 0.18 or (magnitude if 0 < magnitude < 0.01 else max(magnitude, 1)) * 0.18
+    ax.set_ylim(lo - buffer, hi + buffer)
     if len(values) <= 12:
         for x_pos, value in zip(positions, values):
             ax.annotate(
@@ -730,9 +733,15 @@ def _render_histogram(ax, chart_data: dict[str, Any], theme: dict[str, Any]) -> 
     values = chart_data["values"]
     bins = chart_data["bins"]
 
+    # Match the live histogram: numpy's default constant range of +/-0.5
+    # loses tiny units and collapses at large finite magnitudes.
+    lo, hi = min(values), max(values)
+    magnitude = abs(lo)
+    padding = (magnitude * 0.05 if 0 < magnitude < 0.01 else max(0.5, magnitude * 0.05)) if lo == hi else 0
     counts, _, patches = ax.hist(
         values,
         bins=bins,
+        range=(lo - padding, hi + padding),
         linewidth=1.0,
         edgecolor=_mpl_rgba(theme["text"], 60 / 255),
         zorder=3,
