@@ -45,9 +45,9 @@ test("keyboard preview, execute, inspect and compare durable runs in both themes
     await editHours(table, hours);
     const dialog = await runner(page);
     const scope = dialog.getByRole("button", { name: "Run scope" });
-    // The runner opens before its async history read has enabled the scope.
-    // Locator.press does not wait for enabled controls. Exercise the actual
-    // keyboard interaction only once the control is ready, in both themes.
+    // Wait for the async history load and verify the keyboard's active option.
+    // The failing Chromium trace showed the active descendant change under a
+    // stationary pointer between Home and Enter; keep the final assertion too.
     await expect(scope).toBeEnabled();
     await scope.press("Home");
     const scopeOptions = page.getByRole("listbox", { name: "Run scope" });
