@@ -31,15 +31,25 @@ export type DetachedRun = {
   steps: Record<string, RunStep>; awaiting_approval?: UnattendedPause | null;
   preview: WorkflowPreview; events?: RunEvent[]; unattended_effects?: string[] | null;
 };
+/** List-only projection. Never use a summary as approval or receipt evidence. */
+export type RunSummary = Pick<DetachedRun, "run_id" | "preset_id" | "status" | "cost_usd" | "created_at" | "started_at" | "finished_at"> & {
+  spec: Pick<WorkflowSpec, "name">; waiting_for_approval: boolean;
+};
 export type PresetTrigger = null | { kind: "interval"; seconds: number } | { kind: "daily"; time: string }
   | { kind: "folder"; path: string };
 export type Preset = {
   preset_id: string; name: string; trigger: PresetTrigger; cost_usd: number; allowed_effects: string[];
   request: Record<string, unknown>; workflow_id?: string | null; revision?: string | null; created_at?: string;
 };
+export type PresetSummary = Pick<Preset, "preset_id" | "name" | "trigger" | "cost_usd" | "allowed_effects" | "workflow_id"> & {
+  workflow_name?: string | null;
+};
 /** A typed run request: a frozen spec plus one value per workflow input. */
 export type DetachedRequest = { spec: WorkflowSpec; parameters: Record<string, PortValue> };
 
+export class WorkflowRequestError extends Error {
+  constructor(message: string, readonly status: number) { super(message); }
+}
 export async function workflowRequest<T>(path: string, init: { method?: string; body?: unknown; signal?: AbortSignal } = {}): Promise<T> {
   const response = await fetch(path, {
     method: init.method ?? "GET", signal: init.signal,
@@ -48,7 +58,7 @@ export async function workflowRequest<T>(path: string, init: { method?: string; 
   });
   const body = await response.json().catch(() => null);
   if (!response.ok) {
-    throw new Error(typeof body?.detail === "string" ? body.detail : `The workflow service answered ${response.status}. Try again.`);
+    throw new WorkflowRequestError(typeof body?.detail === "string" ? body.detail : `The workflow service answered ${response.status}. Try again.`, response.status);
   }
   return body as T;
 }
@@ -117,9 +127,13 @@ export function statusWord(status: string, waiting = false): StatusWord | null {
   return ({ pending: "Queued", running: "Running", completed: "Done", failed: "Failed", cancelled: "Cancelled",
     skipped: "Skipped" } as Record<string, StatusWord>)[status] ?? null;
 }
-export function runWaiting(run: DetachedRun) {
+export function runWaiting(run: DetachedRun | RunSummary) {
+  if ("waiting_for_approval" in run) return run.waiting_for_approval;
   return run.status === "running" && (!!run.awaiting_approval
     || Object.values(run.steps).some(step => step.approval?.status === "pending"));
+}
+export function runActive(run: Pick<DetachedRun, "status">) {
+  return run.status === "pending" || run.status === "running";
 }
 
 export function triggerSummary(trigger: PresetTrigger): string {

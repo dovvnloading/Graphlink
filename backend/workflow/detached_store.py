@@ -19,6 +19,28 @@ TABLE = "detached_workflow_runs"
 MAX_RUNS = 50
 MAX_AGE_DAYS = 90
 
+# Match prune's visibility rule without taking a write lock on a history read.
+# The top-N includes active runs; active runs outside it are never evicted.
+_VISIBLE_RUNS = """
+    workspace_id = :workspace_id AND (
+        status IN ('pending', 'running') OR (
+            created_at >= :cutoff AND run_id IN (
+                SELECT run_id FROM detached_workflow_runs
+                WHERE workspace_id = :workspace_id
+                ORDER BY created_at DESC, run_id DESC LIMIT :limit
+            )
+        )
+    )
+"""
+
+
+def _visibility_parameters(workspace_id: int) -> dict[str, Any]:
+    return {
+        "workspace_id": workspace_id,
+        "cutoff": (datetime.now(timezone.utc) - timedelta(days=MAX_AGE_DAYS)).isoformat(),
+        "limit": MAX_RUNS,
+    }
+
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -162,6 +184,42 @@ class DetachedRunStore:
                 SELECT payload FROM detached_workflow_runs WHERE workspace_id = ?
                 ORDER BY created_at DESC, run_id DESC
             """, (workspace_id,))]
+
+    def read_visible(self, workspace_id: int, run_id: str) -> dict[str, Any] | None:
+        """Read a visible receipt without physically pruning history."""
+        with self._connection() as conn:
+            row = conn.execute(f"""
+                SELECT payload FROM detached_workflow_runs
+                WHERE {_VISIBLE_RUNS} AND run_id = :run_id
+            """, {**_visibility_parameters(workspace_id), "run_id": run_id}).fetchone()
+            return json.loads(row[0]) if row else None
+
+    def list_summaries(self, workspace_id: int) -> list[dict[str, Any]]:
+        """Project list metadata in SQLite; never transfer inline values or events."""
+        with self._connection() as conn:
+            rows = conn.execute(f"""
+                SELECT run_id, status, created_at,
+                       json_extract(payload, '$.preset_id'),
+                       json_extract(payload, '$.spec.name'),
+                       json_extract(payload, '$.started_at'),
+                       json_extract(payload, '$.finished_at'),
+                       json_extract(payload, '$.cost_usd'),
+                       CASE WHEN status = 'running' THEN (
+                           json_type(payload, '$.awaiting_approval') = 'object'
+                           OR EXISTS (
+                               SELECT 1 FROM json_each(payload, '$.steps') AS step
+                               WHERE json_extract(step.value, '$.approval.status') = 'pending'
+                           )
+                       ) ELSE 0 END
+                FROM detached_workflow_runs WHERE {_VISIBLE_RUNS}
+                ORDER BY created_at DESC, run_id DESC
+            """, _visibility_parameters(workspace_id))
+            return [
+                {"run_id": run_id, "status": status, "created_at": created_at,
+                 "preset_id": preset_id, "spec": {"name": name}, "started_at": started_at,
+                 "finished_at": finished_at, "cost_usd": cost_usd, "waiting_for_approval": bool(waiting)}
+                for run_id, status, created_at, preset_id, name, started_at, finished_at, cost_usd, waiting in rows
+            ]
 
     def interrupt_unfinished(self) -> None:
         """Call once at backend startup, before accepting any runs; never replay effects."""

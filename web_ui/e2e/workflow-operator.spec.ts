@@ -1,7 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import { openTable, editHours } from "./table-workflow-helpers";
 import type { WorkflowSpec } from "../src/lib/workflow-contract/generated/workflow";
-import type { DetachedRun } from "../src/app/chrome/workflowApi";
+import { runWaiting, type DetachedRun, type RunSummary } from "../src/app/chrome/workflowApi";
 
 test.use({ viewport: { width: 1440, height: 1000 }, contextOptions: { reducedMotion: "reduce" } });
 
@@ -196,6 +196,11 @@ for (const theme of ["Dark", "Light"] as const) {
     const other: DetachedRun = { ...waiting, run_id: "other", status: "completed", steps: {},
       spec: { ...spec, name: "Other workflow" } };
     const stale: DetachedRun = { ...other, run_id: "target", spec: { ...spec, name: "Stale workspace receipt" } };
+    function summary(record: DetachedRun): RunSummary {
+      const { run_id, preset_id, status, created_at, started_at, finished_at, cost_usd, spec } = record;
+      return { run_id, preset_id, status, created_at, started_at, finished_at, cost_usd,
+        spec: { name: spec.name }, waiting_for_approval: runWaiting(record) };
+    }
     let showNotice = false;
     let missing = false;
     let releaseTarget!: () => void;
@@ -214,10 +219,17 @@ for (const theme of ["Dark", "Light"] as const) {
       } else if (path === "/api/workflows/workspaces") {
         await route.fulfill({ json: [{ id: 3, name: "First" }, { id: 4, name: "Second" }] });
       } else if (path === "/api/workflows/3/runs") {
-        await route.fulfill({ json: [stale] });
+        await route.fulfill({ json: [summary(stale)] });
       } else if (path === "/api/workflows/4/runs") {
         await targetReady;
-        await route.fulfill({ json: missing ? [] : [waiting, other] });
+        await route.fulfill({ json: missing ? [] : [waiting, other].map(summary) });
+      } else if (path === "/api/workflows/3/runs/target") {
+        await route.fulfill({ json: stale });
+      } else if (path === "/api/workflows/4/runs/target") {
+        await targetReady;
+        await route.fulfill(missing ? { status: 404, json: { detail: "Workflow run not found." } } : { json: waiting });
+      } else if (path === "/api/workflows/4/runs/other") {
+        await route.fulfill({ json: other });
       } else if (path.endsWith("/presets")) {
         await route.fulfill({ json: [] });
       } else {

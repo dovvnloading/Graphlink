@@ -9,7 +9,7 @@ import { OverlayProvider, useOverlays } from "../overlays/overlays";
 import { toast, Toaster } from "../ui/Toast";
 import { WorkflowApprovalNotifications } from "./WorkflowApprovalNotifications";
 import { WorkflowLibraryDialog } from "./WorkflowLibraryDialog";
-import type { DetachedRun } from "./workflowApi";
+import { runWaiting, type DetachedRun, type RunSummary } from "./workflowApi";
 
 const port = { name: "value", kind: "text", required: true } as const;
 const spec: WorkflowSpec = {
@@ -29,6 +29,11 @@ const waiting: DetachedRun = {
 };
 const other: DetachedRun = { ...waiting, run_id: "other", status: "completed", steps: {},
   spec: { ...spec, name: "Other workflow" } };
+function summary(record: DetachedRun): RunSummary {
+  const { run_id, preset_id, status, created_at, started_at, finished_at, cost_usd, spec } = record;
+  return { run_id, preset_id, status, created_at, started_at, finished_at, cost_usd,
+    spec: { name: spec.name }, waiting_for_approval: runWaiting(record) };
+}
 const doc: WorkflowDocument = { format: "graphlink-workflow", spec, parameters: [] };
 
 function Harness({ store }: { store: SceneStore }) {
@@ -51,19 +56,23 @@ function setup(options: { workspace?: number; firstRuns?: DetachedRun[] | Promis
     throw new Error("Unexpected library request: " + action);
   });
   const store = { workflowLibrary } as unknown as SceneStore;
-  const fetchMock = vi.fn(async (path: string, _init?: RequestInit) => ({
-    ok: true, json: async () => {
-      if (path === "/api/workflows/active-approvals") return [{
-        workspace_id: workspace, run_id: "target", workflow: spec.name, step_id: "review", message: "Check it",
-      }];
-      if (path === "/api/workflows/workspaces") return [{ id: 3, name: "First" }, { id: 4, name: "Second" }];
-      if (path === "/api/workflows/3/runs") return options.firstRuns ?? [other, ...(workspace === 3 ? [waiting] : [])];
-      if (path === "/api/workflows/4/runs") return options.targetRuns ?? [waiting];
-      if (path.endsWith("/presets")) return [];
-      if (path.endsWith("/step-approval")) return { accepted: true };
-      throw new Error("Unexpected workflow request: " + path);
-    },
-  }));
+  const fetchMock = vi.fn(async (path: string, _init?: RequestInit) => {
+    const response = (body: unknown, status = 200) => ({ ok: status === 200, status, json: async () => body });
+    if (path === "/api/workflows/active-approvals") return response([{
+      workspace_id: workspace, run_id: "target", workflow: spec.name, step_id: "review", message: "Check it",
+    }]);
+    if (path === "/api/workflows/workspaces") return response([{ id: 3, name: "First" }, { id: 4, name: "Second" }]);
+    const match = /^\/api\/workflows\/(3|4)\/runs(?:\?summary=true|\/([^/]+))$/.exec(path);
+    if (match) {
+      const records = await (match[1] === "3" ? options.firstRuns ?? [other, ...(workspace === 3 ? [waiting] : [])] : options.targetRuns ?? [waiting]);
+      if (!match[2]) return response(records.map(summary));
+      const record = records.find(run => run.run_id === match[2]);
+      return record ? response(record) : response({ detail: "Workflow run not found." }, 404);
+    }
+    if (path.endsWith("/presets?summary=true")) return response([]);
+    if (path.endsWith("/step-approval")) return response({ accepted: true });
+    throw new Error("Unexpected workflow request: " + path);
+  });
   vi.stubGlobal("fetch", fetchMock);
   render(<ReactFlowProvider><OverlayProvider><Harness store={store} /></OverlayProvider></ReactFlowProvider>);
   return { fetchMock, user: userEvent.setup() };
@@ -92,7 +101,7 @@ it.each(["JSON launcher", "preset form", "another run"] as const)("opens the wai
       await user.type(dialog.getByRole("textbox", { name: "Workflow request JSON (spec and parameters)" }), "unsaved draft");
     } else {
       await user.click(dialog.getByRole("button", { name: /^Other workflow,/ }));
-      expect(dialog.getByRole("heading", { name: "Other workflow" })).toBeVisible();
+      expect(await dialog.findByRole("heading", { name: "Other workflow" })).toBeVisible();
     }
   }
   await user.click(review);
@@ -142,7 +151,7 @@ it("ignores a late old-workspace response after following a notification", async
   const { user, fetchMock } = setup({ workspace: 4, firstRuns });
   await user.click(screen.getByRole("button", { name: "Open library" }));
   const dialog = within(screen.getByRole("dialog", { name: "Workflow library" }));
-  await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/workflows/3/runs", expect.anything()));
+  await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/workflows/3/runs?summary=true", expect.anything()));
   await user.click(await screen.findByRole("button", { name: "Review run" }));
   expect(await dialog.findByRole("heading", { name: "Waiting workflow" })).toBeVisible();
   await act(async () => { finishOld([{ ...other, run_id: "target" }]); });
@@ -183,4 +192,26 @@ it("moves the same approval notice into the modal without duplicating or approvi
   expect(await dialog.findByRole("heading", { name: "Waiting workflow" })).toBeVisible();
   expect(dialog.getByRole("button", { name: "Approve step" })).toBeEnabled();
   expect(fetchMock.mock.calls.every(([, init]) => !init?.method || init.method === "GET")).toBe(true);
+});
+
+it("uses only summaries until a receipt is opened and stops detail polling on another tab", async () => {
+  const { user, fetchMock } = setup();
+  await user.click(screen.getByRole("button", { name: "Open library" }));
+  const dialog = within(screen.getByRole("dialog", { name: "Workflow library" }));
+  await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/workflows/3/runs?summary=true", expect.anything()));
+  await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/workflows/3/presets?summary=true", expect.anything()));
+  const count = (path: string) => fetchMock.mock.calls.filter(([url]) => url === path).length;
+  expect(count("/api/workflows/3/runs")).toBe(0);
+  expect(count("/api/workflows/3/presets")).toBe(0);
+  expect(count("/api/workflows/3/runs/target")).toBe(0);
+  await user.click(dialog.getByRole("tab", { name: /^Runs/ }));
+  await user.click(await dialog.findByRole("button", { name: /^Other workflow,/ }));
+  expect(await dialog.findByRole("heading", { name: "Other workflow" })).toBeVisible();
+  expect(count("/api/workflows/3/runs/other")).toBe(1);
+  await user.click(await screen.findByRole("button", { name: "Review run" }));
+  expect(await dialog.findByRole("heading", { name: "Waiting workflow" })).toBeVisible();
+  const detailCall = fetchMock.mock.calls.find(([url]) => url === "/api/workflows/3/runs/target");
+  expect(detailCall?.[1]?.signal?.aborted).toBe(false);
+  await user.click(dialog.getByRole("tab", { name: /^Workflows/ }));
+  expect(detailCall?.[1]?.signal?.aborted).toBe(true);
 });
