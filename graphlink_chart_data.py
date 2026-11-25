@@ -759,6 +759,9 @@ def _composite_chart(data, result):
 
     xs, ys = [], []
     result_layers = []
+    # The whole figure shares one eight-slot legend. Equal category text in
+    # different fields has distinct meaning; repeated field bindings reuse slots.
+    color_slots = set()
     for index, layer in enumerate(layers):
         if not isinstance(layer, dict) or set(layer) - {"mark", "x", "y", "y2", "colorBy", "label"}:
             raise ChartDataError(f"Composite layer {index} has unknown fields")
@@ -779,8 +782,11 @@ def _composite_chart(data, result):
         if color is not None:
             if not isinstance(color, str) or color not in cleaned_categories:
                 raise ChartDataError("Composite colorBy must name a categorical column")
-            if len(set(cleaned_categories[color])) > 8:
-                raise ChartDataError("Composite colorBy supports at most eight groups")
+            color_slots.update((color, value) for value in cleaned_categories[color])
+        else:
+            color_slots.add((index,))
+        if len(color_slots) > 8:
+            raise ChartDataError("Composite figures support at most eight color legend entries across all layers")
         clean = {"mark": mark, "x": x, "y": y}
         if y2 is not None:
             clean["y2"] = y2

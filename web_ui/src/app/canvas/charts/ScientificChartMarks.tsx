@@ -177,9 +177,13 @@ export function ScientificChartMarks({
         const name = row.name || data.title || "Series";
         const indices = scientificMarkIndices(xValues, row.values, viewport,
           scientificMarkBudget(series.length), chartType === "line" ? "line" : "scatter", row.yError);
-        const path = indices.map((index, position) =>
-          (position === 0 ? "M " : "L ") + x(xValues[index]) + " " + y(row.values[index]),
-        ).join(" ");
+        // Sampling limits interactive point/error glyphs, not connectivity.
+        // Keep the single line path in original order (at most 10,000 total
+        // source vertices). SVG clipping preserves crossings even when both
+        // endpoints are offscreen, and never joins nonadjacent visible points.
+        const path = chartType === "line" ? xValues.map((value, index) =>
+          (index === 0 ? "M " : "L ") + x(value) + " " + y(row.values[index]),
+        ).join(" ") : "";
         return (
           <g key={name} className="chart-scientific-series" data-series={name}>
             {fits && (() => {

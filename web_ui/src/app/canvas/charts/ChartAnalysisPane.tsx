@@ -251,7 +251,7 @@ export function ChartAnalysisPane({
       const proposedY: [number, number] = [Number(fields.get("ymin")), Number(fields.get("ymax"))];
       const parsed = canonicalizeChartAnalysis({
         ...analysis, xRange: proposedX, yRange: proposedY,
-      }, chartType, frame.xKind, frame.yKind);
+      }, chartType, frame.xKind, frame.yKind, chartData);
       setView({ x: parsed.xRange!, y: parsed.yRange! });
       if (analysis.lockX || analysis.lockY) {
         commit({

@@ -6,7 +6,12 @@ import { CartesianAxes, type XTick } from "./CartesianAxes";
 import { createLinearScale, createLog10Scale, formatLogTick, formatScientificTick,
   log10Ticks, scientificLinearTicks } from "./chartScales";
 import { tooltipPositionFromEvent } from "./chartLayout";
-import { compositeColorKeys, compositeDomains, compositeFacets, compositeGroups, compositeSample } from "./compositeGeometry";
+import { compositeColorKey, compositeColorKeys, compositeDomains, compositeFacets, compositeGroups, compositeSample } from "./compositeGeometry";
+
+// Eight distinct slots, mirrored by the standard composite publication palette.
+// Keep other chart types on the existing theme palette.
+const COMPOSITE_COLORS = ["#3f8f5c", "#3f7dc9", "#8a5fd1", "#d98a3d",
+  "#cf5354", "#d9b23d", "#168b91", "#bc568e"];
 
 export function CompositeChartMarks({ chartData, theme, width, height, onHover, wrapperRef,
   compact = false,
@@ -16,14 +21,16 @@ export function CompositeChartMarks({ chartData, theme, width, height, onHover, 
   if (!spec || width <= 0 || height <= 0) return null;
   const facets = compositeFacets(spec);
   const keys = compositeColorKeys(spec);
-  const colorFor = (group: string | null, index: number) =>
-    theme.categorical[(group == null ? index : Math.max(0, keys.indexOf(group))) % theme.categorical.length];
+  const colorFor = (key: string) => COMPOSITE_COLORS[keys.findIndex(entry => entry.key === key)];
+  const showLegend = !compact && (spec.layers.length > 1 || spec.layers.some(layer => layer.colorBy));
+  const legendColumns = width < 480 ? 2 : 4;
+  const legendHeight = showLegend ? Math.ceil(keys.length / legendColumns) * 15 + 5 : 0;
   const domain = compositeDomains(chartData);
   const cols = facets.length === 1 ? 1 : 2;
   const rows = Math.ceil(facets.length / cols);
   const gap = compact ? 4 : 12;
   const panelW = Math.max(1, (width - gap * (cols - 1)) / cols);
-  const panelH = Math.max(1, (height - gap * (rows - 1)) / rows);
+  const panelH = Math.max(1, (height - legendHeight - gap * (rows - 1)) / rows);
   const left = compact ? 3 : 62;
   const right = compact ? 3 : 14;
   const top = compact ? 3 : facets.length === 1 ? 14 : 27;
@@ -51,7 +58,7 @@ export function CompositeChartMarks({ chartData, theme, width, height, onHover, 
     <g className={compact ? "chart-composite-overview" : "chart-composite-marks"}>
       {facets.map((facet, panel) => {
         const px = (panel % cols) * (panelW + gap);
-        const py = Math.floor(panel / cols) * (panelH + gap);
+        const py = legendHeight + Math.floor(panel / cols) * (panelH + gap);
         const clipId = clipPrefix + "-" + panel;
         return <g key={escapeName(facet)} data-facet={escapeName(facet)} transform={`translate(${px} ${py})`}>
           {facet !== null && !compact && <text x={panelW / 2} y={15} fontSize={11}
@@ -67,7 +74,7 @@ export function CompositeChartMarks({ chartData, theme, width, height, onHover, 
             <g clipPath={`url(#${clipId})`}>
               {spec.layers.map((layer, layerIndex) =>
                 compositeGroups(spec, layer, facet).map(record => {
-                  const color = colorFor(record.group, layerIndex);
+                  const color = colorFor(compositeColorKey(layer, layerIndex, record.group));
                   const indices = compositeSample(spec, layer, record.indices, marksBudget);
                   const xx = indices.map(i => x(spec.numbers[layer.x][i]));
                   const yy = indices.map(i => y(spec.numbers[layer.y][i]));
@@ -76,9 +83,9 @@ export function CompositeChartMarks({ chartData, theme, width, height, onHover, 
                   const lower = layer.mark === "band"
                     ? indices.slice().reverse().map(i => x(spec.numbers[layer.x][i]) + "," + y(spec.numbers[layer.y2!][i])).join(" ")
                     : "";
-                  const name = (layer.label ?? layer.y) + (record.group === null ? "" : " · " + record.group);
+                  const name = (layer.label ?? layer.y) + (record.group === null ? "" : " · " + layer.colorBy + ": " + record.group);
                   const id = layerIndex + ":" + record.key;
-                  return <g key={id} data-layer={layer.mark} data-group={record.group ?? ""}>
+                  return <g key={id} data-layer={layer.mark} data-group={record.group ?? ""} data-color-field={layer.colorBy ?? ""}>
                     {layer.mark === "band" && <polygon className="chart-composite-band"
                       points={vertices + " " + lower} fill={color} fillOpacity={0.24} stroke={color}
                       strokeWidth={0.8} pointerEvents="none" />}
@@ -116,10 +123,11 @@ export function CompositeChartMarks({ chartData, theme, width, height, onHover, 
           </g>
         </g>;
       })}
-      {!compact && keys.length > 0 && <g className="chart-composite-legend" aria-label="Shared series palette">
-        {keys.slice(0, 8).map((key, i) => <g key={key} transform={`translate(${8 + (i % 4) * (width - 16) / 4} ${10 + Math.floor(i / 4) * 15})`}>
-          <circle cx={0} cy={0} r={3} fill={colorFor(key, i)} />
-          <text x={8} y={3} fontSize={9} fill={theme.text}>{key}</text>
+      {showLegend && <g className="chart-composite-legend" aria-label="Shared series palette">
+        {keys.map(({ key, label }, i) => <g key={key} transform={`translate(${8 + (i % legendColumns) * (width - 16) / legendColumns} ${10 + Math.floor(i / legendColumns) * 15})`}>
+          <title>{label}</title>
+          <circle cx={0} cy={0} r={3} fill={colorFor(key)} />
+          <text x={8} y={3} fontSize={9} fill={theme.text}>{label}</text>
         </g>)}
       </g>}
     </g>

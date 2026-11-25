@@ -63,13 +63,26 @@ export function compositeGroups(spec: CompositeSpec, layer: CompositeLayer, face
   return [...grouped.values()];
 }
 
-export function compositeColorKeys(spec: CompositeSpec): string[] {
-  const result: string[] = [];
-  for (const layer of spec.layers) {
+/** Structured identity prevents equal category text in different fields from
+ * silently sharing a color. Ungrouped layers have their own palette slots. */
+export function compositeColorKey(layer: CompositeLayer, index: number, group: string | null): string {
+  return layer.colorBy && group !== null ? JSON.stringify([layer.colorBy, group]) : JSON.stringify([index]);
+}
+
+export function compositeColorKeys(spec: CompositeSpec): { key: string; label: string }[] {
+  const result = new Map<string, string>();
+  spec.layers.forEach((layer, index) => {
     const values = layer.colorBy ? spec.categories?.[layer.colorBy] : undefined;
-    if (values) for (const value of values) if (!result.includes(value)) result.push(value);
-  }
-  return result;
+    if (values) {
+      for (const value of values) {
+        result.set(compositeColorKey(layer, index, value), layer.colorBy + ": " + value);
+      }
+    } else {
+      result.set(compositeColorKey(layer, index, null),
+        "Layer " + (index + 1) + ": " + (layer.label ?? layer.y));
+    }
+  });
+  return Array.from(result, ([key, label]) => ({ key, label }));
 }
 
 export function compositeSample(spec: CompositeSpec, layer: CompositeLayer, indices: number[], budget: number): number[] {

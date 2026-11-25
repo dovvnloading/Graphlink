@@ -131,3 +131,44 @@ def test_v2_save_reload_fidelity():
     restored_chart = next(node for node in restored.nodes.values() if node.kind == "chart")
     assert restored_chart.state.chart_type == "composite"
     assert restored_chart.state.chart_data == canonical
+
+def test_v2_shared_palette_is_field_aware_and_bounded():
+    raw = {
+        "type": "composite", "version": 2, "composite": {
+            "numbers": {"x": list(range(4)), "y": [1, 2, 3, 4]},
+            "categories": {"treatment": ["A", "B", "C", "D"], "batch": ["A", "B", "C", "D"]},
+            "layers": [
+                {"mark": "point", "x": "x", "y": "y", "colorBy": "treatment"},
+                {"mark": "point", "x": "x", "y": "y", "colorBy": "batch"},
+                {"mark": "line", "x": "x", "y": "y", "colorBy": "treatment"},
+            ],
+        },
+    }
+    canonical = canonicalize_chart_data(raw)
+    assert canonicalize_chart_data(canonical) == canonical
+    result = render_chart_publication("composite", canonical, width_mm=180, height_mm=100, fmt="svg")
+    assert b"Chart rendering issue" not in result
+    root = ET.fromstring(result)
+    text = " ".join("".join(item.itertext()) for item in root.iter() if item.tag.endswith("}text"))
+    for field in ("treatment", "batch"):
+        for value in ("A", "B", "C", "D"):
+            assert f"{field}: {value}" in text
+    # Repeated field bindings share slots, but an ungrouped layer needs one.
+    raw["composite"]["layers"].append({"mark": "area", "x": "x", "y": "y"})
+    with pytest.raises(ChartDataError, match="eight color legend entries"):
+        canonicalize_chart_data(raw)
+
+
+def test_v2_rejects_too_many_groups_across_color_fields():
+    raw = {
+        "type": "composite", "composite": {
+            "numbers": {"x": list(range(5)), "y": list(range(5))},
+            "categories": {"treatment": list("ABCDE"), "batch": list("ABCDE")},
+            "layers": [
+                {"mark": "point", "x": "x", "y": "y", "colorBy": "treatment"},
+                {"mark": "point", "x": "x", "y": "y", "colorBy": "batch"},
+            ],
+        },
+    }
+    with pytest.raises(ChartDataError, match="eight color legend entries"):
+        canonicalize_chart_data(raw)

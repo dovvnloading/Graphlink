@@ -118,3 +118,46 @@ describe("ChartSpec V2 composite figures", () => {
     for (const bad of cases) expect(() => canonicalizeChartSpec(bad)).toThrow();
   });
 });
+
+it("uses distinct, complete legend slots for multiple categorical fields and repeated layers", () => {
+  const data = canonicalizeChartSpec({ type: "composite", version: 2, composite: {
+    numbers: { x: [0, 1, 2, 3], y: [1, 2, 3, 4] },
+    categories: { treatment: ["A", "B", "C", "D"], batch: ["A", "B", "C", "D"] },
+    layers: [
+      { mark: "point", x: "x", y: "y", colorBy: "treatment" },
+      { mark: "point", x: "x", y: "y", colorBy: "batch" },
+      { mark: "line", x: "x", y: "y", colorBy: "treatment" },
+    ],
+  } });
+  const { container } = render(<ChartRenderer chartType="composite" chartData={data} />);
+  const legend = [...container.querySelectorAll(".chart-composite-legend > g")];
+  expect(legend).toHaveLength(8);
+  expect(legend.map(entry => entry.querySelector("text")?.textContent)).toEqual([
+    "treatment: A", "treatment: B", "treatment: C", "treatment: D",
+    "batch: A", "batch: B", "batch: C", "batch: D",
+  ]);
+  const fills = legend.map(entry => entry.querySelector("circle")?.getAttribute("fill"));
+  expect(new Set(fills).size).toBe(8);
+  const treatment = container.querySelector('[data-color-field="treatment"][data-group="A"] .chart-composite-point');
+  const batch = container.querySelector('[data-color-field="batch"][data-group="A"] .chart-composite-point');
+  expect(treatment?.getAttribute("fill")).toBe(fills[0]);
+  expect(batch?.getAttribute("fill")).toBe(fills[4]);
+  expect(container.querySelector('[data-color-field="treatment"][data-group="A"] .chart-composite-line')?.getAttribute("stroke")).toBe(fills[0]);
+  // An ungrouped layer also needs a unique color slot; a ninth entry is
+  // rejected rather than silently omitting a legend item.
+  expect(() => canonicalizeChartSpec({ ...data, composite: { ...data.composite!,
+    layers: [...data.composite!.layers, { mark: "area", x: "x", y: "y" }],
+  } })).toThrow(/eight color legend entries/);
+});
+
+it("rejects too many groups across independently valid categorical fields", () => {
+  const groups = ["A", "B", "C", "D", "E"];
+  expect(() => canonicalizeChartSpec({ type: "composite", composite: {
+    numbers: { x: [0, 1, 2, 3, 4], y: [1, 2, 3, 4, 5] },
+    categories: { treatment: groups, batch: groups },
+    layers: [
+      { mark: "point", x: "x", y: "y", colorBy: "treatment" },
+      { mark: "point", x: "x", y: "y", colorBy: "batch" },
+    ],
+  } })).toThrow(/eight color legend entries/);
+});

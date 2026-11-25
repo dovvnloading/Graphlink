@@ -73,6 +73,11 @@ PUBLICATION_COLORS = (
     "#0072B2", "#E69F00", "#009E73", "#CC79A7",
     "#D55E00", "#56B4E9", "#F0E442", "#000000",
 )
+# Standard composite figures share the same eight distinct colors as the live SVG.
+COMPOSITE_COLORS = (
+    "#3f8f5c", "#3f7dc9", "#8a5fd1", "#d98a3d",
+    "#cf5354", "#d9b23d", "#168b91", "#bc568e",
+)
 MONOCHROME_COLORS = ("#202020", "#5A5A5A", "#878787", "#B6B6B6")
 PUBLICATION_HATCHES = ("/", "\\\\", "xx", "--", "++", "oo", "..", "**")
 
@@ -1030,15 +1035,16 @@ def _render_composite_chart(figure, data: dict[str, Any], theme: dict[str, Any])
         if layer["mark"] == "area":
             y_values.append(0.0)
 
-    # Category-to-color mapping is global, not per panel; colors do not
-    # shift when a category is absent from one facet.
-    category_colors = {}
-    for layer in spec["layers"]:
+    # Match the live SVG's globally ordered field/value or ungrouped-layer
+    # slots. Facets reuse the same identity even when a group is absent.
+    color_slots = {}
+    for layer_index, layer in enumerate(spec["layers"]):
         color_by = layer.get("colorBy")
-        if color_by:
-            for value in categories[color_by]:
-                if value not in category_colors:
-                    category_colors[value] = theme["cycle"][len(category_colors) % len(theme["cycle"])]
+        keys = [(color_by, value) for value in categories[color_by]] if color_by else [(layer_index,)]
+        for key in keys:
+            color_slots.setdefault(key, len(color_slots))
+    palette = (MONOCHROME_COLORS if theme.get("grayscale") else
+               PUBLICATION_COLORS if theme.get("colorblind") else COMPOSITE_COLORS)
 
     x_unit, y_unit = data.get("xUnit"), data.get("yUnit")
     xlabel = data["xAxis"] + (f" ({x_unit})" if x_unit else "")
@@ -1073,26 +1079,33 @@ def _render_composite_chart(figure, data: dict[str, Any], theme: dict[str, Any])
                     continue
                 xx = [numbers[layer["x"]][j] for j in indices]
                 yy = [numbers[layer["y"]][j] for j in indices]
-                color = (category_colors[group] if group is not None
-                         else theme["cycle"][layer_index % len(theme["cycle"])])
+                slot = color_slots[(color_by, group) if group is not None else (layer_index,)]
+                color = palette[slot % len(palette)]
                 label = layer.get("label") or layer["y"]
                 if group is not None:
-                    label = f"{label} · {group}"
+                    label = f"{label} · {color_by}: {group}"
+                else:
+                    label = f"Layer {layer_index + 1}: {label}"
                 mark = layer["mark"]
+                # In grayscale, reused luminance slots get different hatches,
+                # line styles or marker shapes instead of relying on color alone.
+                hatch = PUBLICATION_HATCHES[slot] if theme.get("grayscale") else None
+                line_style = (("-", "--", "-.", ":")[(layer_index + slot // len(palette)) % 4]
+                              if theme.get("grayscale") else ("-", "--", "-.", ":")[layer_index % 4])
+                marker = (("o", "s", "^", "D", "v", "P", "X", "*")[slot]
+                          if theme.get("grayscale") else ("o", "s", "^", "D")[layer_index % 4])
                 if mark == "band":
                     upper = [numbers[layer["y2"]][j] for j in indices]
                     ax.fill_between(xx, yy, upper, facecolor=color, alpha=0.24,
-                                    linewidth=0.8, edgecolor=color, label=label)
+                                    linewidth=0.8, edgecolor=color, hatch=hatch, label=label)
                 elif mark == "area":
                     ax.fill_between(xx, 0, yy, facecolor=color, alpha=0.24,
-                                    linewidth=0.8, edgecolor=color, label=label)
+                                    linewidth=0.8, edgecolor=color, hatch=hatch, label=label)
                 elif mark == "line":
-                    ax.plot(xx, yy, color=color, linestyle=("-", "--", "-.", ":")[layer_index % 4],
-                            linewidth=1.8, label=label)
+                    ax.plot(xx, yy, color=color, linestyle=line_style, linewidth=1.8, label=label)
                 else:
                     ax.scatter(xx, yy, s=19, color=color, alpha=0.87,
-                               marker=("o", "s", "^", "D")[layer_index % 4],
-                               label=label, zorder=4)
+                               marker=marker, label=label, zorder=4)
         if facet is not None:
             ax.set_title(f"{facet_field}: {facet}", fontsize=9, color=theme["text"])
         if data.get("xScale") == "log10":
@@ -1115,7 +1128,7 @@ def _render_composite_chart(figure, data: dict[str, Any], theme: dict[str, Any])
                 ymin, ymax = ymin - delta, ymax + delta
         ax.set_xlim(xmin, xmax)
         ax.set_ylim(ymin, ymax)
-        if len(spec["layers"]) > 1 or category_colors:
+        if len(spec["layers"]) > 1 or any(layer.get("colorBy") for layer in spec["layers"]):
             handles, labels = ax.get_legend_handles_labels()
             unique = dict(zip(labels, handles))
             if unique:

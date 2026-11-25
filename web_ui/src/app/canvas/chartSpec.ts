@@ -558,6 +558,9 @@ function canonicalizeComposite(raw: Record<string, unknown>, result: ChartDataRo
   }
 
   const layers: NonNullable<ChartDataRow["composite"]>["layers"] = [];
+  // One global color/legend slot per (categorical field, value) or
+  // ungrouped layer. Reusing a field across layers does not spend slots twice.
+  const colorSlots = new Set<string>();
   const xBounds: number[] = [];
   const yBounds: number[] = [];
   for (const [index, entry] of rawLayers.entries()) {
@@ -591,10 +594,13 @@ function canonicalizeComposite(raw: Record<string, unknown>, result: ChartDataRo
       if (typeof entry.colorBy !== "string" || !Object.hasOwn(categories, entry.colorBy)) {
         throw new ChartSpecError("Composite colorBy must name a categorical column");
       }
-      if (new Set(categories[entry.colorBy]).size > 8) {
-        throw new ChartSpecError("Composite colorBy supports at most eight groups");
-      }
+      for (const value of categories[entry.colorBy]) colorSlots.add(JSON.stringify([entry.colorBy, value]));
       layer.colorBy = entry.colorBy;
+    } else {
+      colorSlots.add(JSON.stringify([index]));
+    }
+    if (colorSlots.size > 8) {
+      throw new ChartSpecError("Composite figures support at most eight color legend entries across all layers");
     }
     if (entry.label != null) layer.label = cleanText(entry.label, "Composite layer label");
     if (mark === "area") yBounds.push(0);

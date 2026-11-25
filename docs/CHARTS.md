@@ -393,7 +393,12 @@ the minimap preview). The sampling is deterministic: input-order buckets
 contribute X extrema, Y/error endpoints extrema, plus the first and last
 observations. On pan and zoom, visible observations are reselected from the
 full original array. For scatter, samples are additionally restricted by
-the current Y viewport. This is a **display-only** approximation: it
+the current Y viewport. A live scientific line uses one connected path per
+series with all original vertices in source order (at most 10,000 total),
+clipped to the viewport; only its point/error glyphs are sampled. This
+preserves crossing segments even without visible vertices and prevents
+invented connections across nonmonotonic traces. Marker sampling is a
+**display-only** approximation: it
 does not represent point density and must not be used for inferential
 calculations. The chart status indicates when sampling is active.
 The publication exporter and numerical fit use all measurements.
@@ -447,7 +452,12 @@ reference numeric columns by name:
 - `area`: filled area down to numeric zero (linear Y axes only).
 
 `colorBy` optionally binds each layer to a categorical column, with
-a maximum of eight groups. All categorical keys and field references
+a maximum of eight distinct color legend entries **across the whole figure**.
+Each (categorical column, category value) pair gets a shared color slot,
+and each ungrouped layer gets its own slot. Reusing the same field across
+layers reuses its slots; equal category names from different fields remain
+distinct. Live and publication legends identify the field and category.
+All categorical keys and field references
 are validated; unknown expressions, scripts, URLs and callbacks are
 rejected. Original arrays are never modified or ordered in place.
 Tooltips use original numeric coordinates, regardless of display sampling.
