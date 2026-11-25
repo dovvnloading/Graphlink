@@ -187,6 +187,7 @@ def vector_search(
     model_id: str,
     collection_id: int | None = None,
     k: int = 10,
+    scope: str = "all",
 ) -> list[dict]:
     """Stream a flat cosine scan and materialize only the best k passages.
 
@@ -199,7 +200,9 @@ def vector_search(
         raise ValueError(f"k must be >= 1, got {k!r}.")
     if not provider.capabilities.embedding:
         raise ValueError(f"Provider for model {model_id!r} does not support embeddings.")
-    if not query.strip() or not has_embeddings_for_search(db_path, model_id, collection_id=collection_id):
+    if not query.strip() or not has_embeddings_for_search(
+        db_path, model_id, collection_id=collection_id, scope=scope,
+    ):
         return []
 
     query_vectors = cast(_EmbeddingCapable, provider).embed([query])
@@ -219,7 +222,9 @@ def vector_search(
     # Negative IDs give deterministic ties without relying on SQLite scan
     # order or numpy's unstable default argsort.
     winners: list[tuple[float, int]] = []
-    for batch in iter_embedding_vector_batches(db_path, model_id, collection_id=collection_id):
+    for batch in iter_embedding_vector_batches(
+        db_path, model_id, collection_id=collection_id, scope=scope,
+    ):
         mismatched = next(
             ((chunk_id, dim) for chunk_id, dim, vector in batch
              if dim != query_array.size or len(vector) != dim * 4), None,
@@ -251,7 +256,7 @@ def vector_search(
 
     ranked = sorted(winners, reverse=True)
     metadata = embedding_hit_metadata(
-        db_path, [-chunk_id for _, chunk_id in ranked], collection_id=collection_id,
+        db_path, [-chunk_id for _, chunk_id in ranked], collection_id=collection_id, scope=scope,
     )
     return [
         {**metadata[-negative_id], "score": score}

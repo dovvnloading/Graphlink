@@ -153,6 +153,7 @@ def hybrid_search(
     collection_id: int | None = None,
     k: int = 10,
     ranking: str = DEFAULT_RANKING,
+    scope: str = "all",
 ) -> list[dict]:
     """Search locally, rerank independently by index order and cite every hit.
 
@@ -168,7 +169,7 @@ def hybrid_search(
     limit = k if ranking == "legacy" else max(
         k, min(k * _RERANK_CANDIDATE_MULTIPLIER, _MAX_CANDIDATES_PER_INDEX)
     )
-    lexical_results = search_chunks(db_path, query, collection_id=collection_id, k=limit)
+    lexical_results = search_chunks(db_path, query, collection_id=collection_id, k=limit, scope=scope)
     vector_results: list[dict] = []
     if (
         embedding_provider is not None
@@ -178,7 +179,7 @@ def hybrid_search(
     ):
         vector_results = vector_search(
             db_path, embedding_provider, query,
-            model_id=embedding_model_id, collection_id=collection_id, k=limit,
+            model_id=embedding_model_id, collection_id=collection_id, k=limit, scope=scope,
         )
     # Shared by the Knowledge panel, chat grounding, and knowledge.search,
     # in both legacy and reranked modes.

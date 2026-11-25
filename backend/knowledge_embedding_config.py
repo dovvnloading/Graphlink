@@ -134,7 +134,7 @@ def test_embedding_choice(
 
 def configured_hybrid_search(
     db_path: Path, query: str, *, settings_manager=None,
-    collection_id: int | None = None, k: int = 10,
+    collection_id: int | None = None, k: int = 10, scope: str = "all",
 ) -> list[dict]:
     """Use cached vectors, with one cold-collection compatibility batch at most."""
     if settings_manager is not None:
@@ -166,11 +166,11 @@ def configured_hybrid_search(
                                 pending_rows=cold_rows, should_cancel=lambda: not still_allowed(),
                             )
                             if not still_allowed():
-                                return hybrid_search(db_path, query, collection_id=collection_id, k=k)
+                                return hybrid_search(db_path, query, collection_id=collection_id, k=k, scope=scope)
                     return hybrid_search(
                         db_path, query, embedding_provider=guarded,
-                        embedding_model_id=model_id, collection_id=collection_id, k=k,
+                        embedding_model_id=model_id, collection_id=collection_id, k=k, scope=scope,
                     )
         except Exception:
             logger.warning("Embedding service unavailable; using keyword knowledge search", exc_info=True)
-    return hybrid_search(db_path, query, collection_id=collection_id, k=k)
+    return hybrid_search(db_path, query, collection_id=collection_id, k=k, scope=scope)
