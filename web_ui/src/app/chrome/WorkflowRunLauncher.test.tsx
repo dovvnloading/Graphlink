@@ -61,7 +61,8 @@ it("round-trips edited typed values, invalidates the old preview, and previews t
     draft: { kind: "text", text: "new" },
     other: { kind: "text", text: "updated" },
     options: { kind: "json", value: { limit: 5, active: true } },
-    rows: { kind: "table", columns: ["name", "count"], rows: [["Ops, east", 3]] },
+    rows: { kind: "table", columns: ["name", "count", "identifier", "flag", "empty", "missing"],
+      rows: [["Ops, east", 3, "001", true, "", null]] },
   });
   editJson(edited);
   await user.click(toggle());
@@ -69,7 +70,10 @@ it("round-trips edited typed values, invalidates the old preview, and previews t
   expect(field("Draft")).toHaveValue("new");
   expect(field("Other")).toHaveValue("updated");
   expect(field("Options (optional)")).toHaveValue(JSON.stringify({ limit: 5, active: true }, null, 2));
-  expect(field("Rows (optional)")).toHaveValue('name,count\n"Ops, east",3');
+  expect(field("Rows (optional)")).toHaveValue(JSON.stringify({
+    columns: ["name", "count", "identifier", "flag", "empty", "missing"],
+    rows: [["Ops, east", 3, "001", true, "", null]],
+  }, null, 2));
   await user.click(toggle());
   expect(JSON.parse(jsonEditor().value)).toEqual(edited);
   await user.click(toggle());
@@ -114,7 +118,7 @@ it("keeps malformed request JSON in the editor until corrected", async () => {
 it.each([
   ["file", request({ attachment: { kind: "file", asset } })],
   ["image", request({ picture: { kind: "image", asset: { ...asset, media_type: "image/png", filename: "picture.png" } } })],
-  ["lossy table", request({ rows: { kind: "table", columns: ["identifier"], rows: [["001"]] } })],
+  ["malformed table", request({ rows: { kind: "table", columns: ["identifier"], rows: [["001", "extra"]] } })],
   ["unknown input", request({ unexpected: { kind: "text", text: "extra" } })],
   ["extra request field", { ...request({}), extra: "keep" }],
   ["edited workflow", { ...request({}), spec: { ...spec, name: "Different workflow" } }],
