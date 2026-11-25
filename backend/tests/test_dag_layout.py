@@ -76,10 +76,13 @@ def test_converging_branch_is_below_both_parents_and_stays_centred():
 
 def test_rank_solver_reorders_crossing_siblings_deterministically():
     doc = SceneDocument()
+    root = doc.add_chat_node(500, -500, "root", True)
     a = doc.add_chat_node(0, 0, "A", True)
     b = doc.add_chat_node(1000, 0, "B", True)
     x = doc.add_chat_node(0, 900, "X", False)
     y = doc.add_chat_node(1000, 900, "Y", False)
+    doc.connect(root.id, a.id)
+    doc.connect(root.id, b.id)
     doc.connect(a.id, y.id)
     doc.connect(b.id, x.id)
     plan = make_organization_plan(doc, layout_style="dag")
