@@ -11,6 +11,7 @@ import { formatLegacyTick, type Scale } from "./chartScales";
 export interface XTick {
   position: number;
   lines: string[];
+  anchor?: "start" | "middle" | "end";
 }
 
 export interface CartesianAxesProps {
@@ -22,6 +23,7 @@ export interface CartesianAxesProps {
   yTickFormat?: (value: number) => string;
   xAxisLabel: string;
   yAxisLabel: string;
+  yAxisTitleX?: number;
   xTicks: XTick[];
   rotateXTicks: boolean;
   /** Pixel y-position of the zero baseline, when the value domain spans
@@ -42,6 +44,7 @@ export function CartesianAxes({
   yTickFormat = formatLegacyTick,
   xAxisLabel,
   yAxisLabel,
+  yAxisTitleX = -44,
   xTicks,
   rotateXTicks,
   zeroLineY = null,
@@ -69,7 +72,7 @@ export function CartesianAxes({
           key={tick.position}
           x={tick.position}
           y={innerHeight + 16}
-          textAnchor={rotateXTicks ? "end" : "middle"}
+          textAnchor={rotateXTicks ? "end" : (tick.anchor ?? "middle")}
           fill={theme.textMuted}
           fontSize={11}
           transform={rotateXTicks ? `rotate(-25 ${tick.position} ${innerHeight + 16})` : undefined}
@@ -88,12 +91,12 @@ export function CartesianAxes({
       )}
       {yAxisLabel && (
         <text
-          x={-44}
+          x={yAxisTitleX}
           y={innerHeight / 2}
           textAnchor="middle"
           fill={theme.textMuted}
           fontSize={11}
-          transform={`rotate(-90 ${-44} ${innerHeight / 2})`}
+          transform={`rotate(-90 ${yAxisTitleX} ${innerHeight / 2})`}
         >
           {yAxisLabel}
         </text>

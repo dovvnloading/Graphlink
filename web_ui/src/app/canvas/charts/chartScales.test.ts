@@ -7,6 +7,7 @@ import {
   createLinearScale,
   formatValue,
   formatLegacyTick,
+  fitContinuousTicks,
   legacyLinePadding,
   mean,
   median,
@@ -222,6 +223,26 @@ describe("legacy scientific-magnitude axes", () => {
     expect(formatValue(1e-120)).toBe("1e-120");
     expect(formatValue(-1e-120)).toBe("-1e-120");
     expect(formatLegacyTick(0.012)).toBe("0.012");
+  });
+
+  it.each([215, 335, 535])("fits exact scientific tick labels at a %spx plot width", (width) => {
+    const domain: [number, number] = [1e-120, 2e-120];
+    const scale = createLinearScale(domain, [0, width]);
+    const ticks = niceTicks(...domain, 6).filter((tick) => tick >= domain[0] && tick <= domain[1]);
+    const fitted = fitContinuousTicks(ticks, scale, width);
+    expect(fitted.length).toBeGreaterThan(1);
+    expect(fitted[0]).toEqual({ position: 0, lines: ["1e-120"], anchor: "start" });
+    expect(fitted[fitted.length - 1]).toEqual({ position: width, lines: ["2e-120"], anchor: "end" });
+    let previousRight = -4;
+    for (const tick of fitted) {
+      const labelWidth = tick.lines[0].length * 6.5;
+      const left = tick.anchor === "start" ? tick.position
+        : tick.anchor === "end" ? tick.position - labelWidth : tick.position - labelWidth / 2;
+      expect(left).toBeGreaterThanOrEqual(previousRight + 4);
+      expect(left + labelWidth).toBeLessThanOrEqual(width);
+      expect(tick.position).toBe(scale(Number(tick.lines[0])));
+      previousRight = left + labelWidth;
+    }
   });
 
   it("keeps constant tiny domains and bin counts in data units", () => {

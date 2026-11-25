@@ -177,6 +177,37 @@ export function formatLegacyTick(value: number): string {
   return Number(label.replace(/,/g, "")) === value ? label : String(value);
 }
 
+/** Fit exact continuous-axis labels inside the plot, leaving their data
+ * positions unchanged. Prefer the first and last ticks when both fit.
+ * A conservative per-character width estimate matches chartLayout's
+ * margin sizing; no DOM measurement or locale-dependent truncation.
+ */
+export function fitContinuousTicks(ticks: number[], scale: Scale, plotWidth: number): {
+  position: number; lines: string[]; anchor: "start" | "middle" | "end";
+}[] {
+  const gap = 4;
+  const candidates = ticks.map((tick) => {
+    const position = scale(tick);
+    const label = formatLegacyTick(tick);
+    const width = label.length * 6.5;
+    const anchor: "start" | "middle" | "end" = position - width / 2 < 0 ? "start"
+      : position + width / 2 > plotWidth ? "end" : "middle";
+    const left = anchor === "start" ? position : anchor === "end" ? position - width : position - width / 2;
+    return { position, lines: [label], anchor, left, right: left + width };
+  }).filter(({ left, right }) => left >= 0 && right <= plotWidth);
+  if (!candidates.length) return [];
+  const first = candidates[0];
+  const last = candidates[candidates.length - 1];
+  const keepLast = last !== first && first.right + gap <= last.left;
+  const selected = [first];
+  for (const candidate of candidates.slice(1, keepLast ? -1 : undefined)) {
+    if (candidate.left >= selected[selected.length - 1].right + gap &&
+        (!keepLast || candidate.right + gap <= last.left)) selected.push(candidate);
+  }
+  if (keepLast) selected.push(last);
+  return selected.map(({ position, lines, anchor }) => ({ position, lines, anchor }));
+}
+
 /** Keep constant tiny lines in their own units, not a unit-sized domain.
  * Shared with chartFrame so reset/zoom uses exactly the marks' base domain. */
 export function legacyLinePadding(min: number, max: number): number {

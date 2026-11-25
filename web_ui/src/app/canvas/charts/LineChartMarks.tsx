@@ -75,6 +75,7 @@ export function LineChartMarks({ chartData, theme, width, height, onHover, wrapp
         yScale={yScale}
         xAxisLabel={chartData.xAxis ?? ""}
         yAxisLabel={chartData.yAxis ?? ""}
+        yAxisTitleX={8 - marginLeft}
         xTicks={xTicks}
         rotateXTicks={rotate}
         zeroLineY={visibleY[0] < 0 && visibleY[1] > 0 ? yScale(0) : null}

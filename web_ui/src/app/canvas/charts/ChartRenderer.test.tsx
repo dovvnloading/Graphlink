@@ -230,6 +230,25 @@ describe("legacy chart numeric ranges", () => {
     }
   });
 
+  it.each(["bar", "line"] as const)("%s moves its axis title outside longer scientific ticks", (kind) => {
+    const chartData: ChartDataRow = { type: kind, labels: ["A", "B"], values: [1e-120, 2e-120], yAxis: "Measurement" };
+    const { container } = render(<ChartRenderer chartType={kind} chartData={chartData} />);
+    const title = Array.from(container.querySelectorAll(".chart-axes text")).find((element) => element.textContent === "Measurement");
+    expect(title).toBeDefined();
+    expect(Number(title!.getAttribute("x"))).toBeLessThan(-44);
+  });
+
+  it("anchors exact histogram endpoint labels inside the plot", () => {
+    const chartData: ChartDataRow = { type: "histogram", values: [1e-120, 2e-120], bins: 2 };
+    const { container } = render(<ChartRenderer chartType="histogram" chartData={chartData} />);
+    const ticks = Array.from(container.querySelectorAll(".chart-axes text")).filter((element) => element.querySelector("tspan"));
+    expect(ticks.length).toBeGreaterThan(1);
+    expect(ticks[0]).toHaveTextContent("1e-120");
+    expect(ticks[0]).toHaveAttribute("text-anchor", "start");
+    expect(ticks[ticks.length - 1]).toHaveTextContent("2e-120");
+    expect(ticks[ticks.length - 1]).toHaveAttribute("text-anchor", "end");
+  });
+
   it.each(["bar", "line", "histogram"] as const)("%s rejects unsupported extreme data with a useful error", (kind) => {
     for (const values of [[Number.MIN_VALUE, 2 * Number.MIN_VALUE],
       [1e308, 1.0000000000000002e308], [-1e308, 1e308]]) {
