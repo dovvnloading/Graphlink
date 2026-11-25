@@ -24,21 +24,31 @@ import re
 
 import api_provider
 
-# Compiled once at module import instead of once per call (legacy's own
-# _parse_response re-compiles both patterns on every invocation) - a harmless
-# efficiency improvement over legacy, not a behavior change.
+# Compile once at module import. A fence's entire info line is separate from
+# its code body; the first whitespace-delimited info token is the language.
+# Match complete fence lines and require a closing fence at least as long as
+# the opener, so literal shorter fences inside code are not delimiters.
 CODE_BLOCK_TAG_PATTERN = re.compile(r"<code_block>([\s\S]*?)</code_block>", re.IGNORECASE)
-CODE_FENCE_PATTERN = re.compile(r"```(\w*)\s*\n?([\s\S]*?)\s*```")
+CODE_FENCE_PATTERN = re.compile(
+    r"^[ \t]*(?P<fence>`{3,})(?P<info>[^`\r\n]*)\r?\n"
+    r"(?P<code>[\s\S]*?)^[ \t]*(?P=fence)`*[ \t]*(?=\r?$)",
+    re.MULTILINE,
+)
 
 PLACEHOLDER_GENERATED_CONTENT = "[Generated Content]"
 PLACEHOLDER_ASSISTANT_REASONING = "[Assistant Reasoning]"
 PLACEHOLDER_EMPTY_RESPONSE = "[Empty Response]"
 
 
+def _fence_language(match: re.Match[str]) -> str:
+    tokens = match.group("info").split(maxsplit=1)
+    return tokens[0] if tokens else ""
+
+
 def parse_response(response_text: str) -> list[dict]:
     """Split a flat LLM reply into ordered thinking/text/code parts.
 
-    Exact port of graphlink_window_actions.py's WindowActionsMixin._parse_response.
+    Based on graphlink_window_actions.py's WindowActionsMixin._parse_response.
     The returned list, when multiple types are present, is always ordered
     thinking (if any), then text (if any), then code (if any) - never
     interleaved, never more than one of each type. The "language" key exists
@@ -63,15 +73,15 @@ def parse_response(response_text: str) -> list[dict]:
         ).strip()
         inner_matches = list(CODE_FENCE_PATTERN.finditer(code_content_raw))
         if inner_matches:
-            language = inner_matches[0].group(1).strip()
-            code_snippets = [m.group(2).strip() for m in inner_matches]
+            language = _fence_language(inner_matches[0])
+            code_snippets = [m.group("code").strip() for m in inner_matches]
         else:
             code_snippets = [code_content_raw]
     else:
         matches = list(CODE_FENCE_PATTERN.finditer(remaining_text))
         if matches:
-            language = matches[0].group(1).strip()
-            code_snippets = [m.group(2).strip() for m in matches]
+            language = _fence_language(matches[0])
+            code_snippets = [m.group("code").strip() for m in matches]
             text_content = CODE_FENCE_PATTERN.sub("", remaining_text).strip()
         else:
             text_content = remaining_text.strip()

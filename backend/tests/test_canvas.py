@@ -1295,7 +1295,13 @@ def test_regenerate_response_streams_with_node_scoped_identity():
     asyncio.run(run())
 
 
-def test_regenerate_response_replaces_code_child_not_accumulates():
+@pytest.mark.parametrize("language, code", [
+    ("python", "print('two')"),
+    ("c++", "#include <iostream>\nint main() {}"),
+    ("c#", "using System;\nConsole.WriteLine(1);"),
+    ("objective-c", "#import <Foundation/Foundation.h>\nint main() {}"),
+])
+def test_regenerate_response_replaces_code_child_not_accumulates(language, code):
     async def run():
         bus, document, recorder, dispatcher = make_bus_with_dispatcher()
 
@@ -1314,7 +1320,7 @@ def test_regenerate_response_replaces_code_child_not_accumulates():
         assert len([n for n in document.nodes.values() if n.kind == "code"]) == 1
 
         def second_reply(task, messages, **kwargs):
-            return {"message": {"content": "Now:\n\n```python\nprint('two')\n```"}}
+            return {"message": {"content": f"Now:\n\n```{language}\n{code}\n```"}}
 
         with patch.object(api_provider, "USE_API_MODE", False), \
                 patch.object(api_provider, "LOCAL_PROVIDER_TYPE", task_config.LOCAL_PROVIDER_OLLAMA), \
@@ -1326,7 +1332,8 @@ def test_regenerate_response_replaces_code_child_not_accumulates():
 
         code_nodes = [n for n in document.nodes.values() if n.kind == "code"]
         assert len(code_nodes) == 1, "the old code child must be replaced, not accumulated"
-        assert code_nodes[0].state.code == "print('two')"
+        assert code_nodes[0].state.language == language
+        assert code_nodes[0].state.code == code
 
     asyncio.run(run())
 
@@ -2263,7 +2270,13 @@ def test_send_message_reply_that_is_genuinely_empty_creates_no_assistant_node():
     asyncio.run(run())
 
 
-def test_send_message_reply_with_code_fence_creates_code_child_and_edge():
+@pytest.mark.parametrize("language, code", [
+    ("python", "print('hi')"),
+    ("c++", "#include <iostream>\nint main() {}"),
+    ("c#", "using System;\nConsole.WriteLine(1);"),
+    ("objective-c", "#import <Foundation/Foundation.h>\nint main() {}"),
+])
+def test_send_message_reply_with_code_fence_creates_code_child_and_edge(language, code):
     # R4.3b: a reply with leading text plus a fenced code block must split
     # into a real code-kind child node (correct language/content) connected
     # to the assistant node by a real edge - the assistant node's own
@@ -2272,7 +2285,7 @@ def test_send_message_reply_with_code_fence_creates_code_child_and_edge():
         bus, document, recorder, dispatcher = make_bus_with_dispatcher()
 
         def fake_chat(task, messages, **kwargs):
-            return {"message": {"content": "Here is the fix:\n\n```python\nprint('hi')\n```"}}
+            return {"message": {"content": f"Here is the fix:\n\n```{language}\n{code}\n```"}}
 
         with patch.object(api_provider, "USE_API_MODE", False), \
                 patch.object(api_provider, "LOCAL_PROVIDER_TYPE", task_config.LOCAL_PROVIDER_OLLAMA), \
@@ -2292,8 +2305,8 @@ def test_send_message_reply_with_code_fence_creates_code_child_and_edge():
         code_nodes = [n for n in document.nodes.values() if n.kind == "code"]
         assert len(code_nodes) == 1
         code_node = code_nodes[0]
-        assert code_node.state.language == "python"
-        assert code_node.state.code == "print('hi')"
+        assert code_node.state.language == language
+        assert code_node.state.code == code
 
         assert any(
             e.source == assistant_node.id and e.target == code_node.id
