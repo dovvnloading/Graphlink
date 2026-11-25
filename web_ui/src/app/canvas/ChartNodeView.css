@@ -87,3 +87,12 @@
 }
 .chart-composite-recommendation { display: flex; flex-wrap: wrap; align-items: center; gap: var(--gl-space-2); }
 .chart-composite-recommendation span { color: var(--gl-surface-text-secondary); }
+
+.chart-composite-selection-tools {
+  display: flex; flex-wrap: nowrap; align-items: center; gap: var(--gl-space-2);
+  min-height: 28px; overflow-x: auto; overflow-y: hidden;
+  color: var(--gl-surface-text-secondary); font-size: var(--gl-text-xs);
+}
+.chart-composite-selection-tools [role="status"] { white-space: nowrap; }
+.chart-composite-selection-tools [role="alert"] { color: var(--gl-semantic-status-error); }
+.chart-composite-selection-tools > button { flex-shrink: 0; }

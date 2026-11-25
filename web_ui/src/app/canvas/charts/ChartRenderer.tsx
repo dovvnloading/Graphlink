@@ -20,7 +20,7 @@ import { IconButton } from "../../ui/IconButton";
 import { ToggleButton } from "../../ui/ToggleButton";
 import { supportsChartAnalysis } from "./chartViewport";
 import { ChartAnalysisPane } from "./ChartAnalysisPane";
-import type { ChartDataRow } from "../../../lib/bridge-core/generated/scene-state";
+import type { ChartDataRow, ChartCompositeSpecRow } from "../../../lib/bridge-core/generated/scene-state";
 import { canonicalizeChartSpec, canonicalizeChartAnalysis, ChartSpecError, usesScientificMarks, type ChartAnalysis } from "../chartSpec";
 import { useChartTheme, useElementSize } from "./chartHooks";
 import { useZoomPane } from "./useZoomPane";
@@ -43,16 +43,27 @@ export interface ChartRendererProps {
   chartData: ChartDataRow;
   onAnalysisChange?: (analysis: ChartAnalysis) => void | Promise<void>;
   onCompositeDesignChange?: (design: CompositeDesign, expected: CompositeDesign) => Promise<void>;
+  onBranchSelection?: (indices: number[], expected: ChartCompositeSpecRow) => Promise<void>;
 }
 
-function ChartRenderer({ chartType, chartData, onAnalysisChange, onCompositeDesignChange }: ChartRendererProps) {
+function ChartRenderer({ chartType, chartData, onAnalysisChange, onCompositeDesignChange, onBranchSelection }: ChartRendererProps) {
   const [wrapperRef, size] = useElementSize<HTMLDivElement>();
   const theme = useChartTheme(wrapperRef);
   const [interactive, setInteractive] = useState(false);
   const [compositeEditorOpen, setCompositeEditorOpen] = useState(false);
   const [compositePreview, setCompositePreview] = useState<{ source: ChartDataRow; value: ChartDataRow } | null>(null);
+  const [brushMode, setBrushMode] = useState(false);
+  const [rowSelection, setRowSelection] = useState<{ source: ChartDataRow; indices: number[] } | null>(null);
+  const [selectionError, setSelectionError] = useState("");
+  const [creatingSubset, setCreatingSubset] = useState(false);
+  const selectedIndices = rowSelection?.source === chartData ? rowSelection.indices : [];
+  const fullRowCount = chartData.composite
+    ? Object.values(chartData.composite.numbers)[0]?.length ?? 0 : 0;
+  const canBranchSelection = selectedIndices.length >= 2 && selectedIndices.length < fullRowCount;
   const { zoom, isZoomed, handlers, reset } = useZoomPane(interactive, () => setInteractive(true));
-  const plotHeight = Math.max(1, size.height - (chartType === "composite" && compositeEditorOpen ? 215 : 32));
+  const plotHeight = Math.max(1, size.height
+    - (chartType === "composite" && compositeEditorOpen ? 215 : 32)
+    - (chartType === "composite" ? 34 : 0));
   useEffect(() => {
     if (!interactive) return;
     const outside = (event: globalThis.PointerEvent) => {
@@ -162,6 +173,34 @@ function ChartRenderer({ chartType, chartData, onAnalysisChange, onCompositeDesi
           {heatmapError && <span role="alert">{heatmapError}</span>}
         </>}
       </div>
+      {chartType === "composite" && <div className="chart-composite-selection-tools nodrag nowheel nopan">
+        <ToggleButton size="sm" icon="crosshair" label="Brush source rows" pressed={brushMode}
+          onPressedChange={pressed => {
+            setBrushMode(pressed);
+            setHover(null);
+            setSelectionError("");
+          }} />
+        <span role="status" aria-live="polite">
+          {selectedIndices.length
+            ? selectedIndices.length + " of " + fullRowCount + " source rows selected"
+            : "Drag in a facet to select rows (Enter selects a whole facet)"}
+        </span>
+        <Button size="sm" variant="ghost" disabled={!selectedIndices.length || creatingSubset}
+          onClick={() => { setRowSelection(null); setSelectionError(""); }}>Clear selection</Button>
+        <Button size="sm" disabled={!canBranchSelection || !onBranchSelection || creatingSubset}
+          onClick={() => {
+            if (!canBranchSelection || !baseComposite.composite || !onBranchSelection) return;
+            setCreatingSubset(true);
+            setSelectionError("");
+            void Promise.resolve(onBranchSelection([...selectedIndices], baseComposite.composite)).then(() => {
+              setRowSelection(null);
+              setBrushMode(false);
+            }).catch((reason: unknown) => {
+              setSelectionError(reason instanceof Error ? reason.message : "Could not create selection chart");
+            }).finally(() => setCreatingSubset(false));
+          }}>{creatingSubset ? "Creating…" : "Branch selected rows"}</Button>
+        {selectionError && <span role="alert">{selectionError}</span>}
+      </div>}
       {chartType === "composite" && compositeEditorOpen && baseComposite.composite &&
         <CompositeChartEditor chartData={baseComposite}
           onPreview={value => setCompositePreview(value ? { source: baseComposite, value } : null)}
@@ -193,7 +232,12 @@ function ChartRenderer({ chartType, chartData, onAnalysisChange, onCompositeDesi
             {chartType === "sankey" && <SankeyChartMarks {...marksProps} />}
             {chartType === "boxplot" && <BoxplotChartMarks {...marksProps} />}
             {chartType === "heatmap" && <HeatmapChartMarks {...marksProps} />}
-            {chartType === "composite" && <CompositeChartMarks {...marksProps} />}
+            {chartType === "composite" && <CompositeChartMarks {...marksProps}
+              brushEnabled={brushMode} selectedIndices={selectedIndices}
+              onSelectionChange={indices => {
+                setRowSelection({ source: chartData, indices });
+                setSelectionError("");
+              }} />}
           </g>
         </svg>
       )}

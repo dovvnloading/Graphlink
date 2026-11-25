@@ -10,7 +10,7 @@ import { ToggleButton } from "../ui/ToggleButton";
 import { Tooltip } from "../ui/Tooltip";
 import { InlineAlert } from "../ui/InlineAlert";
 import "./ChartNodeView.css";
-import type { ChartDataRow } from "../../lib/bridge-core/generated/scene-state";
+import type { ChartDataRow, ChartCompositeSpecRow } from "../../lib/bridge-core/generated/scene-state";
 import {
   CHART_MAX_HEIGHT,
   CHART_MAX_WIDTH,
@@ -23,7 +23,7 @@ import TableOutput, { type TableOutputBinding } from "./TableOutput";
 import { NodeShell } from "./NodeShell";
 import { useLodVisibility } from "./useLodVisibility";
 import type { ChartAnalysis, PublicationExportOptions, PublicationFormat, PublicationSize } from "./chartSpec";
-import { saveChartAnalysis, saveCompositeDesign } from "./charts/analysisIntent";
+import { saveChartAnalysis, saveCompositeDesign, branchCompositeSelection } from "./charts/analysisIntent";
 import type { CompositeDesign } from "./charts/compositeDesign";
 import { downloadPublicationChartExport } from "./charts/publicationExport";
 
@@ -193,6 +193,10 @@ export const ChartNodeView = memo(function ChartNodeView({
     return next;
   }
 
+  function branchSelection(indices: number[], expected: ChartCompositeSpecRow): Promise<void> {
+    return branchCompositeSelection(id, indices, expected);
+  }
+
   function persistCompositeDesign(design: CompositeDesign, expected: CompositeDesign): Promise<void> {
     const next = compositeSaveQueue.current.then(() => saveCompositeDesign(id, design, expected));
     compositeSaveQueue.current = next.catch(() => {});
@@ -307,7 +311,8 @@ export const ChartNodeView = memo(function ChartNodeView({
         {overview
           ? <LazyChartOverview chartType={data.chartType} chartData={data.chartData} />
           : <LazyChartRenderer chartType={data.chartType} chartData={data.chartData}
-              onAnalysisChange={persistChartAnalysis} onCompositeDesignChange={persistCompositeDesign} />}
+              onAnalysisChange={persistChartAnalysis} onCompositeDesignChange={persistCompositeDesign}
+              onBranchSelection={branchSelection} />}
       </Suspense>
     </NodeShell>
   );

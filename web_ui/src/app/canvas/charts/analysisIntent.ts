@@ -2,6 +2,7 @@
 import { defaultWsUrl } from "../../../lib/ws/transport";
 import type { ChartAnalysis } from "../chartSpec";
 import type { CompositeDesign } from "./compositeDesign";
+import type { ChartCompositeSpecRow } from "../../../lib/bridge-core/generated/scene-state";
 
 function saveChartIntent(nodeId: string, intent: string, args: unknown[], id: string): Promise<void> {
   if (!nodeId) return Promise.reject(new Error("Chart node ID is required"));
@@ -41,4 +42,14 @@ export function saveChartAnalysis(nodeId: string, analysis: ChartAnalysis): Prom
 
 export function saveCompositeDesign(nodeId: string, design: CompositeDesign, expected: CompositeDesign): Promise<void> {
   return saveChartIntent(nodeId, "setCompositeDesign", [nodeId, design, expected], "chart-composite-design");
+}
+
+/** Branch an immutable source-row subset into a connected child chart.
+ * The whole expected source snapshot enforces optimistic concurrency
+ * against the backend's present canonical dataset, not sampled SVG points.
+ */
+export function branchCompositeSelection(
+  nodeId: string, indices: number[], expected: ChartCompositeSpecRow,
+): Promise<void> {
+  return saveChartIntent(nodeId, "branchCompositeSelection", [nodeId, indices, expected], "chart-branch-selection");
 }
