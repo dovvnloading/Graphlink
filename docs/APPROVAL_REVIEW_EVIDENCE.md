@@ -159,8 +159,22 @@ npm run test:e2e:safety -- --grep "full Python source, existing session grant" -
 
 Preserve the JSON report and any retained failure traces before starting
 another run, which reuses the output directory. Run the entire safety suite
-separately afterward. A passing isolated scroll check or a single focused
-run is not evidence that the intermittent failure is resolved.
+separately afterward. The dedicated path-filtered
+[`Approval review browser evidence`](../.github/workflows/approval-review-evidence.yml)
+workflow automates both runs on changes to the approval-review browser spec,
+its safety config or the workflow itself, and can be dispatched manually.
+It uses the production SPA, locked dependencies, a single Chromium worker and
+zero retries. The focused repeat and complete safety reports are uploaded
+separately, even if a test fails; the complete suite still runs after a
+failed focused run. Neither failure is ignored. This supplements the four
+regular CI jobs without changing the nightly smoke/safety job or running
+browser repeats on unrelated PRs.
+
+The keyboard geometry attachment records the last observed scroll position,
+remaining distance and focus before Home and after each key even if a
+keyboard assertion fails. Both keys must also leave the canvas transform
+unchanged. A passing isolated scroll check or a single focused run is not
+evidence that the intermittent failure is resolved.
 
 The safety config uses no retries. Its JSON report is
 `web_ui/test-results/safety-results.json`. Every passing case attaches

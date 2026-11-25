@@ -817,6 +817,14 @@ describe("HarnessNodeView", () => {
     expect(source.scrollTop).toBe(223);
     expect(fireEvent.keyDown(source, { key: "Home", ctrlKey: true })).toBe(true);
     expect(source.scrollTop).toBe(223);
+    expect(fireEvent.keyDown(source, { key: "Home", altKey: true })).toBe(true);
+    expect(fireEvent.keyDown(source, { key: "Home", metaKey: true })).toBe(true);
+    expect(fireEvent.keyDown(source, { key: "ArrowUp" })).toBe(true);
+    expect(source.scrollTop).toBe(223);
+    // A disclosure shorter than its viewport must never scroll negatively.
+    Object.defineProperty(source, "scrollHeight", { configurable: true, value: 90 });
+    expect(fireEvent.keyDown(source, { key: "End" })).toBe(false);
+    expect(source.scrollTop).toBe(0);
     expect(source.textContent).toBe(data.harnessApprovalSummary);
     expect(data.onApproveTool).not.toHaveBeenCalled();
     expect(data.onDenyTool).not.toHaveBeenCalled();
