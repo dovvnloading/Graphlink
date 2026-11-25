@@ -25,8 +25,8 @@ import { WorkflowDefinition } from "./WorkflowSpecView";
 import { WorkflowRunLauncher } from "./WorkflowRunLauncher";
 import { WorkflowRunsPanel } from "./WorkflowRunsPanel";
 import {
-  errorText, plural, runWaiting, workflowRequest, workspacePath,
-  type DetachedRun, type Preset, type Workspace,
+  errorText, plural, runActive, runWaiting, workflowRequest, workspacePath, WorkflowRequestError,
+  type DetachedRun, type PresetSummary, type RunSummary, type Workspace,
 } from "./workflowApi";
 import "./workflow-library.css";
 
@@ -58,12 +58,16 @@ function Library({ store }: { store: SceneStore }) {
   const [capture, setCapture] = useState({ name: "", appendTo: "", outputs: [] as string[], params: [] as WorkflowParameter[] });
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [workspace, setWorkspace] = useState<number | null>(null);
-  const [runs, setRuns] = useState<DetachedRun[]>([]);
-  const [presets, setPresets] = useState<Preset[]>([]);
+  const [runs, setRuns] = useState<RunSummary[]>([]);
+  const [presets, setPresets] = useState<PresetSummary[]>([]);
   const [runsLoaded, setRunsLoaded] = useState(false);
+  const [presetsLoaded, setPresetsLoaded] = useState(false);
   const [selectedRun, setSelectedRun] = useState("");
+  const [runDetail, setRunDetail] = useState<DetachedRun | null>(null);
+  const [detailLoaded, setDetailLoaded] = useState(false);
   const [presetStart, setPresetStart] = useState<PresetStart | null>(null);
-  const [poke, setPoke] = useState(0);
+  const [runPoke, setRunPoke] = useState(0);
+  const [presetPoke, setPresetPoke] = useState(0);
   const navigation = useRef(0);
   const [navigationId, setNavigationId] = useState(0);
   const [runsViewKey, setRunsViewKey] = useState(0);
@@ -74,7 +78,8 @@ function Library({ store }: { store: SceneStore }) {
   const navigate = useCallback((nextWorkspace: number, runId: string, notification = false) => {
     setNavigationId(++navigation.current);
     if (notification) setRunsViewKey(n => n + 1);
-    setRuns([]); setPresets([]); setRunsLoaded(false);
+    setRuns([]); setPresets([]); setRunsLoaded(false); setPresetsLoaded(false);
+    setRunDetail(null); setDetailLoaded(false);
     setError(""); setPresetStart(null);
     setWorkspace(nextWorkspace); setSelectedRun(runId); setFromNotification(notification);
   }, []);
@@ -97,30 +102,84 @@ function Library({ store }: { store: SceneStore }) {
       .catch(err => { if (live) setError(errorText(err)); });
     return () => { live = false; };
   }, [store]);
-  // Runs and presets refresh while the dialog is open, so approvals and progress stay current.
+  // Tab badges need counts, not receipts. Refresh immediately on navigation
+  // and mutations, then use a slower cadence off the Runs tab or when idle.
+  // The independent active-approvals notification poll remains responsive.
   useEffect(() => {
     if (workspace === null) return;
     const controller = new AbortController();
     let timer: number | undefined;
+    const live = () => !controller.signal.aborted && navigation.current === navigationId;
     async function load() {
+      let delay = 15000;
       try {
-        const [nextRuns, nextPresets] = await Promise.all([
-          workflowRequest<DetachedRun[]>(workspacePath(workspace!) + "/runs", { signal: controller.signal }),
-          workflowRequest<Preset[]>(workspacePath(workspace!) + "/presets", { signal: controller.signal }),
-        ]);
-        if (controller.signal.aborted || navigation.current !== navigationId) return;
-        setRuns(Array.isArray(nextRuns) ? nextRuns : []);
-        setPresets(Array.isArray(nextPresets) ? nextPresets : []);
+        const next = await workflowRequest<RunSummary[]>(workspacePath(workspace!) + "/runs?summary=true", { signal: controller.signal });
+        if (!live()) return;
+        if (!Array.isArray(next)) throw new Error("The workflow service returned an invalid run list.");
+        setRuns(next);
         setRunsLoaded(true);
+        if (tab === "runs" && next.some(runActive)) delay = 2000;
       } catch (err) {
-        if (!controller.signal.aborted && navigation.current === navigationId) setError(errorText(err));
+        if (live()) setError(errorText(err));
       } finally {
-        if (!controller.signal.aborted && navigation.current === navigationId) timer = window.setTimeout(() => void load(), 2000);
+        if (live()) timer = window.setTimeout(() => void load(), delay);
       }
     }
     void load();
     return () => { controller.abort(); window.clearTimeout(timer); };
-  }, [workspace, poke, navigationId]);
+  }, [workspace, runPoke, navigationId, tab]);
+  // Presets change infrequently. Update their badge on tab/workspace entry,
+  // and only keep polling while the Presets tab itself is visible.
+  useEffect(() => {
+    if (workspace === null) return;
+    const controller = new AbortController();
+    let timer: number | undefined;
+    const live = () => !controller.signal.aborted && navigation.current === navigationId;
+    async function load() {
+      try {
+        const next = await workflowRequest<PresetSummary[]>(workspacePath(workspace!) + "/presets?summary=true", { signal: controller.signal });
+        if (!live()) return;
+        if (!Array.isArray(next)) throw new Error("The workflow service returned an invalid preset list.");
+        setPresets(next);
+        setPresetsLoaded(true);
+      } catch (err) {
+        if (live()) setError(errorText(err));
+      } finally {
+        if (live() && tab === "presets") timer = window.setTimeout(() => void load(), 15000);
+      }
+    }
+    void load();
+    return () => { controller.abort(); window.clearTimeout(timer); };
+  }, [workspace, presetPoke, navigationId, tab]);
+  // Only the open receipt needs full inputs, outputs, preview and approval
+  // evidence. Stop polling a terminal receipt, and abort on selection change.
+  useEffect(() => {
+    if (workspace === null || tab !== "runs" || !selectedRun) return;
+    const controller = new AbortController();
+    let timer: number | undefined;
+    const live = () => !controller.signal.aborted && navigation.current === navigationId;
+    async function load() {
+      let retry = false;
+      try {
+        const next = await workflowRequest<DetachedRun>(workspacePath(workspace!) + "/runs/" + encodeURIComponent(selectedRun), { signal: controller.signal });
+        if (!live()) return;
+        if (next?.run_id !== selectedRun) throw new Error("The workflow service returned an unexpected run.");
+        setRunDetail(next);
+        setDetailLoaded(true);
+        retry = runActive(next);
+      } catch (err) {
+        if (!live()) return;
+        setRunDetail(null);
+        const missing = err instanceof WorkflowRequestError && err.status === 404;
+        setDetailLoaded(missing);
+        if (!missing) { setError(errorText(err)); retry = true; }
+      } finally {
+        if (live() && retry) timer = window.setTimeout(() => void load(), 2000);
+      }
+    }
+    void load();
+    return () => { controller.abort(); window.clearTimeout(timer); };
+  }, [workspace, selectedRun, runPoke, navigationId, tab]);
   // A "waiting for approval" notification opens this dialog on that run.
   useEffect(() => {
     function follow() {
@@ -191,6 +250,7 @@ function Library({ store }: { store: SceneStore }) {
   const selectRun = (runId: string) => {
     if (navigation.current !== navigationId) return;
     if (runId && !runs.some(run => run.run_id === runId)) { showRun(runId); return; }
+    setRunDetail(null); setDetailLoaded(false);
     setSelectedRun(runId); setFromNotification(false);
   };
   const workspaceControl = workspaces.length > 1
@@ -378,12 +438,14 @@ function Library({ store }: { store: SceneStore }) {
       { id: "workflows", label: `Workflows (${rows.length})`, content: workflowsPanel },
       { id: "runs", label: waiting ? `Runs (${waiting} waiting)` : `Runs (${runs.length})`, content:
         <WorkflowRunsPanel key={runsViewKey} workspace={workspace} runs={runs} loaded={runsLoaded || workspace === null} presets={presets}
-          selected={selectedRun} fromNotification={fromNotification} onSelect={selectRun} onChanged={() => setPoke(n => n + 1)} toolbar={workspaceControl} /> },
+          detail={runDetail} detailLoaded={detailLoaded} selected={selectedRun} fromNotification={fromNotification}
+          onSelect={selectRun} onChanged={() => setRunPoke(n => n + 1)} toolbar={workspaceControl} /> },
       { id: "presets", label: `Presets (${presets.length})`, content:
-        <WorkflowPresetsPanel store={store} workspace={workspace} presets={presets} loaded={runsLoaded || workspace === null} rows={rows}
-          startWith={presetStart} onFormClosed={() => setPresetStart(null)} onChanged={() => setPoke(n => n + 1)}
+        <WorkflowPresetsPanel store={store} workspace={workspace} presets={presets} loaded={presetsLoaded || workspace === null} rows={rows}
+          startWith={presetStart} onFormClosed={() => setPresetStart(null)} onChanged={() => setPresetPoke(n => n + 1)}
           onRunStarted={showRun} toolbar={workspaceControl} /> },
     ]} onValueChange={value => {
+      if (value !== tab) { setRunDetail(null); setDetailLoaded(false); }
       setTab(value as Tab);
       // Tab panels unmount when hidden; a pending "Save as a preset…" request must not reopen the form later.
       if (value !== "presets") setPresetStart(null);

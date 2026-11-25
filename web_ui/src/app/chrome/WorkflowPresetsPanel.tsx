@@ -16,13 +16,13 @@ import { initialDrafts, WorkflowInputsForm } from "./WorkflowRunLauncher";
 import { stepName, WorkflowPreviewSummary } from "./WorkflowPreviewSummary";
 import {
   effectDetail, effectLabel, errorText, money, plainInputs, plural, triggerSummary, typedInputs, workflowRequest,
-  workspacePath, type InputDrafts, type Preset, type PresetTrigger, type WorkflowPreview,
+  workspacePath, type InputDrafts, type PresetSummary, type PresetTrigger, type WorkflowPreview,
 } from "./workflowApi";
 
 const unattendedEffects = ["pure", "local-read", "cloud"] as const;
 type TriggerKind = "manual" | "interval" | "daily" | "folder";
 
-function presetSummary(preset: Preset) {
+function presetSummary(preset: PresetSummary) {
   const effects = preset.allowed_effects.length
     ? preset.allowed_effects.map(effect => effectLabel(effect).toLowerCase()).join(", ") + " steps run on their own"
     : "Every step waits for you";
@@ -185,7 +185,7 @@ function PresetForm({ store, rows, workspace, initialWorkflow, onCancel, onSaved
 }
 
 export function WorkflowPresetsPanel({ store, workspace, presets, loaded, rows, startWith, onFormClosed, onChanged, onRunStarted, toolbar }: {
-  store: SceneStore; workspace: number | null; presets: Preset[]; loaded: boolean; rows: WorkflowEntry[];
+  store: SceneStore; workspace: number | null; presets: PresetSummary[]; loaded: boolean; rows: WorkflowEntry[];
   startWith: PresetStart | null; onFormClosed: () => void; onChanged: () => void; onRunStarted: (runId: string) => void;
   toolbar?: ReactNode;
 }) {
@@ -211,8 +211,8 @@ export function WorkflowPresetsPanel({ store, workspace, presets, loaded, rows, 
     try { await fn(); onChanged(); } catch (err) { setError(errorText(err)); }
     finally { setBusy(false); }
   }
-  const workflowName = (preset: Preset) => rows.find(row => row.workflow_id === preset.workflow_id)?.name
-    ?? (preset.request as { spec?: { name?: string } }).spec?.name ?? "Workflow no longer in the library";
+  const workflowName = (preset: PresetSummary) => rows.find(row => row.workflow_id === preset.workflow_id)?.name
+    ?? preset.workflow_name ?? "Workflow no longer in the library";
 
   if (form !== null && workspace !== null) {
     return <div className="workflow-panel">

@@ -11,10 +11,10 @@ import { WorkflowRunLauncher } from "./WorkflowRunLauncher";
 import {
   adapterLabel, effectLabel, effectSentence, elapsed, errorText, money, plural, runWaiting, statusText, statusWord,
   valueSummary, valueText, when, workflowRequest, workspacePath,
-  type DetachedRun, type Preset, type RunEvent, type RunStep,
+  type DetachedRun, type PresetSummary, type RunEvent, type RunStep, type RunSummary,
 } from "./workflowApi";
 
-function RunStatus({ run }: { run: DetachedRun }) {
+function RunStatus({ run }: { run: DetachedRun | RunSummary }) {
   const word = statusWord(run.status, runWaiting(run));
   return word ? <StatusPill status={word} announce={false} /> : <Badge>{statusText(run.status)}</Badge>;
 }
@@ -173,14 +173,15 @@ function RunDetail({ run, workspace, presetName, onChanged }: {
   </section>;
 }
 
-export function WorkflowRunsPanel({ workspace, runs, loaded, presets, selected, fromNotification = false, onSelect, onChanged, toolbar }: {
-  workspace: number | null; runs: DetachedRun[]; loaded: boolean; presets: Preset[];
+export function WorkflowRunsPanel({ workspace, runs, loaded, presets, detail, detailLoaded, selected, fromNotification = false, onSelect, onChanged, toolbar }: {
+  workspace: number | null; runs: RunSummary[]; loaded: boolean; presets: PresetSummary[];
+  detail: DetachedRun | null; detailLoaded: boolean;
   selected: string; fromNotification?: boolean; onSelect: (runId: string) => void; onChanged: () => void; toolbar?: ReactNode;
 }) {
   const [custom, setCustom] = useState(false);
   const heading = useRef<HTMLHeadingElement>(null);
   const focusHeading = useRef(Boolean(selected));
-  const run = runs.find(item => item.run_id === selected);
+  const run = detail?.run_id === selected ? detail : null;
   useEffect(() => {
     if (focusHeading.current) { focusHeading.current = false; heading.current?.focus(); }
   }, [selected, custom]);
@@ -203,7 +204,7 @@ export function WorkflowRunsPanel({ workspace, runs, loaded, presets, selected, 
       {fromNotification && <p className="workflow-muted">Reviewing a notification closes any unsaved run or preset form without saving its draft.</p>}
       {run && workspace !== null
         ? <RunDetail key={run.run_id} run={run} workspace={workspace} presetName={presetName(run.preset_id)} onChanged={onChanged} />
-        : <p className="workflow-muted" role="status">{loaded
+        : <p className="workflow-muted" role="status">{detailLoaded
           ? "This run is no longer available in this workspace. Return to All runs to choose another run."
           : "Loading the run…"}</p>}
     </div>;

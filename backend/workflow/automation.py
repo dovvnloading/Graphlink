@@ -168,6 +168,26 @@ class WorkflowAutomation:
                                     (workspace_id,))
             return [json.loads(row[0]) for row in rows]
 
+    def list_summaries(self, workspace_id: int):
+        """Only the metadata shown by the operator UI, not approved requests."""
+        with self.connection() as conn:
+            rows = conn.execute("""
+                SELECT preset_id, json_extract(payload, '$.name'),
+                       json_extract(payload, '$.trigger'),
+                       json_extract(payload, '$.cost_usd'),
+                       json_extract(payload, '$.allowed_effects'),
+                       json_extract(payload, '$.workflow_id'),
+                       json_extract(payload, '$.request.spec.name')
+                FROM workflow_presets WHERE workspace_id = ? ORDER BY preset_id
+            """, (workspace_id,))
+            return [
+                {"preset_id": preset_id, "name": name,
+                 "trigger": json.loads(trigger) if trigger is not None else None,
+                 "cost_usd": cost_usd, "allowed_effects": json.loads(effects),
+                 "workflow_id": workflow_id, "workflow_name": workflow_name}
+                for preset_id, name, trigger, cost_usd, effects, workflow_id, workflow_name in rows
+            ]
+
     def delete(self, workspace_id: int, preset_id: str):
         with self.connection() as conn:
             deleted = conn.execute("DELETE FROM workflow_presets WHERE workspace_id=? AND preset_id=?",

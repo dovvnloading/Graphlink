@@ -556,3 +556,23 @@ copy/word-count notes; control nodes are literal input and bound output
 boundaries using existing canvas kinds (not new conditional/loop adapters).
 No Builder workflow edit starts a run. Use Graph Runner's normal run
 preview/approval to execute the resulting canvas graph.
+
+### Operator library history reads
+
+The existing authenticated `GET /api/workflows/{workspace_id}/runs` and
+`GET /api/workflows/{workspace_id}/presets` responses remain full records by
+default. The library requests `?summary=true` for display-only metadata: run
+identity, name, status, times, cost, preset ID and waiting-for-approval flag;
+preset identity, name, workflow name/ID, trigger, cost cap and allowed effects.
+Neither summary includes inputs, outputs, events, approved preset requests or
+approval nonces. Use the exact run detail route for review and approval. The
+summary history applies the existing age/count visibility rule without deleting
+rows on each poll; admission, completion and offline GC still perform retention
+cleanup. Active runs remain visible even beyond the history limit.
+
+Run summaries refresh every 2 seconds on the Runs tab when a run is active,
+otherwise every 15 seconds. Preset summaries refresh on navigation and preset
+mutations, and every 15 seconds only on the Presets tab. Full run detail is
+loaded when selected and refreshed every 2 seconds only while active; closing
+the detail or switching tabs cancels its poll. The separate approval notification
+endpoint keeps its existing polling cadence.

@@ -265,7 +265,12 @@ function SelectControl({
                     disabled={option.disabled}
                     tabIndex={-1}
                     className={`gl-select-option${active?.value === option.value ? " is-active" : ""}${option.value === value ? " is-selected" : ""}`}
-                    onMouseEnter={() => !option.disabled && setActiveValue(option.value)}
+                    // A newly opened/repositioned panel can fire mouseenter under
+                    // a stationary cursor. Only actual pointer movement should
+                    // override the option the keyboard just activated.
+                    onPointerMove={event => {
+                      if (!option.disabled && event.pointerType !== "touch") setActiveValue(option.value);
+                    }}
                     onClick={() => choose(option)}
                   >
                     {option.icon && <Icon name={option.icon} />}
