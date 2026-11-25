@@ -31,6 +31,13 @@ SPECS = json.loads(
 )
 
 
+# The live chartScales.test.ts uses these exact edges and counts too.
+HISTOGRAM_BIN_FIXTURES = json.loads(
+    (Path(__file__).parents[2]
+     / "web_ui/src/app/canvas/charts/histogramBinParityFixtures.json").read_text(encoding="utf-8")
+)
+
+
 def export(chart_type, fmt="svg", *, dpi=300, width=85, height=70, **flags):
     return render_chart_publication(
         chart_type, SPECS[chart_type], width_mm=width, height_mm=height,
@@ -307,6 +314,24 @@ def test_export_intent_returns_authenticated_file_payload_for_saved_chart():
                 "bogus-id", {"format": "pdf", "size": "single"},
             ])
     asyncio.run(run())
+
+@pytest.mark.parametrize("fixture", HISTOGRAM_BIN_FIXTURES, ids=lambda fixture: fixture["name"])
+def test_histogram_publication_matches_interactive_bin_edges_and_counts(fixture, monkeypatch):
+    observed = []
+    original = Axes.hist
+
+    def spy(ax, *args, **kwargs):
+        result = original(ax, *args, **kwargs)
+        counts, edges, patches = result
+        observed.append((list(counts), list(edges), [patch.get_height() for patch in patches]))
+        return result
+
+    monkeypatch.setattr(Axes, "hist", spy)
+    spec = {"type": "histogram", "values": fixture["values"], "bins": fixture["bins"]}
+    svg = render_chart_publication("histogram", spec, width_mm=180, height_mm=100, fmt="svg")
+    assert b"<svg" in svg and b"Chart rendering issue" not in svg
+    assert observed == [(fixture["counts"], fixture["edges"], fixture["counts"])]
+
 
 @pytest.mark.parametrize("kind", ["bar", "line", "histogram"])
 @pytest.mark.parametrize("values", [[1e-120, 2e-120], [1e-120, 1e-120], [-1e-120, 1e-120]])

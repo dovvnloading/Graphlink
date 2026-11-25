@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import histogramParityFixtures from "./histogramBinParityFixtures.json";
 import {
   computeHistogramBins,
   computeBoxplotStats,
@@ -113,6 +114,14 @@ describe("pickCategoricalTicks", () => {
 });
 
 describe("computeHistogramBins", () => {
+  // The publication exporter exercises the same fixtures through Axes.hist.
+  it.each(histogramParityFixtures)("matches publication bin edges and counts: $name", ({ values, bins, counts, edges }) => {
+    const result = computeHistogramBins(values, bins);
+    expect(result.map((bin) => bin.count)).toEqual(counts);
+    expect(result.map((bin) => bin.x0)).toEqual(edges.slice(0, -1));
+    expect(result.map((bin) => bin.x1)).toEqual(edges.slice(1));
+  });
+
   it("splits the value range into equal-width bins and counts membership", () => {
     const bins = computeHistogramBins([0, 1, 2, 3, 4, 5, 6, 7, 8, 9], 5);
     expect(bins).toHaveLength(5);

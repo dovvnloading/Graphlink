@@ -258,16 +258,23 @@ export function computeHistogramBins(values: number[], bins: number): HistogramB
   const min = rawMin - padding;
   const max = rawMax + padding;
   const width = (max - min) / bins;
-  const counts = new Array(bins).fill(0);
+  // Match NumPy's linspace edges, including the exact final endpoint.
+  // A quotient rounded near an integer can misclassify a value on (or
+  // immediately beside) an edge. Count against the same edges we draw.
+  const edges = Array.from({ length: bins + 1 }, (_, index) =>
+    index === bins ? max : min + index * width,
+  );
+  const counts = new Array<number>(bins).fill(0);
   for (const value of values) {
-    let index = Math.floor((value - min) / width);
-    if (index >= bins) index = bins - 1;
-    if (index < 0) index = 0;
+    let index = 0;
+    // Interior edges belong to the bin on their right; the final bin
+    // includes max. Canonical histograms have at most 24 bins.
+    while (index < bins - 1 && value >= edges[index + 1]) index += 1;
     counts[index] += 1;
   }
   return counts.map((count, index) => ({
-    x0: min + index * width,
-    x1: index === bins - 1 ? max : min + (index + 1) * width,
+    x0: edges[index],
+    x1: edges[index + 1],
     count,
   }));
 }
