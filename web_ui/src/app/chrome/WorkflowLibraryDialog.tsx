@@ -278,7 +278,12 @@ function Library({ store }: { store: SceneStore }) {
       <div className="workflow-detail-body">
         <WorkflowDefinition doc={doc} />
         <section className="workflow-card workflow-run-card" aria-label="Run this workflow">
-          <WorkflowRunLauncher key={doc.spec.revision} title="Run it" spec={doc.spec} workspace={workspace}
+          <Select label="Target workspace" value={workspace === null ? "" : String(workspace)}
+            options={workspaces.map(item => ({ value: String(item.id), label: item.name }))}
+            disabled={!workspaces.length}
+            onChange={value => { setRuns([]); setPresets([]); setRunsLoaded(false); setSelectedRun(""); setWorkspace(Number(value)); }} />
+          <p className="workflow-muted">Runs are stored in the selected library workspace, which may differ from the current canvas.</p>
+          <WorkflowRunLauncher key={doc.spec.revision + ":" + workspace} title="Run it" spec={doc.spec} workspace={workspace}
             note={starter ? <p className="workflow-muted">Filled with a sample. Model steps use the local Ollama model named in each step.</p>
               : doc.parameters.length > 0 ? <p className="workflow-muted">Runs use the saved settings of this version. Change them in a preset.</p> : null}
             examples={starter ? doc.example_inputs : undefined} onStarted={showRun} />
