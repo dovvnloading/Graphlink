@@ -215,3 +215,108 @@ def test_composite_design_intent_only_changes_view_bindings_and_is_undoable():
         assert document.nodes[chart.id].state.chart_data["composite"] == updated
 
     asyncio.run(run())
+
+
+def test_brush_selection_branches_original_rows_into_connected_undoable_chart():
+    import asyncio
+    from backend.api.intents_chart import register_chart_intents
+    from backend.events import SessionBus
+    from backend.notifications import NotificationState
+
+    async def run():
+        bus = SessionBus("composite-selection")
+        document = SceneDocument()
+        notice = NotificationState()
+        bus.register_topic("scene", document.scene_payload)
+        bus.register_topic("notification", notice.payload)
+        register_chart_intents(bus, document, notice, object())
+        root = document.add_chat_node(0, 0, "Source", is_user=True)
+        source = document.add_chart_node(300, 0, root.id, "composite",
+                                         canonicalize_chart_data(RAW))
+        before = deepcopy(source.state.chart_data)
+        expected = deepcopy(before["composite"])
+        selection = [0, 1, 3, 4]
+        result = await bus.dispatch_intent(
+            "scene", "branchCompositeSelection", [source.id, selection, expected],
+        )
+        child = document.nodes[result["chartNodeId"]]
+        assert child.id != source.id
+        assert child.state.chart_source_node_id == source.id
+        assert any(edge.source == source.id and edge.target == child.id
+                   for edge in document.edges.values())
+        assert child.state.chart_type == "composite"
+        comp = child.state.chart_data["composite"]
+        assert comp["numbers"] == {
+            name: [values[i] for i in selection]
+            for name, values in expected["numbers"].items()
+        }
+        assert comp["categories"] == {
+            name: [values[i] for i in selection]
+            for name, values in expected["categories"].items()
+        }
+        assert comp["facetBy"] == expected["facetBy"]
+        assert comp["layers"] == expected["layers"]
+        assert document.nodes[source.id].state.chart_data == before
+        assert result == {
+            "chartNodeId": child.id, "selected": 4, "sourceCount": 6,
+        }
+        # Derivations preserve all source numeric values, not sampled SVG.
+        for indices in ([0], list(range(6)), [2, 2], [4, 2], [-1, 3],
+                        [2, 6], [True, 2], [1.5, 2], "0,2"):
+            with pytest.raises(ChartDataError):
+                await bus.dispatch_intent(
+                    "scene", "branchCompositeSelection", [source.id, indices, expected],
+                )
+        with pytest.raises(ChartDataError, match="changed"):
+            stale = deepcopy(expected)
+            stale["numbers"]["time"][0] = 123
+            await bus.dispatch_intent(
+                "scene", "branchCompositeSelection", [source.id, [0, 2], stale],
+            )
+        assert len([node for node in document.nodes.values() if node.kind == "chart"]) == 2
+        assert document.undo().command_type == "branchCompositeSelection"
+        assert child.id not in document.nodes
+        assert document.redo().command_type == "branchCompositeSelection"
+        assert child.id in document.nodes
+
+    asyncio.run(run())
+
+
+def test_brushed_derived_figures_keep_data_and_parent_lineage_after_save_reload():
+    import asyncio
+    from backend.api.intents_chart import register_chart_intents
+    from backend.events import SessionBus
+    from backend.notifications import NotificationState
+
+    async def run():
+        bus = SessionBus("composite-branch-save")
+        document = SceneDocument()
+        notice = NotificationState()
+        bus.register_topic("scene", document.scene_payload)
+        bus.register_topic("notification", notice.payload)
+        register_chart_intents(bus, document, notice, object())
+        root = document.add_chat_node(0, 0, "Source", is_user=True)
+        chart = document.add_chart_node(300, 0, root.id, "composite",
+                                        canonicalize_chart_data(RAW))
+        result = await bus.dispatch_intent("scene", "branchCompositeSelection", [
+            chart.id, [0, 1, 2], deepcopy(chart.state.chart_data["composite"]),
+        ])
+        derived = document.nodes[result["chartNodeId"]]
+        original = deepcopy(derived.state.chart_data)
+        saved = build_chat_data(document)
+        notes = saved.pop("notes_data")
+        pins = saved.pop("pins_data")
+        restored = SceneDocument()
+        restore_chat_into_document(restored, {"data": saved}, notes, pins)
+        restored_derived = [
+            node for node in restored.nodes.values()
+            if node.kind == "chart" and node.state.chart_data["title"] == original["title"]
+        ]
+        assert len(restored_derived) == 1
+        assert restored_derived[0].state.chart_data == original
+        assert restored_derived[0].state.chart_source_node_id
+        assert any(edge.target == restored_derived[0].id
+                   and edge.source == restored_derived[0].state.chart_source_node_id
+                   for edge in restored.edges.values())
+
+    asyncio.run(run())
