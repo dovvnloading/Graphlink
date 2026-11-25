@@ -10,11 +10,32 @@ correctness one).
 from __future__ import annotations
 
 import copy
+import math
+import sys
 import time
 
-from hypothesis import given, settings, strategies as st
+import pytest
+from hypothesis import example, given, settings, strategies as st
 
 import graphlink_chart_data as chart_data
+
+
+# The legacy renderer deliberately accepts zero and magnitudes in this
+# closed interval. Generate valid values directly instead of assuming
+# every finite float is renderable.
+_legacy_bar_value_strategy = st.one_of(
+    st.just(0.0),
+    st.floats(min_value=-1e300, max_value=-1e-280, allow_nan=False, allow_infinity=False),
+    st.floats(min_value=1e-280, max_value=1e300, allow_nan=False, allow_infinity=False),
+)
+
+# The two open tails outside the supported interval, excluding zero.
+_unsupported_legacy_magnitude_strategy = st.one_of(
+    st.floats(min_value=math.nextafter(0.0, 1.0), max_value=math.nextafter(1e-280, 0.0),
+              allow_nan=False, allow_infinity=False),
+    st.floats(min_value=math.nextafter(1e300, math.inf), max_value=sys.float_info.max,
+              allow_nan=False, allow_infinity=False),
+)
 
 
 _bar_payload_strategy = st.builds(
@@ -25,9 +46,7 @@ _bar_payload_strategy = st.builds(
         "values": values,
     },
     labels=st.lists(st.text(min_size=1, max_size=15).filter(str.strip), min_size=1, max_size=20),
-    values=st.lists(
-        st.floats(allow_nan=False, allow_infinity=False, min_value=-1e6, max_value=1e6), min_size=1, max_size=20
-    ),
+    values=st.lists(_legacy_bar_value_strategy, min_size=1, max_size=20),
     title=st.text(max_size=30),
 ).filter(lambda payload: len(payload["labels"]) == len(payload["values"]))
 
@@ -40,10 +59,24 @@ def test_canonicalize_chart_data_does_not_mutate_its_input(payload):
 
 
 @given(payload=_bar_payload_strategy)
+@example(payload={"type": "bar", "labels": ["A", "B", "C", "D", "E"],
+                  "values": [-1e300, -1e-280, 0.0, 1e-280, 1e300]})
 def test_canonicalize_chart_data_is_idempotent_on_already_canonical_output(payload):
     canonical = chart_data.canonicalize_chart_data(payload, "bar")
     twice_canonical = chart_data.canonicalize_chart_data(canonical, "bar")
     assert canonical == twice_canonical
+
+
+@given(magnitude=_unsupported_legacy_magnitude_strategy, sign=st.sampled_from([-1, 1]))
+@example(magnitude=1.1532687256790966e-290, sign=1)  # original CI counterexample
+@example(magnitude=math.nextafter(1e-280, 0.0), sign=-1)
+@example(magnitude=math.nextafter(1e300, math.inf), sign=1)
+def test_canonicalize_legacy_bar_rejects_unsupported_values_without_mutating_input(magnitude, sign):
+    payload = {"type": "bar", "labels": ["valid", "unsupported"], "values": [1.0, sign * magnitude]}
+    original = copy.deepcopy(payload)
+    with pytest.raises(chart_data.ChartDataError, match="rescale the data"):
+        chart_data.canonicalize_chart_data(payload, "bar")
+    assert payload == original
 
 
 @given(
