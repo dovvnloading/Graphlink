@@ -104,6 +104,8 @@ class TokenEstimator:
         if not text:
             return 0
         if self._encoding:
-            return len(self._encoding.encode(text))
+            # User text may contain literal special-token spellings.
+            # Count them as ordinary text, not as control tokens.
+            return len(self._encoding.encode_ordinary(text))
         else:
             return len(text) // 4
