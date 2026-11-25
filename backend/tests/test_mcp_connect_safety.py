@@ -199,7 +199,7 @@ def test_repeated_cancellation_drains_worker_before_releasing_graph(tmp_path, mo
 
             def call(name, arguments):
                 call_entered.set()
-                assert call_release.wait(10)
+                assert call_release.wait(MCP_HANDOFF_TIMEOUT)
                 try:
                     return original_call(name, arguments)
                 finally:
@@ -207,7 +207,7 @@ def test_repeated_cancellation_drains_worker_before_releasing_graph(tmp_path, mo
 
             def close():
                 close_entered.set()
-                assert close_release.wait(10)
+                assert close_release.wait(MCP_HANDOFF_TIMEOUT)
                 original_close()
                 close_finished.set()
 
@@ -217,12 +217,12 @@ def test_repeated_cancellation_drains_worker_before_releasing_graph(tmp_path, mo
         monkeypatch.setattr(mcp_connect_runtime, "create_mcp_client", factory)
         task = asyncio.create_task(run_tool(scene, node_id, "double-cancel-run"))
         try:
-            assert await asyncio.to_thread(call_entered.wait, 10)
+            assert await asyncio.to_thread(call_entered.wait, MCP_HANDOFF_TIMEOUT)
             assert await scene("cancelMcpTool", node_id) == {"ok": True}
-            assert await asyncio.to_thread(close_entered.wait, 10)
+            assert await asyncio.to_thread(close_entered.wait, MCP_HANDOFF_TIMEOUT)
             assert await scene("cancelMcpTool", node_id) == {"ok": True}
             close_release.set()
-            assert await asyncio.to_thread(close_finished.wait, 10)
+            assert await asyncio.to_thread(close_finished.wait, MCP_HANDOFF_TIMEOUT)
             await asyncio.sleep(0)
             await asyncio.sleep(0)
             assert not task.done(), "Cancellation detached a still-running MCP worker"
@@ -231,7 +231,10 @@ def test_repeated_cancellation_drains_worker_before_releasing_graph(tmp_path, mo
         finally:
             close_release.set()
             call_release.set()
-        result, _ = await asyncio.wait_for(task, 10)
+            # Drain the run even if a watchdog or assertion failed. asyncio.run's
+            # shutdown cancels all outstanding tasks, including shielded SQLite
+            # checkpoints, and can obscure the original failure with a save race.
+            result, _ = await asyncio.wait_for(task, MCP_HANDOFF_TIMEOUT)
         assert call_finished.is_set()
         assert result["status"] == "reconciliation-required"
         assert not bus.chat_mutation_guard["active"]
