@@ -189,12 +189,13 @@ function parsedJson(port: PortSpec, draft: string) {
   try { return JSON.parse(draft); } catch { throw new Error(`“${port.name}” must be valid JSON.`); }
 }
 /** Typed values for a detached run request. Empty optional inputs are omitted. */
-export function typedInputs(ports: readonly PortSpec[], drafts: InputDrafts): Record<string, PortValue> {
+export function typedInputs(ports: readonly PortSpec[], drafts: InputDrafts,
+  { allowMissingRequired = false }: { allowMissingRequired?: boolean } = {}): Record<string, PortValue> {
   const values: Record<string, PortValue> = {};
   for (const port of ports) {
     const draft = drafts[port.name] ?? "";
     if (!draft.trim()) {
-      if (port.required) throw new Error(`Enter a value for “${port.name}”.`);
+      if (port.required && !allowMissingRequired) throw new Error(`Enter a value for “${port.name}”.`);
       continue;
     }
     if (port.kind === "text") values[port.name] = { kind: "text", text: draft };
