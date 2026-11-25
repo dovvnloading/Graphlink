@@ -230,12 +230,44 @@ test("full Python source, existing session grant, repeated source, stale approva
   await page.mouse.wheel(0, 800);
   await expect.poll(async () => summary.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
   expect(await viewport.evaluate((element) => getComputedStyle(element).transform)).toBe(transform);
-  await summary.focus();
-  await summary.press("Home");
-  await expect.poll(async () => summary.evaluate((element) => element.scrollTop)).toBe(0);
-  await summary.press("End");
-  await expect.poll(async () => summary.evaluate((element) =>
-    element.scrollHeight - element.clientHeight - element.scrollTop)).toBeLessThan(2);
+  const captureGeometry = () => summary.evaluate((element) => ({
+    focused: document.activeElement === element,
+    scrollTop: element.scrollTop, scrollHeight: element.scrollHeight,
+    clientHeight: element.clientHeight,
+    remaining: element.scrollHeight - element.clientHeight - element.scrollTop,
+  }));
+  const keyboardGeometry: Partial<Record<"beforeHome" | "afterHome" | "afterEnd",
+    Awaited<ReturnType<typeof captureGeometry>>>> = {};
+  try {
+    await summary.focus();
+    keyboardGeometry.beforeHome = await captureGeometry();
+    await expect(summary).toBeFocused();
+    // Use the currently focused element: locator.press would refocus it and
+    // could conceal a canvas or approval update stealing keyboard focus.
+    await page.keyboard.press("Home");
+    await expect.poll(async () => {
+      const geometry = await captureGeometry();
+      keyboardGeometry.afterHome = geometry;
+      return geometry.scrollTop;
+    }).toBe(0);
+    await expect(summary).toBeFocused();
+    expect(await viewport.evaluate((element) => getComputedStyle(element).transform)).toBe(transform);
+    await page.keyboard.press("End");
+    await expect.poll(async () => {
+      const geometry = await captureGeometry();
+      keyboardGeometry.afterEnd = geometry;
+      return geometry.remaining;
+    }).toBeLessThan(2);
+    await expect(summary).toBeFocused();
+    expect(await viewport.evaluate((element) => getComputedStyle(element).transform)).toBe(transform);
+  } finally {
+    // Retain the last observed geometry even when a poll or focus check fails.
+    // Do not query a potentially detached locator in the failure path.
+    await info.attach("python-source-keyboard-scroll.json", {
+      body: JSON.stringify({ expectedViewportTransform: transform, ...keyboardGeometry }, null, 2),
+      contentType: "application/json",
+    });
+  }
   const tail = await summary.evaluate((element) => {
     const textNode = element.firstChild;
     const text = textNode?.textContent ?? "";
@@ -269,7 +301,10 @@ test("full Python source, existing session grant, repeated source, stale approva
   await expect(panel).toBeVisible();
   const second = await state(request);
   expect(second.approval_id).not.toBe("");
-  expect(second.files["checkout/counter.txt"].hex).toBe("31");
+  // A new approval can arrive after a tool error as well as a success.
+  // Diagnose that failure before dereferencing the expected on-disk result.
+  expect(second.activity.map((row) => row.outcome), JSON.stringify(second.activity)).toEqual(["ok"]);
+  expect(second.files["checkout/counter.txt"]?.hex).toBe("31");
   expect(await summary.textContent()).toBe(`python.exec\n--- source\n${before.source}`);
   const firstApproval = intents.find((row) => row.intent === "approveTool");
   expect(firstApproval?.args).toEqual([first.request_id, first.approval_id]);
@@ -285,7 +320,8 @@ test("full Python source, existing session grant, repeated source, stale approva
   await expect(summary).toHaveText(`python.exec\n--- source\n${before.different_source}`);
   const third = await state(request);
   expect(third.approval_id).not.toBe(second.approval_id);
-  expect(third.files["checkout/counter.txt"].hex).toBe("32");
+  expect(third.activity.map((row) => row.outcome), JSON.stringify(third.activity)).toEqual(["ok", "ok"]);
+  expect(third.files["checkout/counter.txt"]?.hex).toBe("32");
   expect(third.files["checkout/different.txt"]).toBeUndefined();
   await panel.getByRole("button", { name: "Deny", exact: true }).click();
   await expect.poll(async () => (await state(request)).harness_status).toBe("done");

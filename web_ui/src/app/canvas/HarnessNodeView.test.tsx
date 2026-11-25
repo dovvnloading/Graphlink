@@ -793,6 +793,43 @@ describe("HarnessNodeView", () => {
     expect(screen.getByRole("button", { name: "Deny" })).toBeDisabled();
   });
 
+  it("keeps Home and End inside the focused approval source without changing consent", () => {
+    const data = makeData({
+      harnessAwaitingApproval: true,
+      harnessApprovalToolName: "python.exec",
+      harnessApprovalId: "keyboard-disclosure",
+      harnessApprovalSummary: "python.exec\n--- source\nprint('tail')\n",
+    });
+    renderHarness(data);
+    const source = screen.getByRole("region", { name: "Proposed tool call" });
+    Object.defineProperties(source, {
+      scrollHeight: { configurable: true, value: 363 },
+      clientHeight: { configurable: true, value: 140 },
+    });
+    source.focus();
+    source.scrollTop = 100;
+    expect(fireEvent.keyDown(source, { key: "Home" })).toBe(false);
+    expect(source.scrollTop).toBe(0);
+    expect(fireEvent.keyDown(source, { key: "End" })).toBe(false);
+    expect(source.scrollTop).toBe(223);
+    expect(source).toHaveFocus();
+    expect(fireEvent.keyDown(source, { key: "Home", shiftKey: true })).toBe(true);
+    expect(source.scrollTop).toBe(223);
+    expect(fireEvent.keyDown(source, { key: "Home", ctrlKey: true })).toBe(true);
+    expect(source.scrollTop).toBe(223);
+    expect(fireEvent.keyDown(source, { key: "Home", altKey: true })).toBe(true);
+    expect(fireEvent.keyDown(source, { key: "Home", metaKey: true })).toBe(true);
+    expect(fireEvent.keyDown(source, { key: "ArrowUp" })).toBe(true);
+    expect(source.scrollTop).toBe(223);
+    // A disclosure shorter than its viewport must never scroll negatively.
+    Object.defineProperty(source, "scrollHeight", { configurable: true, value: 90 });
+    expect(fireEvent.keyDown(source, { key: "End" })).toBe(false);
+    expect(source.scrollTop).toBe(0);
+    expect(source.textContent).toBe(data.harnessApprovalSummary);
+    expect(data.onApproveTool).not.toHaveBeenCalled();
+    expect(data.onDenyTool).not.toHaveBeenCalled();
+  });
+
   it("shows python.install environment and packages with a one-call consent token", async () => {
     const user = userEvent.setup();
     const summary = "python.install\n--- environment\n/workspace/.venv/bin/python\n--- packages\nrequests>=2,<3\nnumpy==2.1.0";

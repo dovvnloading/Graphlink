@@ -919,9 +919,21 @@ function HarnessNodeViewInner({ data, selected, id }: NodeProps<HarnessFlowNode>
           <InlineAlert variant="warning"
             title={`The agent wants to run: ${data.harnessApprovalToolName}`}
             body={<>
-              {/* eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- scrollable summary must be keyboard-reachable */}
+              {/* eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex, jsx-a11y/no-noninteractive-element-interactions -- scrollable source must be keyboard-reachable */}
               <pre className="plan-node-approval-summary nowheel nodrag" tabIndex={0}
-                role="region" aria-label="Proposed tool call">
+                role="region" aria-label="Proposed tool call"
+                onKeyDown={(event) => {
+                  // Keep unmodified Home/End inside this disclosure, even when
+                  // Chromium is still finishing a native wheel/key scroll.
+                  // Do not interfere with modified keys or text selection.
+                  if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey ||
+                      (event.key !== "Home" && event.key !== "End")) return;
+                  event.preventDefault();
+                  event.stopPropagation();
+                  const summary = event.currentTarget;
+                  summary.scrollTop = event.key === "Home" ? 0 :
+                    Math.max(0, summary.scrollHeight - summary.clientHeight);
+                }}>
                 {renderApprovalSummary(data.harnessApprovalSummary, data.harnessApprovalToolName)}
               </pre>
               {previewUnavailable && (
