@@ -274,3 +274,22 @@ it.each([
   expect(save).toHaveBeenLastCalledWith(expect.objectContaining({ ...mode, lockX: true, xRange: [1, 3] }));
   expect(container.querySelector(mark)).not.toBeNull();
 });
+
+it("omits unlocked optional axis ranges rather than persisting undefined properties", () => {
+  const save = vi.fn();
+  render(<ChartRenderer chartType="scatter" chartData={scatter} onAnalysisChange={save} />);
+  openTools();
+  fireEvent.click(screen.getByRole("button", { name: "Lock X range" }));
+  expect(save).toHaveBeenLastCalledWith(expect.objectContaining({ lockX: true }));
+  fireEvent.click(screen.getByRole("button", { name: "Unlock X" }));
+  const unlockedX = save.mock.lastCall?.[0] as ChartAnalysis;
+  expect(unlockedX.lockX).toBe(false);
+  expect(unlockedX).not.toHaveProperty("xRange");
+  fireEvent.click(screen.getByRole("button", { name: "Lock Y range" }));
+  expect(save).toHaveBeenLastCalledWith(expect.objectContaining({ lockY: true }));
+  fireEvent.click(screen.getByRole("button", { name: "Unlock Y" }));
+  const unlockedY = save.mock.lastCall?.[0] as ChartAnalysis;
+  expect(unlockedY.lockY).toBe(false);
+  expect(unlockedY).not.toHaveProperty("yRange");
+  expect(screen.queryByRole("alert")).toBeNull();
+});

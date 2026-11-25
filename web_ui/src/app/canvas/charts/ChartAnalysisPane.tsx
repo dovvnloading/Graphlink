@@ -235,12 +235,20 @@ export function ChartAnalysisPane({
   }
 
   function toggleLock(axis: "x" | "y"): void {
-    // Unlocking does not unexpectedly jump back to the data domain.
+    // A missing optional range must be OMITTED, not serialized as undefined:
+    // both the Python and TypeScript validators reject present-but-empty keys.
+    // Preserve the live view when unlocking, without persisting an unlocked range.
     setView(current);
     if (axis === "x") {
-      commit({ ...analysis, lockX: !analysis.lockX, xRange: !analysis.lockX ? [current.x[0], current.x[1]] : undefined });
+      const next: ChartAnalysis = { ...analysis, lockX: !analysis.lockX };
+      if (analysis.lockX) delete next.xRange;
+      else next.xRange = [current.x[0], current.x[1]];
+      commit(next);
     } else {
-      commit({ ...analysis, lockY: !analysis.lockY, yRange: !analysis.lockY ? [current.y[0], current.y[1]] : undefined });
+      const next: ChartAnalysis = { ...analysis, lockY: !analysis.lockY };
+      if (analysis.lockY) delete next.yRange;
+      else next.yRange = [current.y[0], current.y[1]];
+      commit(next);
     }
   }
 
@@ -254,11 +262,10 @@ export function ChartAnalysisPane({
       }, chartType, frame.xKind, frame.yKind, chartData);
       setView({ x: parsed.xRange!, y: parsed.yRange! });
       if (analysis.lockX || analysis.lockY) {
-        commit({
-          ...analysis,
-          xRange: analysis.lockX ? parsed.xRange : analysis.xRange,
-          yRange: analysis.lockY ? parsed.yRange : analysis.yRange,
-        });
+        const next: ChartAnalysis = { ...analysis };
+        if (analysis.lockX) next.xRange = parsed.xRange;
+        if (analysis.lockY) next.yRange = parsed.yRange;
+        commit(next);
       } else setError("");
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Invalid axis limits");
