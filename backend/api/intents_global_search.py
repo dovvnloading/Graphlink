@@ -49,6 +49,7 @@ class GlobalSearchArgs:
     query: str
     k: int
     workspaceId: int | None = None
+    scope: str = "all"
 
 
 def _graph_id_from_source_uri(source_uri: str) -> int | None:
@@ -93,7 +94,9 @@ def _format_global_search_results(results: list[dict]) -> list[dict]:
 
 
 def register_global_search_intents(bus: SessionBus, settings_manager=None) -> None:
-    async def search(query: str, k: int, workspace_id: int | None = None):
+    async def search(query: str, k: int, workspace_id: int | None = None, scope: str = "all"):
+        if scope not in ("all", "graphs", "knowledge"):
+            raise ValueError(f"Unknown global search scope: {scope!r}")
         k = min(max(int(k or _DEFAULT_K), 1), _MAX_K)
 
         # Same blocking-I/O concern as backend/api/intents_knowledge.py's
@@ -141,7 +144,7 @@ def register_global_search_intents(bus: SessionBus, settings_manager=None) -> No
                         )
             return configured_hybrid_search(
                 DEFAULT_DB_PATH, query, k=k, collection_id=collection_id,
-                settings_manager=settings_manager,
+                settings_manager=settings_manager, scope=scope,
             )
 
         results = await asyncio.to_thread(_search)

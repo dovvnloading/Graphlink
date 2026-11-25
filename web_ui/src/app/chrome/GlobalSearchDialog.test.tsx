@@ -9,7 +9,7 @@
  *   intercepted) for asserting the jump-to-node call's exact arguments.
  */
 import { ReactFlowProvider, type useReactFlow as UseReactFlowType } from "@xyflow/react";
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -103,7 +103,7 @@ describe("GlobalSearchDialog", () => {
     await user.type(screen.getByPlaceholderText(/search every workspace/i), "secret phrase");
     await user.click(screen.getByRole("button", { name: "Search" }));
 
-    expect(intents).toContainEqual(["globalSearch", "search", ["secret phrase", 10]]);
+    expect(intents).toContainEqual(["globalSearch", "search", ["secret phrase", 10, null, "all"]]);
   });
 
   it('renders "N results found" with N matching the real result count', async () => {
@@ -215,17 +215,44 @@ describe("GlobalSearchDialog", () => {
     expect(await screen.findByText("Workspace B / Onboarding Notes")).toBeInTheDocument();
   });
 
-  it("filters grouped results to Graphs and Knowledge via the kit scope switch", async () => {
-    const { user, request } = await setup();
+  it("re-queries the same text on each scope switch, even when All omits that kind", async () => {
+    const { user, request, intents } = await setup();
+    request.mockResolvedValueOnce({ results: [DOCUMENT_HIT] });
+    request.mockResolvedValueOnce({ results: [GRAPH_HIT] });
+    request.mockResolvedValueOnce({ results: [DOCUMENT_HIT] });
     request.mockResolvedValueOnce({ results: [DOCUMENT_HIT, GRAPH_HIT] });
     await user.type(screen.getByPlaceholderText(/search every workspace/i), "query{Enter}");
-    expect(await screen.findByText("2 results found")).toBeInTheDocument();
-    await user.click(screen.getByRole("radio", { name: "Knowledge" }));
-    expect(screen.getByText("1 result found")).toBeInTheDocument();
-    expect(screen.queryByText("Workspace B / Onboarding Notes")).toBeNull();
-    expect(screen.getByText("Fox Story")).toBeInTheDocument();
+    expect(await screen.findByText("Fox Story")).toBeInTheDocument();
+
     await user.click(screen.getByRole("radio", { name: "Graphs" }));
-    expect(screen.getByText("Workspace B / Onboarding Notes")).toBeInTheDocument();
+    expect(await screen.findByText("Workspace B / Onboarding Notes")).toBeInTheDocument();
     expect(screen.queryByText("Fox Story")).toBeNull();
+    expect(intents).toContainEqual(["globalSearch", "search", ["query", 10, null, "graphs"]]);
+
+    await user.click(screen.getByRole("radio", { name: "Knowledge" }));
+    expect(await screen.findByText("Fox Story")).toBeInTheDocument();
+    expect(screen.queryByText("Workspace B / Onboarding Notes")).toBeNull();
+    expect(intents).toContainEqual(["globalSearch", "search", ["query", 10, null, "knowledge"]]);
+
+    await user.click(screen.getByRole("radio", { name: "All" }));
+    expect(await screen.findByText("2 results found")).toBeInTheDocument();
+    expect(request).toHaveBeenCalledTimes(4);
+  });
+
+  it("ignores an in-flight reply from the previous scope", async () => {
+    const { user, request } = await setup();
+    let resolveOld: (value: unknown) => void = () => {};
+    let resolveNew: (value: unknown) => void = () => {};
+    request.mockImplementationOnce(() => new Promise((resolve) => { resolveOld = resolve; }));
+    request.mockImplementationOnce(() => new Promise((resolve) => { resolveNew = resolve; }));
+    await user.type(screen.getByPlaceholderText(/search every workspace/i), "query{Enter}");
+    await user.click(screen.getByRole("radio", { name: "Graphs" }));
+    expect(request).toHaveBeenCalledTimes(2);
+
+    await act(async () => { resolveNew({ results: [GRAPH_HIT] }); });
+    expect(await screen.findByText("Workspace B / Onboarding Notes")).toBeInTheDocument();
+    await act(async () => { resolveOld({ results: [DOCUMENT_HIT] }); });
+    expect(screen.queryByText("Fox Story")).toBeNull();
+    expect(screen.getByText("Workspace B / Onboarding Notes")).toBeInTheDocument();
   });
 });
