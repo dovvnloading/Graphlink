@@ -144,12 +144,17 @@ def _ranked_component(
                 for pos, nid in enumerate(levels[adjacent])
             }
             previous = {nid: pos for pos, nid in enumerate(levels[depth])}
+            # list.sort() temporarily presents its own list as empty while
+            # evaluating key functions. Capture this count *before* sorting:
+            # reading len(levels[depth]) from key() can divide by zero on
+            # isolated/unconstrained vertices in a partially scoped DAG.
+            current_count = len(previous)
             def key(nid: str) -> tuple[float, int]:
                 positions = [neighbor_positions[n]
                              for n in side[nid] if n in neighbor_positions]
                 if positions:
                     return sum(positions) / len(positions), previous[nid]
-                return (previous[nid] + 0.5) / len(levels[depth]), previous[nid]
+                return (previous[nid] + 0.5) / current_count, previous[nid]
             levels[depth].sort(key=key)
 
     for _ in range(4):
