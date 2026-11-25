@@ -466,7 +466,7 @@ function AppShell() {
                     <LazySurface overlayName="plugins" fallback={null}>
                       <PluginPicker transport={transport} store={sceneStore} />
                     </LazySurface>
-                    <NotificationToaster store={composerStore} />
+                    <NotificationToaster store={composerStore} excludeScope={overlays.isOpen("workflow-library") ? "workflow-library" : undefined} />
                     <WorkflowApprovalNotifications connected={status === "open"} />
                     <ConfirmDialog />
                   </div>

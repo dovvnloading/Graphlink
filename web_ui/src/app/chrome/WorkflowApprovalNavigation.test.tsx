@@ -32,12 +32,12 @@ const other: DetachedRun = { ...waiting, run_id: "other", status: "completed", s
 const doc: WorkflowDocument = { format: "graphlink-workflow", spec, parameters: [] };
 
 function Harness({ store }: { store: SceneStore }) {
-  const { open } = useOverlays();
+  const { open, isOpen } = useOverlays();
   return <>
     <button onClick={() => open("workflow-library", "dialog")}>Open library</button>
     <WorkflowApprovalNotifications connected />
     <WorkflowLibraryDialog store={store} />
-    <Toaster />
+    <Toaster excludeScope={isOpen("workflow-library") ? "workflow-library" : undefined} />
   </>;
 }
 
@@ -166,6 +166,20 @@ it("opens directly into the notification's workspace when the library was closed
   const { user, fetchMock } = setup({ workspace: 4 });
   await user.click(await screen.findByRole("button", { name: "Review run" }));
   const dialog = within(await screen.findByRole("dialog", { name: "Workflow library" }));
+  expect(await dialog.findByRole("heading", { name: "Waiting workflow" })).toBeVisible();
+  expect(dialog.getByRole("button", { name: "Approve step" })).toBeEnabled();
+  expect(fetchMock.mock.calls.every(([, init]) => !init?.method || init.method === "GET")).toBe(true);
+});
+
+it("moves the same approval notice into the modal without duplicating or approving it", async () => {
+  const { user, fetchMock } = setup();
+  expect(await screen.findByRole("button", { name: "Review run" })).toBeVisible();
+  await user.click(screen.getByRole("button", { name: "Open library" }));
+  const dialog = within(screen.getByRole("dialog", { name: "Workflow library" }));
+  const action = await dialog.findByRole("button", { name: "Review run" });
+  expect(screen.getAllByRole("button", { name: "Review run" })).toHaveLength(1);
+  action.focus();
+  await user.keyboard("{Enter}");
   expect(await dialog.findByRole("heading", { name: "Waiting workflow" })).toBeVisible();
   expect(dialog.getByRole("button", { name: "Approve step" })).toBeEnabled();
   expect(fetchMock.mock.calls.every(([, init]) => !init?.method || init.method === "GET")).toBe(true);

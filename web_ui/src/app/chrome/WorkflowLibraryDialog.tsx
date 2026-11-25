@@ -16,6 +16,7 @@ import { InlineAlert } from "../ui/InlineAlert";
 import { MenuButton, MenuItem } from "../ui/Menu";
 import { Select } from "../ui/Select";
 import { Tabs } from "../ui/Tabs";
+import { Toaster } from "../ui/Toast";
 import { TextField } from "../ui/TextField";
 import { subscribeApprovalTarget, takeApprovalTarget } from "./WorkflowApprovalNotifications";
 import { WorkflowPresetsPanel, type PresetStart } from "./WorkflowPresetsPanel";
@@ -372,6 +373,7 @@ function Library({ store }: { store: SceneStore }) {
   return <div className="workflow-library">
     <p className="visually-hidden" role="status">{loading ? "Loading workflows…" : busy ? "Updating the workflow library…" : ""}</p>
     {error && <InlineAlert variant="error" title="Something in the workflow library failed" body={error} />}
+    <Toaster inlineScope="workflow-library" />
     <Tabs label="Workflow library sections" value={tab} items={[
       { id: "workflows", label: `Workflows (${rows.length})`, content: workflowsPanel },
       { id: "runs", label: waiting ? `Runs (${waiting} waiting)` : `Runs (${runs.length})`, content:

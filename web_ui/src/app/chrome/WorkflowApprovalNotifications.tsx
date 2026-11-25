@@ -48,7 +48,7 @@ export function WorkflowApprovalNotifications({ connected }: { connected: boolea
           pending.add(key);
           if (!shown.has(key)) {
             shown.set(key, toast.show({
-              variant: "warning", title: gate.workflow + " is waiting for you",
+              scope: "workflow-library", variant: "warning", title: gate.workflow + " is waiting for you",
               details: gate.message, action: {
                 label: "Review run", onClick: () => { openApprovalTarget(gate); open("workflow-library", "dialog"); },
               },
