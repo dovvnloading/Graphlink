@@ -20,6 +20,7 @@ from backend.domain.containment import group_dependency_order, hidden_group_desc
 from backend.domain.geometry_safety import validate_layout_geometry
 from backend.domain.layout_invariants import validate_no_new_false_containment
 from backend.domain.layout import NODE_GAP_X, _rects_clear
+from backend.domain.dag_layout import dag_layout_supported, organize_dag_layout
 from backend.domain.model import SceneError, SceneNode
 from backend.domain.node_states import FrameState, GroupSizedState
 from backend.domain.structure import primary_parent_edges
@@ -28,6 +29,7 @@ if TYPE_CHECKING:
     from backend.domain.graph import SceneDocument
 
 OrganizationScope = Literal["all", "branch", "group", "selection"]
+OrganizationLayoutStyle = Literal["tree", "dag"]
 _GROUP_KINDS = frozenset(("frame", "container"))
 
 
@@ -229,7 +231,9 @@ def _place_subset(
     shadow: SceneDocument,
     original: SceneDocument,
     movable: set[str],
-) -> None:
+    *,
+    layout_style: OrganizationLayoutStyle = "tree",
+) -> bool:
     """Run the existing measured, deterministic tree packer *only* on movable leaves.
 
     Anchor the new arrangement near its former top-left and translate the
@@ -237,7 +241,7 @@ def _place_subset(
     collision never distorts the edges' relative geometry.
     """
     if not movable:
-        return
+        return False
     original_left = min(original.nodes[nid].x for nid in movable)
     original_top = min(original.nodes[nid].y for nid in movable)
     subset = copy.copy(shadow)
@@ -246,7 +250,9 @@ def _place_subset(
         eid: e for eid, e in shadow.edges.items()
         if e.source in movable and e.target in movable
     }
-    subset.organize_layout()
+    used_dag = organize_dag_layout(subset) if layout_style == "dag" else False
+    if layout_style != "dag":
+        subset.organize_layout()
 
     layout_left = min(shadow.nodes[nid].x for nid in movable)
     layout_top = min(shadow.nodes[nid].y for nid in movable)
@@ -292,6 +298,7 @@ def _place_subset(
             shadow.nodes[nid].x += shift
     else:
         raise SceneError("could not find space for organized selection")
+    return used_dag
 
 
 @dataclass(frozen=True)
@@ -302,6 +309,8 @@ class OrganizationPlan:
     selected_ids: frozenset[str]
     changed_ids: frozenset[str]
     nodes: dict[str, SceneNode]
+    layout_style: OrganizationLayoutStyle = "tree"
+    effective_style: OrganizationLayoutStyle = "tree"
 
     def preview(self, document: SceneDocument) -> dict[str, object]:
         """Give the client a read-only before/after diagram with live edges.
@@ -353,6 +362,11 @@ class OrganizationPlan:
             "fingerprint": self.source_fingerprint,
             "planId": self.plan_id,
             "scope": self.scope,
+            "layoutStyle": self.layout_style,
+            "effectiveLayoutStyle": self.effective_style,
+            "layoutNote": ("DAG mode is currently optimized for ungrouped, bounded graphs; "
+                           "the group-safe tree organizer was used."
+                           if self.layout_style == "dag" and self.effective_style != "dag" else ""),
             "selectedCount": len(self.selected_ids),
             "movedCount": len(self.changed_ids),
             "areaBefore": area(before_bounds),
@@ -374,6 +388,7 @@ def make_organization_plan(
     node_ids: list[str] | None = None,
     fixed_node_ids: list[str] | None = None,
     preserve_frame_sizes: bool = True,
+    layout_style: OrganizationLayoutStyle = "tree",
 ) -> OrganizationPlan:
     """Plan a scoped organization. No mutation of document is permitted."""
     if scope not in ("all", "branch", "group", "selection"):
@@ -388,6 +403,8 @@ def make_organization_plan(
             raise SceneError(f"{name} must be a list of node ids")
     if not isinstance(preserve_frame_sizes, bool):
         raise SceneError("preserve_frame_sizes must be a boolean")
+    if layout_style not in ("tree", "dag"):
+        raise SceneError("layout_style must be tree or dag")
     # Reject malformed coordinates and dimensions before calculating even a
     # read-only preview, including stale browser measurements.
     validate_layout_geometry(document)
@@ -424,8 +441,13 @@ def make_organization_plan(
         raise SceneError("cannot organize: all selected content is a fixed node")
     shadow = _clone_for_layout(document)
 
+    use_dag = layout_style == "dag" and dag_layout_supported(shadow)
+    effective_style: OrganizationLayoutStyle = "tree"
     if scope == "all" and not fixed:
-        shadow.organize_layout()
+        if use_dag and organize_dag_layout(shadow):
+            effective_style = "dag"
+        else:
+            shadow.organize_layout()
         if preserve_frame_sizes:
             # Organize's historical default clears manual frame sizing.
             # Explicit preview/apply preserves the dimensions by default.
@@ -435,7 +457,11 @@ def make_organization_plan(
                 True,
             )
     else:
-        _place_subset(shadow, document, movable)
+        if _place_subset(
+            shadow, document, movable,
+            layout_style="dag" if use_dag else "tree",
+        ):
+            effective_style = "dag"
         _refit_groups(shadow, document, _affected_groups(shadow, movable), preserve_frame_sizes)
 
     # A fixed frame/container is as immutable as a fixed content card.
@@ -458,11 +484,12 @@ def make_organization_plan(
     signature = hashlib.sha256(
         repr((
             source_fingerprint, scope, root_id, tuple(sorted(selected)),
-            tuple(sorted(fixed)), preserve_frame_sizes,
+            tuple(sorted(fixed)), preserve_frame_sizes, layout_style, effective_style,
             tuple((nid, _layout_geometry(shadow.nodes[nid])) for nid in sorted(changed)),
         )).encode("utf-8")
     ).hexdigest()
-    return OrganizationPlan(source_fingerprint, signature, scope, frozenset(selected), changed, shadow.nodes)
+    return OrganizationPlan(source_fingerprint, signature, scope, frozenset(selected), changed,
+                            shadow.nodes, layout_style, effective_style)
 
 
 def apply_organization_plan(document: SceneDocument, plan: OrganizationPlan) -> None:
