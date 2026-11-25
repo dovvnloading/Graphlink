@@ -173,13 +173,13 @@ function RunDetail({ run, workspace, presetName, onChanged }: {
   </section>;
 }
 
-export function WorkflowRunsPanel({ workspace, runs, loaded, presets, selected, onSelect, onChanged, toolbar }: {
+export function WorkflowRunsPanel({ workspace, runs, loaded, presets, selected, fromNotification = false, onSelect, onChanged, toolbar }: {
   workspace: number | null; runs: DetachedRun[]; loaded: boolean; presets: Preset[];
-  selected: string; onSelect: (runId: string) => void; onChanged: () => void; toolbar?: ReactNode;
+  selected: string; fromNotification?: boolean; onSelect: (runId: string) => void; onChanged: () => void; toolbar?: ReactNode;
 }) {
   const [custom, setCustom] = useState(false);
   const heading = useRef<HTMLHeadingElement>(null);
-  const focusHeading = useRef(false);
+  const focusHeading = useRef(Boolean(selected));
   const run = runs.find(item => item.run_id === selected);
   useEffect(() => {
     if (focusHeading.current) { focusHeading.current = false; heading.current?.focus(); }
@@ -187,22 +187,25 @@ export function WorkflowRunsPanel({ workspace, runs, loaded, presets, selected, 
   const presetName = (id: string | null | undefined) => presets.find(preset => preset.preset_id === id)?.name ?? null;
   const back = () => { focusHeading.current = true; onSelect(""); setCustom(false); };
 
-  if (custom && workspace !== null) {
+  if (custom && !selected && workspace !== null) {
     return <div className="workflow-panel">
       <Button variant="ghost" iconStart="chevron-left" className="workflow-back" onClick={back}>All runs</Button>
       <h3 ref={heading} tabIndex={-1}>Run from a JSON request</h3>
       <p className="workflow-muted">For a spec you wrote or exported. Library workflows are easier to run from their page in the Workflows tab.</p>
       <WorkflowRunLauncher jsonOnly workspace={workspace} previewLabel="Workflow preview"
-        onStarted={runId => { setCustom(false); onSelect(runId); onChanged(); }} />
+        onStarted={runId => { focusHeading.current = true; setCustom(false); onSelect(runId); onChanged(); }} />
     </div>;
   }
   if (selected) {
     return <div className="workflow-panel">
       <Button variant="ghost" iconStart="chevron-left" className="workflow-back" onClick={back}>All runs</Button>
       <h3 ref={heading} tabIndex={-1} className="visually-hidden">Selected run</h3>
+      {fromNotification && <p className="workflow-muted">Reviewing a notification closes any unsaved run or preset form without saving its draft.</p>}
       {run && workspace !== null
         ? <RunDetail key={run.run_id} run={run} workspace={workspace} presetName={presetName(run.preset_id)} onChanged={onChanged} />
-        : <p className="workflow-muted" role="status">Loading the run…</p>}
+        : <p className="workflow-muted" role="status">{loaded
+          ? "This run is no longer available in this workspace. Return to All runs to choose another run."
+          : "Loading the run…"}</p>}
     </div>;
   }
   const waiting = runs.filter(runWaiting).length;

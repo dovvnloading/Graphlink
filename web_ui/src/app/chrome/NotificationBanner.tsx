@@ -7,10 +7,10 @@ export { TRANSIENT_NOTIFICATION_MS } from "../ui/Toast";
 /** Bridges the live backend notification topic into the kit toaster.
  * Dismissal remains store.dismissNotification(), which sends the original
  * fireIntent("notification", "dismiss", []) backend intent. */
-export function NotificationToaster({ store }: { store: ComposerStore }) {
+export function NotificationToaster({ store, excludeScope }: { store: ComposerStore; excludeScope?: string }) {
   const notification = useSyncExternalStore(store.subscribe, store.getNotification);
   const dismiss = useCallback(() => store.dismissNotification(), [store]);
-  return <Toaster backendNotification={notification.visible ? {
+  return <Toaster excludeScope={excludeScope} backendNotification={notification.visible ? {
     id: "backend-notification-" + notification.revision,
     message: notification.message,
     msgType: notification.msgType,
