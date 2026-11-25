@@ -197,6 +197,53 @@ class TestIngestFile:
         assert chunks[0]["offset_end"] == len(expected)
 
 
+    def test_ingesting_nested_docx_table_preserves_chunk_text_and_offsets(self, db_path, tmp_path):
+        pytest.importorskip("docx")
+        from docx import Document
+
+        from backend.knowledge_store import list_chunks_for_document
+
+        document = Document()
+        document.add_paragraph("Header")
+        outer = document.add_table(rows=1, cols=1).cell(0, 0)
+        outer.text = "Before"
+        nested = outer.add_table(rows=1, cols=2)
+        nested.cell(0, 0).text = "Nested detail"
+        nested.cell(0, 1).text = "Nested value"
+        outer.paragraphs[-1].text = "After"
+        document.add_paragraph("Footer")
+        path = tmp_path / "nested.docx"
+        document.save(path)
+
+        expected = "Header\nBefore\nNested detail\tNested value\nAfter\nFooter"
+        text, mime = extract_text(path)
+        assert text == expected
+        assert mime == "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+
+        outcome = ingest_file(str(path), db_path=db_path)
+        chunks = list_chunks_for_document(db_path, outcome.document_id)
+        assert outcome.was_new is True
+        assert outcome.chunk_count == len(chunks) == 1
+        assert chunks[0]["text"] == expected
+        assert chunks[0]["offset_start"] == 0
+        assert chunks[0]["offset_end"] == len(expected)
+
+    def test_nested_docx_knowledge_extraction_shares_text_limit(self, tmp_path, monkeypatch):
+        pytest.importorskip("docx")
+        from docx import Document
+
+        import backend.attachments as attachments_module
+
+        document = Document()
+        outer = document.add_table(rows=1, cols=1).cell(0, 0)
+        outer.add_table(rows=1, cols=1).cell(0, 0).text = "Nested detail"
+        path = tmp_path / "nested-budget.docx"
+        document.save(path)
+
+        monkeypatch.setattr(attachments_module, "MAX_DOCUMENT_TEXT_CHARS", 10)
+        with pytest.raises(AttachmentError, match="extracted-text"):
+            extract_text(path)
+
     def test_reingesting_the_same_file_is_a_no_op(self, db_path, tmp_path):
         path = tmp_path / "notes.txt"
         path.write_text("Identical content every time.")

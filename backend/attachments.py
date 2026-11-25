@@ -558,25 +558,55 @@ def _read_docx(path: Path) -> str:
     # instead would not be an equivalent rewrite - the str branch runs an
     # os.path.isdir/is_zipfile probe first and raises PackageNotFoundError
     # for a missing file, where the Path branch raises FileNotFoundError.
-    from docx.table import Table
+    from docx.table import Table, _Cell
 
     _check_docx_archive(path)
     document = docx.Document(path)  # type: ignore[arg-type]
-    # document.paragraphs silently omits all table cells. Walk the source
-    # blocks in order, preserving both paragraphs and table rows in context.
+
+    def row_fragments(table, row):
+        # row.cells expands grid spans and resolves vertical merges to the
+        # origin cell. Walk physical XML cells once instead: merged content
+        # is not repeated and no synthetic grid positions are expanded.
+        for index, tc in enumerate(row._tr.tc_lst):
+            if index:
+                yield "\t"
+            yield block_fragments(_Cell(tc, table))
+
+    def block_fragments(container):
+        # Both the document and each cell expose paragraphs and nested
+        # tables in source order. Flatten rows with newlines, cells with
+        # tabs, and paragraphs within cells with newlines as before.
+        first = True
+        for block in container.iter_inner_content():
+            fragments = (
+                (row_fragments(block, row) for row in block.rows)
+                if isinstance(block, Table) else (block.text,)
+            )
+            for fragment in fragments:
+                if not first:
+                    yield "\n"
+                first = False
+                yield fragment
+
+    # Walk nested iterators depth-first without recursive calls or building
+    # unbounded cell/row strings. Charge separators and nested text against
+    # one budget before collecting them (retain the previous +1 allowance
+    # for the final line's implicit separator).
     parts: list[str] = []
-    char_count = 0
-    for block in document.iter_inner_content():
-        rows = (
-            ("\t".join(cell.text for cell in row.cells) for row in block.rows)
-            if isinstance(block, Table) else (block.text,)
-        )
-        for text in rows:
-            char_count += len(text) + 1
+    char_count = 1
+    pending = [block_fragments(document)]
+    while pending:
+        fragment = next(pending[-1], None)
+        if fragment is None:
+            pending.pop()
+        elif isinstance(fragment, str):
+            char_count += len(fragment)
             if char_count > MAX_DOCUMENT_TEXT_CHARS:
                 raise AttachmentError("DOCX exceeds the extracted-text attachment limit.")
-            parts.append(text)
-    return "\n".join(parts)
+            parts.append(fragment)
+        else:
+            pending.append(fragment)
+    return "".join(parts)
 
 
 def _looks_like_code_text(extension: str) -> bool:

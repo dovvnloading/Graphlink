@@ -576,3 +576,113 @@ def test_docx_aggregate_expansion_is_bounded(tmp_file, monkeypatch):
     monkeypatch.setattr(attachments_module, "MAX_DOCX_UNCOMPRESSED_BYTES", 500)
     with pytest.raises(AttachmentError, match="uncompressed ZIP"):
         stage_file(path)
+
+
+def test_docx_extracts_nested_table_only_cell(tmp_path):
+    pytest.importorskip("docx")
+    from docx import Document
+
+    document = Document()
+    outer = document.add_table(rows=1, cols=1).cell(0, 0)
+    outer.add_table(rows=1, cols=1).cell(0, 0).text = "Nested detail"
+    path = tmp_path / "nested-only.docx"
+    document.save(path)
+    assert stage_file(str(path)).extracted_text == "\nNested detail\n"
+
+
+def test_docx_extracts_nested_rows_and_paragraphs_in_order(tmp_path):
+    pytest.importorskip("docx")
+    from docx import Document
+
+    document = Document()
+    document.add_paragraph("Before table")
+    table = document.add_table(rows=2, cols=2)
+    cell = table.cell(0, 0)
+    cell.text = "Before nested"
+    nested = cell.add_table(rows=2, cols=2)
+    nested.cell(0, 0).text = "Key"
+    nested.cell(0, 1).text = "Value"
+    nested.cell(1, 0).text = "Priority"
+    nested.cell(1, 1).text = "High"
+    cell.paragraphs[-1].text = "After nested"
+    table.cell(0, 1).text = "Sibling"
+    table.cell(1, 0).text = "Next row"
+    table.cell(1, 1).text = "End row"
+    document.add_paragraph("After table")
+    path = tmp_path / "nested-order.docx"
+    document.save(path)
+    assert stage_file(str(path)).extracted_text == (
+        "Before table\nBefore nested\nKey\tValue\nPriority\tHigh\n"
+        "After nested\tSibling\nNext row\tEnd row\nAfter table"
+    )
+
+
+def test_docx_extracts_multiple_nesting_levels(tmp_path):
+    pytest.importorskip("docx")
+    from docx import Document
+
+    document = Document()
+    cell = document.add_table(rows=1, cols=1).cell(0, 0)
+    cell.text = "Level 1"
+    for level in range(2, 5):
+        cell = cell.add_table(rows=1, cols=1).cell(0, 0)
+        cell.text = f"Level {level}"
+    path = tmp_path / "deep.docx"
+    document.save(path)
+    assert stage_file(str(path)).extracted_text == "Level 1\nLevel 2\nLevel 3\nLevel 4\n\n\n"
+
+
+def test_docx_extracts_merged_cells_once_including_nested_tables(tmp_path):
+    pytest.importorskip("docx")
+    from docx import Document
+
+    document = Document()
+    table = document.add_table(rows=2, cols=3)
+    merged = table.cell(0, 0).merge(table.cell(1, 1))
+    merged.text = "Merged"
+    nested = merged.add_table(rows=1, cols=2)
+    nested.cell(0, 0).merge(nested.cell(0, 1)).text = "Nested merged"
+    merged.paragraphs[-1].text = "Tail"
+    table.cell(0, 2).text = "First sibling"
+    table.cell(1, 2).text = "Second sibling"
+    path = tmp_path / "merged.docx"
+    document.save(path)
+    assert stage_file(str(path)).extracted_text == (
+        "Merged\nNested merged\nTail\tFirst sibling\n\tSecond sibling"
+    )
+
+
+@pytest.mark.parametrize("limit, succeeds", [(7, True), (6, False)])
+def test_docx_nested_text_and_separators_count_toward_limit(tmp_path, monkeypatch, limit, succeeds):
+    pytest.importorskip("docx")
+    from docx import Document
+
+    import backend.attachments as attachments_module
+
+    document = Document()
+    outer = document.add_table(rows=1, cols=1).cell(0, 0)
+    outer.text = "A"
+    nested = outer.add_table(rows=1, cols=2)
+    nested.cell(0, 0).text = "B"
+    nested.cell(0, 1).text = "C"
+    path = tmp_path / "nested-budget.docx"
+    document.save(path)
+    monkeypatch.setattr(attachments_module, "MAX_DOCUMENT_TEXT_CHARS", limit)
+    if succeeds:
+        assert stage_file(str(path)).extracted_text == "A\nB\tC\n"
+    else:
+        with pytest.raises(AttachmentError, match="extracted-text"):
+            stage_file(str(path))
+
+
+def test_docx_empty_table_does_not_add_a_separator(tmp_path):
+    pytest.importorskip("docx")
+    from docx import Document
+
+    document = Document()
+    document.add_paragraph("Before")
+    document.add_table(rows=0, cols=1)
+    document.add_paragraph("After")
+    path = tmp_path / "empty-table.docx"
+    document.save(path)
+    assert stage_file(str(path)).extracted_text == "Before\nAfter"
