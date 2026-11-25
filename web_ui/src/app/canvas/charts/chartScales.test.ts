@@ -5,6 +5,8 @@ import {
   heatmapColor,
   createLinearScale,
   formatValue,
+  formatLegacyTick,
+  legacyLinePadding,
   mean,
   median,
   niceTicks,
@@ -185,5 +187,41 @@ describe("boxplot statistics and heatmap palette", () => {
     expect(heatmapColor(1, 0, 1)).toBe("#0a6275");
     expect(heatmapColor(1, 1, 1)).toBe("#e5f5f9");
     expect(heatmapColor(0.5, 0, 1)).not.toBe(heatmapColor(0, 0, 1));
+  });
+});
+
+describe("legacy scientific-magnitude axes", () => {
+  it.each([
+    [0, 1.18e-120], [-1e-200, 1e-200], [0, Number.MIN_VALUE],
+    [1e308, 1.0000000000000002e308], [-1e308, 1e308],
+  ])("keeps ticks bounded, ordered, finite and informative for [%s, %s]", (min, max) => {
+    const ticks = niceTicks(min, max);
+    expect(ticks.length).toBeGreaterThanOrEqual(2);
+    expect(ticks.length).toBeLessThanOrEqual(103);
+    expect(ticks.every(Number.isFinite)).toBe(true);
+    expect(ticks[0]).toBeLessThanOrEqual(min);
+    expect(ticks[ticks.length - 1]).toBeGreaterThanOrEqual(max);
+    expect(ticks.every((tick, index) => index === 0 || tick > ticks[index - 1])).toBe(true);
+    expect(new Set(ticks.map(formatLegacyTick)).size).toBe(ticks.length);
+    for (const tick of ticks) {
+      expect(Number(formatLegacyTick(tick).replace(/,/g, ""))).toBe(tick);
+    }
+  });
+
+  it("preserves ordinary ticks and labels small nonzero data", () => {
+    expect(niceTicks(0, 97)).toEqual([0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100]);
+    expect(formatValue(1e-120)).toBe("1e-120");
+    expect(formatValue(-1e-120)).toBe("-1e-120");
+    expect(formatLegacyTick(0.012)).toBe("0.012");
+  });
+
+  it("keeps constant tiny domains and bin counts in data units", () => {
+    expect(legacyLinePadding(1e-120, 1e-120) / 1e-120).toBeCloseTo(0.18);
+    const bins = computeHistogramBins([1e-120, 1e-120], 2);
+    expect(bins[0].x0).toBeGreaterThan(0);
+    expect(bins[0].x0).toBeLessThan(1e-120);
+    expect(bins[1].x1).toBeGreaterThan(1e-120);
+    expect(bins[1].x1).toBeLessThan(2e-120);
+    expect(bins.reduce((sum, bin) => sum + bin.count, 0)).toBe(2);
   });
 });

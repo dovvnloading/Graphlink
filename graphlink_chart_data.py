@@ -826,6 +826,28 @@ def _composite_chart(data, result):
     return result
 
 
+def _check_legacy_chart_range(values, chart_type):
+    """Keep legacy SVG and Matplotlib transforms within a shared safe range.
+
+    The exporter needs headroom for padding, tick locations, and inverse
+    transforms. Its nonsingular-axis guard also expands extremely tiny or
+    indistinguishable ranges to unrelated units. Never silently alter data.
+    """
+    if any(value != 0 and not 1e-280 <= abs(value) <= 1e300 for value in values):
+        raise ChartDataError(
+            "Legacy chart values must be zero or have absolute magnitude between "
+            "1e-280 and 1e300; rescale the data and update the axis units."
+        )
+    if chart_type in {"line", "histogram"}:
+        lo, hi = min(values), max(values)
+        span = hi - lo
+        if span > 0 and (span < 1e-280 or span <= max(abs(lo), abs(hi)) * 1e-14):
+            raise ChartDataError(
+                "Legacy line/histogram values are too close for a reliable linear axis; "
+                "subtract a common offset or rescale the data and update the axis units."
+            )
+
+
 def _canonicalize_chart_data_base(data, chart_type=None):
     """Return a new, bounded chart payload or raise :class:`ChartDataError`.
 
@@ -899,6 +921,8 @@ def _canonicalize_chart_data_base(data, chart_type=None):
         result["values"] = [
             _finite_number(value, f"Value at index {index}") for index, value in enumerate(values)
         ]
+        if expected_type in {"bar", "line"}:
+            _check_legacy_chart_range(result["values"], expected_type)
         if expected_type == "pie" and any(value <= 0 for value in result["values"]):
             raise ChartDataError("Pie chart values must be greater than zero")
         result["xAxis"] = _clean_text(
@@ -920,6 +944,7 @@ def _canonicalize_chart_data_base(data, chart_type=None):
         if bins < 2:
             raise ChartDataError("Histogram bins must be at least 2")
         result["values"] = [_finite_number(value, f"Value at index {index}") for index, value in enumerate(values)]
+        _check_legacy_chart_range(result["values"], expected_type)
         result["bins"] = max(2, min(int(bins), 24, len(values)))
         result["xAxis"] = _clean_text(data.get("xAxis"), "X-axis label", default="Value", max_length=MAX_LABEL_LENGTH)
         result["yAxis"] = _clean_text(data.get("yAxis"), "Y-axis label", default="Frequency", max_length=MAX_LABEL_LENGTH)

@@ -6,7 +6,7 @@ import type { ChartDataRow } from "../../../lib/bridge-core/generated/scene-stat
 import { usesScientificMarks } from "../chartSpec";
 import { regressionYExtent } from "./linearFit";
 import {
-  computeHistogramBins, createLinearScale, createLog10Scale, niceTicks,
+  computeHistogramBins, createLinearScale, createLog10Scale, legacyLinePadding, niceTicks,
   pickCategoricalTicks, scientificDomain, type Scale,
 } from "./chartScales";
 import { computeBottomMargin, computeLeftMargin } from "./chartLayout";
@@ -59,8 +59,7 @@ export function chartFrame(chart: ChartDataRow, type: string, width: number, hei
     const values = chart.values ?? [];
     const rawMin = Math.min(...values);
     const rawMax = Math.max(...values);
-    const span = rawMax - rawMin;
-    const buffer = span * 0.18 || Math.max(Math.abs(rawMax), 1) * 0.18 || 1;
+    const buffer = legacyLinePadding(rawMin, rawMax);
     const ticks = niceTicks(rawMin - buffer, rawMax + buffer, 5);
     y = [Math.min(rawMin - buffer, ticks[0]), Math.max(rawMax + buffer, ticks[ticks.length - 1])];
     x = [0, values.length - 1];

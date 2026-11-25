@@ -739,6 +739,22 @@ function legacySankeyFlows(payload: Record<string, unknown>): RawSankeyFlow[] | 
  * Never mutates `data`. Throws ChartSpecError on anything the backend would
  * also reject.
  */
+/** Mirror graphlink_chart_data._check_legacy_chart_range. The shared
+ * limits reserve headroom for Matplotlib and prevent silent axis expansion. */
+function checkLegacyChartRange(values: number[], chartType: string): void {
+  if (values.some((value) => value !== 0 && (Math.abs(value) < 1e-280 || Math.abs(value) > 1e300))) {
+    throw new ChartSpecError("Legacy chart values must be zero or have absolute magnitude between 1e-280 and 1e300; rescale the data and update the axis units.");
+  }
+  if (chartType === "line" || chartType === "histogram") {
+    const lo = Math.min(...values);
+    const hi = Math.max(...values);
+    const span = hi - lo;
+    if (span > 0 && (span < 1e-280 || span <= Math.max(Math.abs(lo), Math.abs(hi)) * 1e-14)) {
+      throw new ChartSpecError("Legacy line/histogram values are too close for a reliable linear axis; subtract a common offset or rescale the data and update the axis units.");
+    }
+  }
+}
+
 function canonicalizeChartSpecBase(data: unknown, chartType?: string | null): ChartDataRow {
   if (typeof data !== "object" || data === null || Array.isArray(data)) {
     throw new ChartSpecError("Chart payload must be an object");
@@ -791,6 +807,7 @@ function canonicalizeChartSpecBase(data: unknown, chartType?: string | null): Ch
     }
     result.labels = labels.map((label, index) => cleanText(label, `Label at index ${index}`));
     result.values = values.map((value, index) => finiteNumber(value, `Value at index ${index}`));
+    if (expectedType === "bar" || expectedType === "line") checkLegacyChartRange(result.values, expectedType);
     if (expectedType === "pie" && result.values.some((value) => value <= 0)) {
       throw new ChartSpecError("Pie chart values must be greater than zero");
     }
@@ -812,6 +829,7 @@ function canonicalizeChartSpecBase(data: unknown, chartType?: string | null): Ch
     const bins = finiteNumber(raw.bins ?? 10, "Histogram bins");
     if (bins < 2) throw new ChartSpecError("Histogram bins must be at least 2");
     result.values = values.map((value, index) => finiteNumber(value, `Value at index ${index}`));
+    checkLegacyChartRange(result.values, expectedType);
     result.bins = Math.max(2, Math.min(Math.trunc(bins), 24, result.values.length));
     result.xAxis = cleanText(raw.xAxis, "X-axis label", { default: "Value" });
     result.yAxis = cleanText(raw.yAxis, "Y-axis label", { default: "Frequency" });

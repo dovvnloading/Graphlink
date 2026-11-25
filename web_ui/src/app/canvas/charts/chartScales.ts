@@ -87,9 +87,8 @@ export function scientificDomain(min: number, max: number, scale: "linear" | "lo
   return Number.isFinite(upper - lower) ? [lower, upper] : [min, max];
 }
 
-/** Scientific linear ticks cannot use niceTicks: its fixed-decimal rounding
- * throws RangeError for 1e-200 and its integer formatter labels tiny
- * nonzero measurements "0". Never change the legacy chart tick helper. */
+/** Scientific linear ticks stay inside their exact data-space domain,
+ * unlike legacy niceTicks, which may widen the domain to round ticks. */
 export function scientificLinearTicks(min: number, max: number, targetCount = 5): number[] {
   if (min === max) return [min];
   const rawStep = (max - min) / Math.max(1, targetCount);
@@ -124,36 +123,42 @@ export function formatScientificTick(value: number): string {
  * closest to the ideal step for the requested tick count, then emit every
  * multiple of that step inside the (slightly widened) span. */
 export function niceTicks(min: number, max: number, targetCount = 5): number[] {
-  if (!Number.isFinite(min) || !Number.isFinite(max)) return [0];
+  if (!Number.isFinite(min) || !Number.isFinite(max) || min > max) return [0];
   if (min === max) {
     if (min === 0) return [0];
     const magnitude = 10 ** Math.floor(Math.log10(Math.abs(min)));
-    return [min - magnitude, min, min + magnitude];
+    return [min - magnitude, min, min + magnitude]
+      .filter((value, index, all) => Number.isFinite(value) && (index === 0 || value > all[index - 1]));
   }
-  const span = max - min;
-  const roughStep = span / Math.max(1, targetCount);
+  const count = Math.min(20, Math.max(1, Number.isFinite(targetCount) ? targetCount : 5));
+  const roughStep = (max - min) / count;
   const magnitude = 10 ** Math.floor(Math.log10(roughStep));
   const residual = roughStep / magnitude;
-  let step: number;
-  if (residual >= 5) step = 5 * magnitude;
-  else if (residual >= 2) step = 2 * magnitude;
-  else step = magnitude;
-
-  const niceMin = Math.floor(min / step) * step;
-  const niceMax = Math.ceil(max / step) * step;
-  const ticks: number[] = [];
-  // Round to kill float noise (e.g. 0.1 + 0.2 style drift) at the step's own precision.
+  const step = magnitude * (residual >= 5 ? 5 : residual >= 2 ? 2 : 1);
+  if (!Number.isFinite(step) || step <= 0) return [min, max];
+  const lo = Math.floor(min / step);
+  const hi = Math.ceil(max / step);
+  // An unsafe index cannot be incremented reliably. Fall back to exact
+  // endpoints rather than emitting an empty array or an unbounded loop.
+  if (!Number.isSafeInteger(lo) || !Number.isSafeInteger(hi) || hi - lo > 102) return [min, max];
   const decimals = Math.max(0, -Math.floor(Math.log10(step)));
-  for (let tick = niceMin; tick <= niceMax + step / 2; tick += step) {
-    ticks.push(Number(tick.toFixed(decimals + 2)));
+  const ticks: number[] = [];
+  for (let i = lo; i <= hi; i += 1) {
+    const value = i * step;
+    if (!Number.isFinite(value)) return [min, max];
+    const rounded = decimals <= 98 && Math.abs(value) < 1e21
+      ? Number(value.toFixed(decimals + 2)) : Number(value.toPrecision(15));
+    if (!Number.isFinite(rounded) || (ticks.length && rounded <= ticks[ticks.length - 1])) return [min, max];
+    ticks.push(rounded);
   }
-  return ticks;
+  return ticks.length >= 2 && ticks[0] <= min && ticks[ticks.length - 1] >= max ? ticks : [min, max];
 }
 
 /** Port of graphlink_chart_rendering.py's _format_value: thousands-grouped
- * integers, near-integers snapped to whole numbers, everything else to 2
- * decimal places with trailing zeros trimmed. */
+ * integers, near-integers snapped to whole numbers, ordinary fractions to
+ * 2 decimals, and tiny/huge values in informative scientific notation. */
 export function formatValue(value: number): string {
+  if (value !== 0 && (Math.abs(value) < 0.01 || Math.abs(value) >= 1e12)) return value.toExponential();
   if (Math.abs(value) >= 1000) {
     return Math.round(value).toLocaleString("en-US");
   }
@@ -164,6 +169,19 @@ export function formatValue(value: number): string {
     .toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
     .replace(/0+$/, "")
     .replace(/\.$/, "");
+}
+
+/** Axis labels must distinguish ticks even when mark labels are rounded. */
+export function formatLegacyTick(value: number): string {
+  const label = formatValue(value);
+  return Number(label.replace(/,/g, "")) === value ? label : String(value);
+}
+
+/** Keep constant tiny lines in their own units, not a unit-sized domain.
+ * Shared with chartFrame so reset/zoom uses exactly the marks' base domain. */
+export function legacyLinePadding(min: number, max: number): number {
+  const magnitude = Math.max(Math.abs(min), Math.abs(max));
+  return (max - min) * 0.18 || (magnitude > 0 && magnitude < 0.01 ? magnitude : Math.max(magnitude, 1)) * 0.18;
 }
 
 /** Port of _wrap_label - greedy word-wrap into at most `maxLines` lines of
@@ -234,7 +252,9 @@ export function computeHistogramBins(values: number[], bins: number): HistogramB
   // that value. The old `|| 1` bin width expanded only to the RIGHT:
   // [7, 7, 7] appeared over [7, 7+bins], with the true mean/median on the
   // left boundary instead of centered in the graph.
-  const padding = rawMin === rawMax ? Math.max(0.5, Math.abs(rawMin) * 0.05) : 0;
+  const magnitude = Math.abs(rawMin);
+  const padding = rawMin === rawMax
+    ? (magnitude > 0 && magnitude < 0.01 ? magnitude * 0.05 : Math.max(0.5, magnitude * 0.05)) : 0;
   const min = rawMin - padding;
   const max = rawMax + padding;
   const width = (max - min) / bins;
@@ -247,7 +267,7 @@ export function computeHistogramBins(values: number[], bins: number): HistogramB
   }
   return counts.map((count, index) => ({
     x0: min + index * width,
-    x1: min + (index + 1) * width,
+    x1: index === bins - 1 ? max : min + (index + 1) * width,
     count,
   }));
 }

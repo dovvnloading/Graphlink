@@ -6,7 +6,7 @@
 
 import { Fragment } from "react";
 import type { ChartTheme } from "./chartTheme";
-import { formatValue, type Scale } from "./chartScales";
+import { formatLegacyTick, type Scale } from "./chartScales";
 
 export interface XTick {
   position: number;
@@ -39,7 +39,7 @@ export function CartesianAxes({
   innerHeight,
   yTicks,
   yScale,
-  yTickFormat = formatValue,
+  yTickFormat = formatLegacyTick,
   xAxisLabel,
   yAxisLabel,
   xTicks,
