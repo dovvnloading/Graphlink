@@ -217,7 +217,7 @@ describe("ChartRenderer", () => {
 });
 
 describe("legacy chart numeric ranges", () => {
-  it.each(["bar", "line", "histogram"])("%s renders tiny values with finite SVG geometry", (kind) => {
+  it.each(["bar", "line", "histogram"] as const)("%s renders tiny values with finite SVG geometry", (kind) => {
     for (const values of [[1e-120, 2e-120], [1e-120, 1e-120], [-1e-120, 1e-120]]) {
       const chartData: ChartDataRow = { type: kind, labels: ["A", "B"], values, bins: 2 };
       const { container, unmount } = render(<ChartRenderer chartType={kind} chartData={chartData} />);
@@ -230,7 +230,7 @@ describe("legacy chart numeric ranges", () => {
     }
   });
 
-  it.each(["bar", "line", "histogram"])("%s rejects unsupported extreme data with a useful error", (kind) => {
+  it.each(["bar", "line", "histogram"] as const)("%s rejects unsupported extreme data with a useful error", (kind) => {
     for (const values of [[Number.MIN_VALUE, 2 * Number.MIN_VALUE],
       [1e308, 1.0000000000000002e308], [-1e308, 1e308]]) {
       const chartData: ChartDataRow = { type: kind, labels: ["A", "B"], values, bins: 2 };
