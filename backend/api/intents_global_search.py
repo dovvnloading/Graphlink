@@ -37,19 +37,20 @@ _GRAPH_SOURCE_URI_PREFIX = "graph:"
 @dataclass
 class GlobalSearchArgs:
     """`workspaceId=None` (the default - a trailing optional positional arg,
-    same "a dataclass field with a default is correctly optional" shape
-    backend/events.py's own _validate_intent_args docstring already
-    documents) searches every workspace's corpus at once - the default,
+    nullable at the wire-schema level) searches every workspace's
+    corpus at once - the default,
     exit-criterion-driving behavior. A real int scopes to exactly that
     workspace's own knowledge collection, for the optional workspace-filter
     affordance this stage's own design allows (not required for the exit
     criterion, but cheap to support given collection_id already accepts
-    either shape)."""
+    either shape). `scope=None` (omitted or explicit null) searches all
+    sources, preserving the original two- and three-argument calls."""
 
     query: str
     k: int
     workspaceId: int | None = None
-    scope: str = "all"
+    # The strict wire validator requires non-nullable fields even with defaults.
+    scope: str | None = None
 
 
 def _graph_id_from_source_uri(source_uri: str) -> int | None:
@@ -94,7 +95,9 @@ def _format_global_search_results(results: list[dict]) -> list[dict]:
 
 
 def register_global_search_intents(bus: SessionBus, settings_manager=None) -> None:
-    async def search(query: str, k: int, workspace_id: int | None = None, scope: str = "all"):
+    async def search(query: str, k: int, workspace_id: int | None = None, scope: str | None = None):
+        if scope is None:
+            scope = "all"
         if scope not in ("all", "graphs", "knowledge"):
             raise ValueError(f"Unknown global search scope: {scope!r}")
         k = min(max(int(k or _DEFAULT_K), 1), _MAX_K)
