@@ -286,7 +286,7 @@ function Library({ store }: { store: SceneStore }) {
           <WorkflowRunLauncher key={doc.spec.revision + ":" + workspace} title="Run it" spec={doc.spec} workspace={workspace}
             note={starter ? <p className="workflow-muted">Filled with a sample. Model steps use the local Ollama model named in each step.</p>
               : doc.parameters.length > 0 ? <p className="workflow-muted">Runs use the saved settings of this version. Change them in a preset.</p> : null}
-            examples={starter ? doc.example_inputs : undefined} onStarted={showRun} />
+            examples={starter ? doc.example_inputs : undefined} onStarted={runId => { setWorkspace(workspace); showRun(runId); }} />
         </section>
       </div>
     </div>;
