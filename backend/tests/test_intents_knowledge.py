@@ -17,6 +17,7 @@ import pytest
 
 from backend import knowledge_ingest, knowledge_store
 from backend.api import intents_knowledge
+from backend.knowledge_chunking import TextChunk
 from backend.tests.test_canvas import make_bus
 
 
@@ -384,6 +385,39 @@ class TestOpenKnowledgeCitationIntent:
             assert _run(bus.dispatch_intent(
                 "knowledge", "openCitation", arguments,
             )) == {"document": None}
+
+    def test_unicode_citation_keeps_python_code_point_offsets(self, _isolated_knowledge_db):
+        # Explicit chunks make the nonzero citation start independent of
+        # tokenizer configuration and paragraph-overlap heuristics.
+        before = "😀" * 20
+        passage = "Target **𐐷** phrase."
+        after = "After."
+        text = "\n\n".join((before, passage, after))
+        start = len(before) + 2
+        end = start + len(passage)
+        knowledge_store.add_document_with_chunks(
+            _isolated_knowledge_db, source_uri="unicode.md", title="Unicode",
+            mime="text/markdown", text=text,
+            chunks=[
+                TextChunk(before, 0, 40, 0, len(before)),
+                TextChunk(passage, 1, 8, start, end),
+                TextChunk(after, 2, 2, end + 2, len(text)),
+            ],
+        )
+        bus, _, _ = make_bus()
+        [hit] = _run(bus.dispatch_intent("knowledge", "search", ["Target", 5]))["results"]
+        source = _run(bus.dispatch_intent(
+            "knowledge", "openCitation", [hit["documentId"], hit["chunkId"], hit["citationId"]],
+        ))["document"]
+        assert source["content"] == text
+        assert source["excerpt"] == hit["text"] == passage
+        assert (source["offsetStart"], source["offsetEnd"]) == (start, end)
+        assert (hit["offsetStart"], hit["offsetEnd"]) == (start, end)
+        assert source["content"][start:end] == passage
+        # The frontend must translate these existing offsets, not reinterpret
+        # them as UTF-16 or change the persisted citation identity.
+        assert len(text[:start].encode("utf-16-le")) // 2 == start + 20
+        assert len(text[:end].encode("utf-16-le")) // 2 == end + 21
 
     def test_does_not_read_a_chunk_outside_the_active_workspace(self, _isolated_knowledge_db):
         workspace = 17
