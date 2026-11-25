@@ -106,9 +106,17 @@ function PresetForm({ store, rows, workspace, initialWorkflow, onCancel, onSaved
     {doc && <FieldGroup title="Inputs" description="The values every run of this preset uses.">
       <WorkflowInputsForm ports={doc.spec.inputs} drafts={drafts} disabled={busy} onChange={next => changed(() => setDrafts(next))} />
       {doc.parameters.map(param => param.kind === "choice"
-        ? <Select key={param.name} label={stepName(param.name)} value={String(params[param.name] ?? "")} disabled={busy}
-            onChange={value => changed(() => setParams(old => ({ ...old, [param.name]: value })))}
-            options={[{ value: "", label: "Keep the saved setting" }, ...param.choices.map(choice => ({ value: choice, label: choice }))]} />
+        ? <Select key={param.name} label={stepName(param.name)}
+            value={typeof params[param.name] === "string" ? "choice:" + params[param.name] : ""} disabled={busy}
+            onChange={value => changed(() => setParams(old => {
+              const next = { ...old };
+              if (value === "") delete next[param.name];
+              else next[param.name] = value.slice("choice:".length);
+              return next;
+            }))}
+            // Prefix actual choices so even an empty string is distinct from the reset option.
+            options={[{ value: "", label: "Keep the saved setting" },
+              ...param.choices.map(choice => ({ value: "choice:" + choice, label: choice || "(Empty string)" }))]} />
         : param.kind === "number"
           ? <NumberField key={param.name} label={stepName(param.name)} description="Leave empty to keep the saved setting." disabled={busy}
               value={typeof params[param.name] === "number" ? params[param.name] as number : ""}
