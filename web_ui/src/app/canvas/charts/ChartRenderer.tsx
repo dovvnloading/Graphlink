@@ -31,6 +31,9 @@ import { ScientificChartMarks } from "./ScientificChartMarks";
 import { BoxplotChartMarks } from "./BoxplotChartMarks";
 import { HeatmapChartMarks } from "./HeatmapChartMarks";
 import { CompositeChartMarks } from "./CompositeChartMarks";
+import { CompositeChartEditor } from "./CompositeChartEditor";
+import type { CompositeDesign } from "./compositeDesign";
+import { Button } from "../../ui/Button";
 import { PieChartMarks } from "./PieChartMarks";
 import { HistogramChartMarks } from "./HistogramChartMarks";
 import { SankeyChartMarks } from "./SankeyChartMarks";
@@ -39,14 +42,17 @@ export interface ChartRendererProps {
   chartType: string;
   chartData: ChartDataRow;
   onAnalysisChange?: (analysis: ChartAnalysis) => void | Promise<void>;
+  onCompositeDesignChange?: (design: CompositeDesign, expected: CompositeDesign) => Promise<void>;
 }
 
-function ChartRenderer({ chartType, chartData, onAnalysisChange }: ChartRendererProps) {
+function ChartRenderer({ chartType, chartData, onAnalysisChange, onCompositeDesignChange }: ChartRendererProps) {
   const [wrapperRef, size] = useElementSize<HTMLDivElement>();
   const theme = useChartTheme(wrapperRef);
   const [interactive, setInteractive] = useState(false);
+  const [compositeEditorOpen, setCompositeEditorOpen] = useState(false);
+  const [compositePreview, setCompositePreview] = useState<{ source: ChartDataRow; value: ChartDataRow } | null>(null);
   const { zoom, isZoomed, handlers, reset } = useZoomPane(interactive, () => setInteractive(true));
-  const plotHeight = Math.max(1, size.height - 32);
+  const plotHeight = Math.max(1, size.height - (chartType === "composite" && compositeEditorOpen ? 215 : 32));
   useEffect(() => {
     if (!interactive) return;
     const outside = (event: globalThis.PointerEvent) => {
@@ -122,8 +128,12 @@ function ChartRenderer({ chartType, chartData, onAnalysisChange }: ChartRenderer
     );
   }
 
+  const baseComposite = canonical.data;
+  const compositeDisplay = compositePreview?.source === baseComposite
+    ? compositePreview.value : baseComposite;
   const marksProps = {
-    chartData: chartType === "heatmap" ? heatmapData : canonical.data,
+    chartData: chartType === "heatmap" ? heatmapData
+      : chartType === "composite" ? compositeDisplay : canonical.data,
     theme,
     width: size.width,
     height: plotHeight,
@@ -136,6 +146,10 @@ function ChartRenderer({ chartType, chartData, onAnalysisChange }: ChartRenderer
       onPointerDownCapture={() => setInteractive(true)} onFocusCapture={() => setInteractive(true)}>
       <div className="chart-legacy-toolbar nodrag">
         <IconButton icon="fit-view" label="Reset zoom" shortcut="Home" size="sm" disabled={!isZoomed} onClick={reset} />
+        {chartType === "composite" && <Button size="sm" variant="ghost" onClick={() => {
+          setCompositeEditorOpen(!compositeEditorOpen);
+          setCompositePreview(null);
+        }}>{compositeEditorOpen ? "Close layer editor" : "Edit layers…"}</Button>}
         {chartType === "heatmap" && <>
           <ToggleButton size="sm" label="Cluster rows" pressed={heatmapClustering === "rows" || heatmapClustering === "both"}
             onPressedChange={(pressed) => changeHeatmapMode(pressed
@@ -148,6 +162,13 @@ function ChartRenderer({ chartType, chartData, onAnalysisChange }: ChartRenderer
           {heatmapError && <span role="alert">{heatmapError}</span>}
         </>}
       </div>
+      {chartType === "composite" && compositeEditorOpen && baseComposite.composite &&
+        <CompositeChartEditor chartData={baseComposite}
+          onPreview={value => setCompositePreview(value ? { source: baseComposite, value } : null)}
+          onSave={(design, expected) => onCompositeDesignChange
+            ? onCompositeDesignChange(design, expected)
+            : Promise.reject(new Error("Composite design editing is unavailable"))}
+          onClose={() => { setCompositeEditorOpen(false); setCompositePreview(null); }} />}
       {size.width > 0 && size.height > 0 && (
         <svg
           className={`chart-canvas-svg nodrag nopan${interactive ? " nowheel" : ""}`}

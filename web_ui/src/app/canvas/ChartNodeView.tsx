@@ -23,7 +23,8 @@ import TableOutput, { type TableOutputBinding } from "./TableOutput";
 import { NodeShell } from "./NodeShell";
 import { useLodVisibility } from "./useLodVisibility";
 import type { ChartAnalysis, PublicationExportOptions, PublicationFormat, PublicationSize } from "./chartSpec";
-import { saveChartAnalysis } from "./charts/analysisIntent";
+import { saveChartAnalysis, saveCompositeDesign } from "./charts/analysisIntent";
+import type { CompositeDesign } from "./charts/compositeDesign";
 import { downloadPublicationChartExport } from "./charts/publicationExport";
 
 // ADR-013 stage 13.2: the interactive renderer lives in its own lazily
@@ -172,6 +173,7 @@ export const ChartNodeView = memo(function ChartNodeView({
   const overview = useLodVisibility();
   const resizeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const analysisSaveQueue = useRef<Promise<void>>(Promise.resolve());
+  const compositeSaveQueue = useRef<Promise<void>>(Promise.resolve());
   const [publicationOpen, setPublicationOpen] = useState(false);
   const [publicationFormat, setPublicationFormat] = useState<PublicationFormat>("svg");
   const [publicationSize, setPublicationSize] = useState<PublicationSize>("single");
@@ -188,6 +190,12 @@ export const ChartNodeView = memo(function ChartNodeView({
     // request's scene publication returns; each edit is one undo step.
     const next = analysisSaveQueue.current.then(() => saveChartAnalysis(id, analysis));
     analysisSaveQueue.current = next.catch(() => {});
+    return next;
+  }
+
+  function persistCompositeDesign(design: CompositeDesign, expected: CompositeDesign): Promise<void> {
+    const next = compositeSaveQueue.current.then(() => saveCompositeDesign(id, design, expected));
+    compositeSaveQueue.current = next.catch(() => {});
     return next;
   }
 
@@ -298,7 +306,8 @@ export const ChartNodeView = memo(function ChartNodeView({
       <Suspense fallback={<div className="chart-node-placeholder">Loading chart…</div>}>
         {overview
           ? <LazyChartOverview chartType={data.chartType} chartData={data.chartData} />
-          : <LazyChartRenderer chartType={data.chartType} chartData={data.chartData} onAnalysisChange={persistChartAnalysis} />}
+          : <LazyChartRenderer chartType={data.chartType} chartData={data.chartData}
+              onAnalysisChange={persistChartAnalysis} onCompositeDesignChange={persistCompositeDesign} />}
       </Suspense>
     </NodeShell>
   );
