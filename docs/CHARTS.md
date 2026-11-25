@@ -522,3 +522,37 @@ references and unsafe combinations, checks the expected previous design to
 reject stale edits, and records a single undoable command. Cancel/failed
 validation never mutates the saved chart. All previous version-1 charts,
 renderers and outputs remain unchanged.
+
+### Source-row brushing and connected analysis branches
+
+Composite figures have a **Brush source rows** mode. Drag a rectangle
+inside a panel to select the original observations whose point/line
+coordinates lie inside that range. If only interval-band layers are
+present, the brush matches intervals overlapping the vertical range.
+Selections are computed from the full canonical column arrays—not from
+the sampled SVG point glyphs. The panel's X/Y scales are inverted in
+data units, including log10 axes.
+
+Selected observations receive prominent marks across every layer using
+their immutable **source-row indices**. Other observations are dimmed,
+but not removed. For keyboard access, focus a facet's brushing surface
+and press **Enter** or **Space** to select all its rows; press **Escape**
+or **Clear selection** to discard the transient selection.
+
+With at least two but fewer than all original rows selected, choose
+**Branch selected rows**. The authenticated `scene.branchCompositeSelection`
+intent sends only ordered original row indices and an expected snapshot
+of the source's data bindings. The backend rejects stale, duplicated,
+out-of-range and unreasonably broad selections; it derives all filtered
+numeric and categorical columns from the *current* stored original chart,
+not client-supplied replacements. The resulting ChartSpec V2 figure is
+created as a new **connected child chart** beside the source. All original
+measurement precision, layer bindings and axis units are preserved.
+Creation is one undoable document command, and the chart-to-chart parent
+edge survives save/load. The selected-row state itself is temporary and
+is not saved until a new chart is explicitly branched.
+
+This provides native within-figure linked brushing and graph-native
+derivation. It does **not** yet synchronize selections among independent
+chart nodes sourced from separate datasets; that requires a shared
+verified dataset identity and row-key contract.

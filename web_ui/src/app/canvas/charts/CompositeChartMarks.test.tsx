@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { render, fireEvent } from "@testing-library/react";
+import { render, fireEvent, screen, waitFor } from "@testing-library/react";
 import { beforeEach, afterEach, vi } from "vitest";
 import ChartRenderer from "./ChartRenderer";
 import ChartOverview from "./ChartOverview";
@@ -168,4 +168,86 @@ it("rejects too many groups across independently valid categorical fields", () =
       { mark: "point", x: "x", y: "y", colorBy: "batch" },
     ],
   } })).toThrow(/eight color legend entries/);
+});
+
+describe("composite source-row linked brushing", () => {
+  it("selects unsampled source rows across every layer and creates an explicit connected branch", async () => {
+    const original = JSON.stringify(SOURCE);
+    const branch = vi.fn().mockResolvedValue(undefined);
+    const { container } = render(<ChartRenderer chartType="composite"
+      chartData={canonicalizeChartSpec(SOURCE)} onBranchSelection={branch} />);
+    const branchButton = screen.getByRole("button", { name: "Branch selected rows" });
+    expect(branchButton).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Brush source rows" }));
+    const panel = container.querySelector('[data-facet="A"] .chart-composite-brush-surface')!;
+    expect(panel).not.toBeNull();
+    // Keyboard users can select every record in the focused facet.
+    fireEvent.keyDown(panel, { key: "Enter" });
+    expect(screen.getByRole("status")).toHaveTextContent("3 of 6 source rows selected");
+    expect(branchButton).toBeEnabled();
+    const selected = container.querySelectorAll('.chart-composite-point[data-selected="true"]');
+    const unselected = container.querySelectorAll('.chart-composite-point[data-selected="false"]');
+    expect(selected).toHaveLength(3);
+    expect(unselected).toHaveLength(3);
+    // The same original row indices are highlighted in the line and
+    // uncertainty-band layers, not a position sampled from their SVG paths.
+    const linked = [...container.querySelectorAll(".chart-composite-linked-highlight")];
+    expect(linked).toHaveLength(6);
+    expect(linked.map(el => el.getAttribute("data-index"))).toEqual([
+      "0", "1", "2", "0", "1", "2",
+    ]);
+    fireEvent.click(branchButton);
+    await waitFor(() => expect(branch).toHaveBeenCalledOnce());
+    expect(branch.mock.calls[0][0]).toEqual([0, 1, 2]);
+    expect(branch.mock.calls[0][1]).toEqual(canonicalizeChartSpec(SOURCE).composite);
+    await waitFor(() => expect(screen.getByRole("status")).not.toHaveTextContent("3 of 6"));
+    expect(JSON.stringify(SOURCE)).toBe(original);
+  });
+
+  it("supports rectangular drag selection and clearing without changing source arrays", () => {
+    const spec = canonicalizeChartSpec(SOURCE);
+    const { container } = render(<ChartRenderer chartType="composite" chartData={spec} />);
+    fireEvent.click(screen.getByRole("button", { name: "Brush source rows" }));
+    const surface = container.querySelector('[data-facet="A"] .chart-composite-brush-surface')!;
+    fireEvent.pointerDown(surface, { pointerId: 1, clientX: 0, clientY: 0 });
+    fireEvent.pointerMove(surface, { pointerId: 1, clientX: 700, clientY: 470 });
+    expect(container.querySelector(".chart-composite-brush-rectangle")).not.toBeNull();
+    fireEvent.pointerUp(surface, { pointerId: 1, clientX: 700, clientY: 470 });
+    expect(screen.getByRole("status")).toHaveTextContent("3 of 6 source rows selected");
+    expect(screen.getByRole("button", { name: "Branch selected rows" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Clear selection" }));
+    expect(screen.getByRole("status")).not.toHaveTextContent("3 of 6");
+    expect(spec.composite?.numbers).toEqual(SOURCE.composite.numbers);
+  });
+
+  it("surfaces stale dataset errors without losing the selection or falsely creating a chart", async () => {
+    const error = vi.fn().mockRejectedValue(new Error("Composite source data changed"));
+    const { container } = render(<ChartRenderer chartType="composite"
+      chartData={canonicalizeChartSpec(SOURCE)} onBranchSelection={error} />);
+    fireEvent.click(screen.getByRole("button", { name: "Brush source rows" }));
+    fireEvent.keyDown(container.querySelector('[data-facet="A"] .chart-composite-brush-surface')!, { key: "Enter" });
+    fireEvent.click(screen.getByRole("button", { name: "Branch selected rows" }));
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("source data changed"));
+    expect(screen.getByRole("status")).toHaveTextContent("3 of 6 source rows selected");
+    expect(error).toHaveBeenCalledOnce();
+  });
+
+  it("drops transient brushing state on a changed source snapshot", () => {
+    const spec = canonicalizeChartSpec(SOURCE);
+    const { container, rerender } = render(<ChartRenderer chartType="composite"
+      chartData={spec} onBranchSelection={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "Brush source rows" }));
+    fireEvent.keyDown(container.querySelector('[data-facet="A"] .chart-composite-brush-surface')!, { key: "Enter" });
+    expect(screen.getByRole("status")).toHaveTextContent("3 of 6");
+    const updated = canonicalizeChartSpec({
+      ...spec, composite: {
+        ...spec.composite!, numbers: {
+          ...spec.composite!.numbers, response: [2, 3, 4, 5, 6, 7],
+        },
+      },
+    });
+    rerender(<ChartRenderer chartType="composite" chartData={updated} onBranchSelection={vi.fn()} />);
+    expect(screen.getByRole("status")).not.toHaveTextContent("3 of 6");
+    expect(container.querySelectorAll(".chart-composite-linked-highlight")).toHaveLength(0);
+  });
 });

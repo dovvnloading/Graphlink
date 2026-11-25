@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { saveChartAnalysis, saveCompositeDesign } from "./analysisIntent";
+import { saveChartAnalysis, saveCompositeDesign, branchCompositeSelection } from "./analysisIntent";
 import type { ChartAnalysis } from "../chartSpec";
 
 class FakeSocket {
@@ -87,5 +87,41 @@ describe("saveCompositeDesign", () => {
     ws.respond({ kind: "error", id: "chart-composite-design",
       error: "Composite design changed; review current figure" });
     await expect(pending).rejects.toThrow(/design changed/);
+  });
+});
+
+describe("branchCompositeSelection", () => {
+  afterEach(() => { vi.unstubAllGlobals(); FakeSocket.instances = []; });
+
+  const expected = {
+    numbers: { x: [0, 1, 2, 3], y: [3, 4, 5, 6] },
+    categories: { group: ["A", "A", "B", "B"] },
+    layers: [{ mark: "point" as const, x: "x", y: "y" }],
+  };
+
+  it("sends only source indices and the checked original column snapshot to the authenticated scene", async () => {
+    vi.stubGlobal("WebSocket", FakeSocket);
+    const pending = branchCompositeSelection("chart-1", [0, 2], expected);
+    const ws = FakeSocket.instances[0];
+    ws.open();
+    expect(JSON.parse(ws.sent)).toEqual({
+      kind: "intent", topic: "scene", intent: "branchCompositeSelection",
+      args: ["chart-1", [0, 2], expected], id: "chart-branch-selection",
+    });
+    ws.respond({ kind: "result", id: "chart-branch-selection",
+      value: { chartNodeId: "child-1", selected: 2, sourceCount: 4 } });
+    await expect(pending).resolves.toBeUndefined();
+    expect(ws.closed).toBe(true);
+  });
+
+  it("propagates a stale-data validation error without claiming a new chart exists", async () => {
+    vi.stubGlobal("WebSocket", FakeSocket);
+    const pending = branchCompositeSelection("chart-1", [0, 1], expected);
+    const ws = FakeSocket.instances[0];
+    ws.open();
+    ws.respond({ kind: "error", id: "chart-branch-selection",
+      error: "Composite source data changed; review before branching" });
+    await expect(pending).rejects.toThrow(/data changed/);
+    expect(ws.closed).toBe(true);
   });
 });
