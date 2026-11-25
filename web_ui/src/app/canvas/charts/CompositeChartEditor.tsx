@@ -18,6 +18,7 @@ export function CompositeChartEditor({ chartData, onPreview, onSave, onClose }: 
   const [local, setLocal] = useState<{ source: ChartDataRow; design: CompositeDesign } | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [previewError, setPreviewError] = useState<{ source: ChartDataRow; message: string } | null>(null);
   const spec = chartData.composite!;
   const draft = local?.source === chartData ? local.design : compositeDesignOf(chartData);
   const nums = Object.keys(spec.numbers);
@@ -26,13 +27,20 @@ export function CompositeChartEditor({ chartData, onPreview, onSave, onClose }: 
   const categoricalOptions = [{ value: "", label: "None" }, ...cats.map(name => ({ value: name, label: name }))];
   const marks = ["point", "line", "band", "area"] as const;
   const canSave = draft.layers.length > 0;
+  const validationError = previewError?.source === chartData ? previewError.message : "";
   const recommendations = recommendCompositeDesigns(chartData);
 
   function modify(next: CompositeDesign) {
     setLocal({ source: chartData, design: next });
     setError("");
-    try { onPreview(withCompositeDesign(chartData, next)); }
-    catch { onPreview(null); }
+    try {
+      const validated = withCompositeDesign(chartData, next);
+      setPreviewError(null);
+      onPreview(validated);
+    } catch (reason) {
+      setPreviewError({ source: chartData, message: reason instanceof Error ? reason.message : "Invalid figure design" });
+      onPreview(null);
+    }
   }
 
   function changeLayer(index: number, change: Partial<ChartCompositeLayerRow>) {
@@ -134,11 +142,12 @@ export function CompositeChartEditor({ chartData, onPreview, onSave, onClose }: 
         onClick={() => modify({ ...draft, layers: [...draft.layers, {
           mark: "point", x: nums[0], y: nums[1],
         }] })}>Add layer</Button>
-      <Button size="sm" disabled={!canSave || saving} onClick={() => { void apply(); }}>
+      <Button size="sm" disabled={!canSave || saving || !!validationError} onClick={() => { void apply(); }}>
         {saving ? "Saving…" : "Save figure design"}
       </Button>
       <Button size="sm" variant="ghost" disabled={saving} onClick={onClose}>Cancel</Button>
     </div>
+    {validationError && <div role="alert">{validationError}</div>}
     {error && <div role="alert">{error}</div>}
   </section>;
 }

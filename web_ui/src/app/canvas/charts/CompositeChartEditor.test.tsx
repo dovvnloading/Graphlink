@@ -46,6 +46,19 @@ describe("composite native editor", () => {
     expect(SOURCE.composite?.layers).toEqual(old.layers);
   });
 
+  it("shows invalid band previews and blocks save until a valid column is selected", () => {
+    const onPreview = vi.fn(), onSave = vi.fn(), onClose = vi.fn();
+    render(<CompositeChartEditor chartData={SOURCE}
+      onPreview={onPreview} onSave={onSave} onClose={onClose} />);
+    fireEvent.change(screen.getByLabelText("Mark 1"), { target: { value: "band" } });
+    expect(screen.getByRole("alert")).toHaveTextContent(/lower bounds must not exceed upper/);
+    expect(screen.getByRole("button", { name: "Save figure design" })).toBeDisabled();
+    expect(onPreview).toHaveBeenLastCalledWith(null);
+    fireEvent.change(screen.getByLabelText("Upper bound 1"), { target: { value: "upper" } });
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByRole("button", { name: "Save figure design" })).not.toBeDisabled();
+  });
+
   it("resets local preview on cancel and does not submit anything", () => {
     const onPreview = vi.fn(), onSave = vi.fn(), onClose = vi.fn();
     render(<CompositeChartEditor chartData={SOURCE}
