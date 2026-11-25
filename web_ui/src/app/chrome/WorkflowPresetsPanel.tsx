@@ -29,12 +29,22 @@ function presetSummary(preset: Preset) {
   return [triggerSummary(preset.trigger), effects, "cap " + money(preset.cost_usd)].join(" · ");
 }
 
+/** A request to open the new-preset form at one immutable library revision. */
+export type PresetStart = { workflowId: string; revision: string; version: number | null };
+
+function entryPin(entry: WorkflowEntry): PresetStart {
+  return { workflowId: entry.workflow_id, revision: entry.revision, version: entry.version };
+}
+function pinKey(pin: PresetStart) { return JSON.stringify([pin.workflowId, pin.revision]); }
+
 function PresetForm({ store, rows, workspace, initialWorkflow, onCancel, onSaved }: {
-  store: SceneStore; rows: WorkflowEntry[]; workspace: number; initialWorkflow: string;
+  store: SceneStore; rows: WorkflowEntry[]; workspace: number; initialWorkflow: PresetStart | null;
   onCancel: () => void; onSaved: () => void;
 }) {
-  const [workflowId, setWorkflowId] = useState(initialWorkflow || rows[0]?.workflow_id || "");
-  const [loaded, setLoaded] = useState<{ revision: string; doc: WorkflowDocument } | null>(null);
+  // Even the default latest choice is frozen when the form opens. A later
+  // library refresh must not silently change the document under review.
+  const [pin, setPin] = useState(() => initialWorkflow ?? entryPin(rows[0]));
+  const [loaded, setLoaded] = useState<WorkflowDocument | null>(null);
   const [name, setName] = useState("");
   const [drafts, setDrafts] = useState<InputDrafts>({});
   const [params, setParams] = useState<Record<string, string | number>>({});
@@ -47,31 +57,39 @@ function PresetForm({ store, rows, workspace, initialWorkflow, onCancel, onSaved
   const [review, setReview] = useState<{ body: Record<string, unknown>; preview: WorkflowPreview } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const entry = rows.find(row => row.workflow_id === workflowId);
-  const doc = loaded && entry && loaded.revision === entry.revision ? loaded.doc : null;
+  const { workflowId, revision } = pin;
+  const doc = loaded?.spec.workflow_id === workflowId && loaded.spec.revision === revision ? loaded : null;
+  const choices = rows.map(entryPin);
+  // Keep historical choices visible, including the starting revision after
+  // an explicit switch to the latest revision.
+  for (const candidate of [initialWorkflow, pin]) {
+    if (candidate && !choices.some(choice => pinKey(choice) === pinKey(candidate))) choices.push(candidate);
+  }
 
   useEffect(() => {
-    if (!entry) return;
     let live = true;
-    store.workflowLibrary<WorkflowDocument>("get", { workflow_id: entry.workflow_id, revision: entry.revision }).then(next => {
+    store.workflowLibrary<WorkflowDocument>("get", { workflow_id: workflowId, revision }).then(next => {
       if (!live) return;
-      setLoaded({ revision: entry.revision, doc: next });
+      if (next.spec.workflow_id !== workflowId || next.spec.revision !== revision) {
+        throw new Error("The library returned a different workflow version. Choose the version again.");
+      }
+      setLoaded(next);
       setDrafts(initialDrafts(next.spec.inputs, next.format === "graphlink-starter-workflow" ? next.example_inputs : undefined));
       setParams({});
       setName(current => current || next.spec.name);
     }).catch(err => { if (live) setError(errorText(err)); });
     return () => { live = false; };
-  }, [store, entry]);
+  }, [store, workflowId, revision]);
 
   function draft() {
-    if (!doc || !entry) throw new Error("Choose a workflow.");
+    if (!doc) throw new Error("Choose a workflow version.");
     if (!name.trim()) throw new Error("Give the preset a name.");
     if (cap === "" || cap < 0) throw new Error("Enter a cost cap of $0 or more.");
     if (trigger === "interval" && (seconds === "" || seconds < 10)) throw new Error("Run at most every 10 seconds.");
     if (trigger === "daily" && !/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) throw new Error("Enter the daily time as HH:MM, for example 09:00.");
     if (trigger === "folder" && !folder.trim()) throw new Error("Enter the folder to watch.");
     const request = doc.format === "graphlink-workflow"
-      ? { workflow_id: entry.workflow_id, revision: entry.revision, inputs: plainInputs(doc.spec.inputs, drafts), parameters: params }
+      ? { workflow_id: workflowId, revision, inputs: plainInputs(doc.spec.inputs, drafts), parameters: params }
       : { spec: doc.spec, parameters: typedInputs(doc.spec.inputs, drafts) };
     const when: PresetTrigger = trigger === "interval" ? { kind: "interval", seconds: Number(seconds) }
       : trigger === "daily" ? { kind: "daily", time } : trigger === "folder" ? { kind: "folder", path: folder.trim() } : null;
@@ -99,8 +117,15 @@ function PresetForm({ store, rows, workspace, initialWorkflow, onCancel, onSaved
 
   return <div className="workflow-form">
     <div className="workflow-form-grid">
-      <Select label="Workflow" value={workflowId} disabled={busy} onChange={value => changed(() => { setWorkflowId(value); setName(""); setError(""); })}
-        options={rows.map(row => ({ value: row.workflow_id, label: row.name + " · version " + row.version }))} />
+      <Select label="Workflow" value={pinKey(pin)} disabled={busy} onChange={value => {
+        const choice = choices.find(candidate => pinKey(candidate) === value);
+        if (!choice || value === pinKey(pin)) return;
+        changed(() => { setPin(choice); setLoaded(null); setName(""); setError(""); });
+      }} options={choices.map(choice => ({
+        value: pinKey(choice),
+        label: (rows.find(row => row.workflow_id === choice.workflowId)?.name ?? "Workflow no longer in the library")
+          + (choice.version === null ? " · pinned revision" : " · version " + choice.version),
+      }))} />
       <TextField label="Preset name" value={name} disabled={busy} onValueChange={value => changed(() => setName(value))} />
     </div>
     {doc && <FieldGroup title="Inputs" description="The values every run of this preset uses.">
@@ -159,20 +184,17 @@ function PresetForm({ store, rows, workspace, initialWorkflow, onCancel, onSaved
   </div>;
 }
 
-/** A request to open the new-preset form for one workflow; a fresh object each time. */
-export type PresetStart = { workflowId: string };
-
 export function WorkflowPresetsPanel({ store, workspace, presets, loaded, rows, startWith, onFormClosed, onChanged, onRunStarted, toolbar }: {
   store: SceneStore; workspace: number | null; presets: Preset[]; loaded: boolean; rows: WorkflowEntry[];
   startWith: PresetStart | null; onFormClosed: () => void; onChanged: () => void; onRunStarted: (runId: string) => void;
   toolbar?: ReactNode;
 }) {
   const askConfirm = useConfirm();
-  const [form, setForm] = useState<string | null>(startWith?.workflowId ?? null);
+  const [form, setForm] = useState<{ start: PresetStart | null } | null>(() => startWith ? { start: startWith } : null);
   const [seenStart, setSeenStart] = useState(startWith);
   if (startWith !== seenStart) {
     setSeenStart(startWith);
-    if (startWith) setForm(startWith.workflowId);
+    if (startWith) setForm({ start: startWith });
   }
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -183,7 +205,7 @@ export function WorkflowPresetsPanel({ store, workspace, presets, loaded, rows, 
     heading.current?.focus();
   }, [form]);
   // Closing the form also clears the request that opened it, so returning to this tab shows the list.
-  const openForm = (value: string | null) => { setForm(value); if (value === null) onFormClosed(); };
+  const openForm = (value: { start: PresetStart | null } | null) => { setForm(value); if (value === null) onFormClosed(); };
   async function act(fn: () => Promise<void>) {
     setBusy(true); setError("");
     try { await fn(); onChanged(); } catch (err) { setError(errorText(err)); }
@@ -198,7 +220,8 @@ export function WorkflowPresetsPanel({ store, workspace, presets, loaded, rows, 
       <h3 ref={heading} tabIndex={-1}>New preset</h3>
       <p className="workflow-muted">A preset saves a workflow's inputs, what it may do without you, and when it runs.</p>
       {rows.length
-        ? <PresetForm key={form} store={store} rows={rows} workspace={workspace} initialWorkflow={form}
+        ? <PresetForm key={workspace + ":" + (form.start ? pinKey(form.start) : "new")} store={store} rows={rows}
+            workspace={workspace} initialWorkflow={form.start}
             onCancel={() => openForm(null)} onSaved={() => { openForm(null); onChanged(); }} />
         : <EmptyState icon="layers" title="No workflows to use" body="Add a starter or make a workflow in the Workflows tab first." />}
     </div>;
@@ -209,7 +232,7 @@ export function WorkflowPresetsPanel({ store, workspace, presets, loaded, rows, 
       <span className="workflow-muted">{loaded ? plural(presets.length, "preset") : "Loading presets…"}</span>
       <span className="workflow-toolbar-end">
         {toolbar}
-        <Button variant="primary" iconStart="plus" disabled={workspace === null} onClick={() => openForm("")}>New preset</Button>
+        <Button variant="primary" iconStart="plus" disabled={workspace === null} onClick={() => openForm({ start: null })}>New preset</Button>
       </span>
     </div>
     {error && <InlineAlert variant="error" title="That didn't go through" body={error} />}

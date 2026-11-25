@@ -226,6 +226,8 @@ function Library({ store }: { store: SceneStore }) {
   } else if (view.kind === "detail") {
     const { entry, doc, versions } = view;
     const starter = doc.format === "graphlink-starter-workflow";
+    const selectedVersion = versions.find(version => version.revision === doc.spec.revision)
+      ?? (entry.revision === doc.spec.revision ? entry : undefined);
     workflowsPanel = <div className="workflow-panel">
       <Button variant="ghost" iconStart="chevron-left" className="workflow-back" onClick={() => go({ kind: "list" })}>All workflows</Button>
       <header className="workflow-detail-header">
@@ -242,7 +244,10 @@ function Library({ store }: { store: SceneStore }) {
           <MenuButton label="More" menuLabel={"More actions for " + entry.name} disabled={busy}>
             {!starter && <MenuItem label="Unpack as editable nodes" icon="layers"
               onSelect={() => void act(() => store.mutateWorkflowNode("unpack", { ...workflowPin(doc), ...center() }))} />}
-            <MenuItem label="Save as a preset…" icon="clock" onSelect={() => { setPresetStart({ workflowId: entry.workflow_id }); setTab("presets"); }} />
+            <MenuItem label="Save as a preset…" icon="clock" onSelect={() => {
+              setPresetStart({ workflowId: entry.workflow_id, revision: doc.spec.revision, version: selectedVersion?.version ?? null });
+              setTab("presets");
+            }} />
             <MenuItem label="Rename…" icon="edit" onSelect={() => { setNameDraft(entry.name); setEditing("rename"); }} />
             <MenuItem label="Duplicate…" icon="copy" onSelect={() => { setNameDraft(entry.name + " copy"); setEditing("duplicate"); }} />
             <MenuItem label="Export file" icon="download" onSelect={() => void act(async () => {
@@ -273,7 +278,9 @@ function Library({ store }: { store: SceneStore }) {
         <Button variant="ghost" disabled={busy} onClick={() => setEditing(null)}>Cancel</Button>
       </div>}
       <p className="workflow-detail-meta">
-        {plural(doc.spec.steps.length, "step")} · {plural(doc.spec.inputs.length, "input")} · {plural(doc.spec.outputs.length, "output")} · version {entry.version} · saved {savedOn(entry.created_at)}
+        {plural(doc.spec.steps.length, "step")} · {plural(doc.spec.inputs.length, "input")} · {plural(doc.spec.outputs.length, "output")} · {selectedVersion
+          ? <>version {selectedVersion.version} · saved {savedOn(selectedVersion.created_at)}</>
+          : "version information unavailable"}
       </p>
       <div className="workflow-detail-body">
         <WorkflowDefinition doc={doc} />
