@@ -172,3 +172,46 @@ def test_v2_rejects_too_many_groups_across_color_fields():
     }
     with pytest.raises(ChartDataError, match="eight color legend entries"):
         canonicalize_chart_data(raw)
+
+
+
+def test_composite_design_intent_only_changes_view_bindings_and_is_undoable():
+    import asyncio
+    from backend.api.intents_chart import register_chart_intents
+    from backend.events import SessionBus
+    from backend.notifications import NotificationState
+
+    async def run():
+        bus = SessionBus("composite-edit-regression")
+        document = SceneDocument()
+        notice = NotificationState()
+        bus.register_topic("scene", document.scene_payload)
+        bus.register_topic("notification", notice.payload)
+        register_chart_intents(bus, document, notice, object())
+        root = document.add_chat_node(0, 0, "Source", is_user=True)
+        initial = canonicalize_chart_data(RAW, "composite")
+        chart = document.add_chart_node(500, 0, root.id, "composite", initial)
+        old = deepcopy(chart.state.chart_data["composite"])
+        expected = {"layers": deepcopy(old["layers"]), "facetBy": old.get("facetBy")}
+        change = {"layers": [
+            {"mark": "point", "x": "time", "y": "response", "colorBy": "treatment"},
+        ], "facetBy": None}
+        await bus.dispatch_intent("scene", "setCompositeDesign", [chart.id, change, expected])
+        updated = chart.state.chart_data["composite"]
+        assert updated["numbers"] == old["numbers"]
+        assert updated["categories"] == old["categories"]
+        assert updated["layers"] == change["layers"]
+        assert "facetBy" not in updated
+        with pytest.raises(ChartDataError, match="changed"):
+            await bus.dispatch_intent("scene", "setCompositeDesign", [chart.id, change, expected])
+        with pytest.raises(ChartDataError):
+            await bus.dispatch_intent("scene", "setCompositeDesign", [chart.id,
+                {"layers": [{"mark": "line", "x": "time", "y": "unknown"}]}, {
+                "layers": updated["layers"], "facetBy": None,
+            }])
+        assert document.undo().command_type == "setCompositeDesign"
+        assert document.nodes[chart.id].state.chart_data["composite"] == old
+        assert document.redo().command_type == "setCompositeDesign"
+        assert document.nodes[chart.id].state.chart_data["composite"] == updated
+
+    asyncio.run(run())

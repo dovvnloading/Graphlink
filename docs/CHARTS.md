@@ -503,3 +503,22 @@ layers, typed columns and figure version survive chart save/reload.
 no external columnar storage, no arbitrary user-defined expressions,
 and no linked cross-chart selections yet. This is a native composable
 graphics foundation, not a complete Vega-Lite implementation.
+
+
+
+### Native layer-and-facet editor
+
+Composite figure nodes now provide **Edit layers…** directly in the chart
+toolbar. Users can add/remove/reorder (via removal and re-addition) mark
+layers, choose their point/line/band/area mark, set X/Y and upper-bound
+columns, switch categorical colors and facets, and edit legend labels.
+The canvas previews valid edits before saving. The editor never exposes
+numeric or categorical data arrays for direct mutation.
+
+**Save figure design** submits only `layers` and `facetBy` through the
+authenticated `scene.setCompositeDesign` intent. The server canonicalizes
+the resulting figure against its current original columns, rejects invalid
+references and unsafe combinations, checks the expected previous design to
+reject stale edits, and records a single undoable command. Cancel/failed
+validation never mutates the saved chart. All previous version-1 charts,
+renderers and outputs remain unchanged.

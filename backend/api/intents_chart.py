@@ -154,6 +154,42 @@ def register_chart_edit_intents(bus: SessionBus, document: SceneDocument, publis
         await publish_scene()
         return clean
 
+    async def set_composite_design(node_id, design, expected):
+        """Undoable view-only composition with stale-edit protection.
+
+        Only layer/face bindings may change. The backend always retains the
+        current numeric/categorical columns and validates every reference;
+        the client cannot smuggle data overrides into this intent.
+        """
+        node = document.nodes.get(node_id) if isinstance(node_id, str) else None
+        if (node is None or node.kind != "chart" or not isinstance(node.state, ChartState)
+                or node.state.chart_type != "composite"):
+            raise ChartDataError("Unknown composite figure")
+        if not isinstance(design, dict) or set(design) - {"layers", "facetBy"} or "layers" not in design:
+            raise ChartDataError("Composite design may only change layers and facetBy")
+        if not isinstance(expected, dict) or set(expected) - {"layers", "facetBy"} or "layers" not in expected:
+            raise ChartDataError("Expected composite design must be provided")
+
+        canonical = canonicalize_chart_data(node.state.chart_data, "composite")
+        current = canonical["composite"]
+        if expected["layers"] != current["layers"] or expected.get("facetBy") != current.get("facetBy"):
+            raise ChartDataError("Composite design changed; review the current figure before saving")
+
+        replacement = {**current, "layers": design["layers"]}
+        replacement.pop("facetBy", None)
+        if design.get("facetBy") is not None:
+            replacement["facetBy"] = design["facetBy"]
+        updated = canonicalize_chart_data({**canonical, "composite": replacement}, "composite")
+        if updated["composite"] == current:
+            return current
+
+        def update():
+            node.state.chart_data = updated
+
+        document.record_command("setCompositeDesign", "user", update, node_ids=[node_id])
+        await publish_scene()
+        return updated["composite"]
+
     async def resize_chart(node_id, width, height):
         document.record_command(
             "resizeChart", "user", lambda: document.resize_chart(node_id, width, height),
@@ -170,6 +206,7 @@ def register_chart_edit_intents(bus: SessionBus, document: SceneDocument, publis
         await publish_scene()
 
     bus.register_intent("scene", "setChartAnalysis", set_chart_analysis)
+    bus.register_intent("scene", "setCompositeDesign", set_composite_design)
     bus.register_intent("scene", "resizeChart", resize_chart)
     bus.register_intent("scene", "toggleChartAspectLock", toggle_chart_aspect_lock)
 
