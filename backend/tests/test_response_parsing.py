@@ -5,6 +5,8 @@ verified against the exact behaviors ported from legacy's
 WindowActionsMixin._parse_response (graphlink_app/graphlink_window_actions.py).
 """
 
+import pytest
+
 from backend.response_parsing import parse_response
 
 
@@ -113,3 +115,38 @@ def test_whitespace_only_around_otherwise_empty_content_returns_empty_list():
     # response_text.strip()" fallback (that fallback only fires when the
     # raw response has non-whitespace content left after stripping).
     assert parse_response("\n\t  \r\n   \t\n") == []
+
+
+@pytest.mark.parametrize("language, code", [
+    ("python", "print('hi')"),
+    ("c++", "#include <iostream>\nint main() {}"),
+    ("c#", "using System;\nConsole.WriteLine(1);"),
+    ("objective-c", "#import <Foundation/Foundation.h>\nint main() {}"),
+    ("", "first line\nsecond line"),
+])
+@pytest.mark.parametrize("newline", ["\n", "\r\n"], ids=["LF", "CRLF"])
+@pytest.mark.parametrize("wrapped", [False, True], ids=["bare", "wrapped"])
+def test_fence_language_and_code_are_separate(language, code, newline, wrapped):
+    code = code.replace("\n", newline)
+    fence = f"```{language}{newline}{code}{newline}```"
+    response = f"<code_block>{newline}{fence}{newline}</code_block>" if wrapped else fence
+    assert parse_response(response) == [{"type": "code", "language": language, "content": code}]
+
+
+def test_fence_info_metadata_is_not_code_or_language():
+    response = '```  c++ title="main.cpp"\nint main() {}\n```  '
+    assert parse_response(response) == [{"type": "code", "language": "c++", "content": "int main() {}"}]
+
+
+def test_inline_triple_backticks_stay_text_before_a_real_fence():
+    response = "Use ```c++``` as the label.\n\n```c++\nint main() {}\n```"
+    assert parse_response(response) == [
+        {"type": "text", "content": "Use ```c++``` as the label."},
+        {"type": "code", "language": "c++", "content": "int main() {}"},
+    ]
+
+
+def test_longer_fence_preserves_literal_shorter_fences_in_code():
+    code = "```c++\nint main() {}\n```"
+    response = f"````markdown\n{code}\n````"
+    assert parse_response(response) == [{"type": "code", "language": "markdown", "content": code}]
