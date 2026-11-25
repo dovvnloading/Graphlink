@@ -2207,3 +2207,32 @@ describe("Chat version switching offline safety", () => {
     );
   });
 });
+
+describe("DAG-aware organization intent compatibility", () => {
+  it("preserves the original tree-organization protocol and appends the opt-in DAG style", async () => {
+    const { transport, requests, requestResults } = makeFakeTransport();
+    const store = new SceneStore(transport);
+    const common = {
+      scope: "all" as const, rootId: null, nodeIds: null, fixedNodeIds: null,
+      preserveFrameSizes: true,
+    };
+    requestResults.push({ planId: "tree-id", effectiveLayoutStyle: "tree" });
+    requestResults.push(undefined);
+    requestResults.push({ planId: "dag-id", effectiveLayoutStyle: "dag" });
+    requestResults.push(undefined);
+    await store.previewOrganize(common);
+    await store.applyOrganize(common, "tree-id");
+    await store.previewOrganize({ ...common, layoutStyle: "dag" });
+    await store.applyOrganize({ ...common, layoutStyle: "dag" }, "dag-id");
+    expect(requests).toEqual([
+      { topic: "scene", intent: "previewOrganize",
+        args: ["all", null, null, null, true] },
+      { topic: "scene", intent: "applyOrganize",
+        args: ["all", null, null, null, true, "tree-id"] },
+      { topic: "scene", intent: "previewOrganize",
+        args: ["all", null, null, null, true, "dag"] },
+      { topic: "scene", intent: "applyOrganize",
+        args: ["all", null, null, null, true, "dag-id", "dag"] },
+    ]);
+  });
+});
