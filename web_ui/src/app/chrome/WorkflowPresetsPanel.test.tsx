@@ -120,9 +120,9 @@ it("opens, previews and saves a preset from the selected historical revision, no
   await user.click(screen.getByRole("option", { name: /^Version 1 ·/ }));
   const date = new Date(versions[1].created_at).toLocaleDateString(undefined, { dateStyle: "medium" });
   expect(await screen.findByText("1 step · 1 input · 1 output · version 1 · saved " + date)).toBeVisible();
-  await user.click(screen.getByRole("button", { name: "More", exact: true }));
+  await user.click(screen.getByRole("button", { name: "More" }));
   await user.click(screen.getByRole("menuitem", { name: "Save as a preset…" }));
-  expect(await screen.findByRole("button", { name: "Workflow", exact: true })).toHaveTextContent("Versioned example · version 1");
+  expect(await screen.findByRole("button", { name: "Workflow" })).toHaveTextContent("Versioned example · version 1");
   expect(workflowLibrary).toHaveBeenLastCalledWith("get", { workflow_id: "w", revision: "r1" });
   await user.type(await screen.findByRole("textbox", { name: "Old input" }), "original");
   expect(screen.queryByRole("textbox", { name: "New input" })).toBeNull();
@@ -134,11 +134,11 @@ it("opens, previews and saves a preset from the selected historical revision, no
   }));
 
   // Changing to the latest version is explicit and invalidates the old review.
-  await user.click(screen.getByRole("button", { name: "Workflow", exact: true }));
+  await user.click(screen.getByRole("button", { name: "Workflow" }));
   await user.click(screen.getByRole("option", { name: "Versioned example · version 2" }));
   expect(await screen.findByRole("textbox", { name: "New input" })).toHaveValue("");
   expect(screen.queryByRole("button", { name: "Approve and save preset" })).toBeNull();
-  await user.click(screen.getByRole("button", { name: "Workflow", exact: true }));
+  await user.click(screen.getByRole("button", { name: "Workflow" }));
   await user.click(screen.getByRole("option", { name: "Versioned example · version 1" }));
   await user.type(await screen.findByRole("textbox", { name: "Old input" }), "original");
   await user.click(screen.getByRole("button", { name: "Preview preset" }));
@@ -150,7 +150,7 @@ it("opens, previews and saves a preset from the selected historical revision, no
 
   // A fresh preset opened directly from the list still defaults to latest.
   await user.click(await screen.findByRole("button", { name: "New preset" }));
-  expect(await screen.findByRole("button", { name: "Workflow", exact: true })).toHaveTextContent("Versioned example · version 2");
+  expect(await screen.findByRole("button", { name: "Workflow" })).toHaveTextContent("Versioned example · version 2");
   expect(await screen.findByRole("textbox", { name: "New input" })).toBeVisible();
 });
 
@@ -171,7 +171,7 @@ it("keeps a reviewed preset pinned across a library refresh", async () => {
   await user.click(screen.getByRole("button", { name: "Preview preset" }));
   expect(await screen.findByRole("button", { name: "Approve and save preset" })).toBeEnabled();
   rerender(<WorkflowPresetsPanel {...props} rows={[{ ...row, revision: "r2", version: 2 }]} />);
-  expect(screen.getByRole("button", { name: "Workflow", exact: true })).toHaveTextContent("Versioned example · version 1");
+  expect(screen.getByRole("button", { name: "Workflow" })).toHaveTextContent("Versioned example · version 1");
   expect(screen.getByRole("textbox", { name: "Old input" })).toHaveValue("keep me");
   expect(workflowLibrary).toHaveBeenCalledTimes(1);
   await user.click(screen.getByRole("button", { name: "Approve and save preset" }));
@@ -195,7 +195,7 @@ it("does not fall back to latest when the requested revision cannot be loaded", 
   expect(screen.getByRole("button", { name: "Preview preset" })).toBeDisabled();
   // The latest revision is available only after an explicit choice.
   workflowLibrary.mockResolvedValue(versionedDocument("r2", "new_input", "word_count"));
-  await user.click(screen.getByRole("button", { name: "Workflow", exact: true }));
+  await user.click(screen.getByRole("button", { name: "Workflow" }));
   await user.click(screen.getByRole("option", { name: "Example · version 2" }));
   expect(await screen.findByRole("textbox", { name: "New input" })).toBeVisible();
 });
