@@ -2,6 +2,7 @@ import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DocumentViewSearch } from "./DocumentViewSearch";
+import { MAX_DOCUMENT_SEARCH_MATCHES } from "./documentViewSearchHighlight";
 
 // A failed assertion inside a fake-timers test would otherwise skip past its
 // own vi.useRealTimers() cleanup, leaving every later test in this file
@@ -51,6 +52,29 @@ describe("DocumentViewSearch", () => {
   it("shows the current match number out of the total", () => {
     const { container } = renderSearch({ query: "cat", matchCount: 5, currentMatchNumber: 3 });
     expect(container.querySelector(".document-view-search-count")).toHaveTextContent("3 of 5");
+  });
+
+  it("labels the highlight limit rather than claiming an exhaustive result count", () => {
+    const { container } = renderSearch({
+      query: "a", matchCount: MAX_DOCUMENT_SEARCH_MATCHES, currentMatchNumber: 1,
+    });
+    expect(container.querySelector(".document-view-search-count")).toHaveTextContent(
+      `1 of ${MAX_DOCUMENT_SEARCH_MATCHES} (limit)`,
+    );
+    expect(screen.getByRole("button", { name: "Next match" })).toBeEnabled();
+  });
+
+  it("reports pending results and disables navigation, including keyboard shortcuts", async () => {
+    const user = userEvent.setup();
+    const { container, props } = renderSearch({
+      query: "cat", matchCount: 3, currentMatchNumber: 1, searchPending: true,
+    });
+    expect(container.querySelector(".document-view-search-count")).toHaveTextContent("Searching…");
+    expect(screen.getByRole("button", { name: "Next match" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Previous match" })).toBeDisabled();
+    await user.keyboard("{Enter}{Shift>}{Enter}{/Shift}");
+    expect(props.onNext).not.toHaveBeenCalled();
+    expect(props.onPrevious).not.toHaveBeenCalled();
   });
 
   it("announces the count to screen readers via a debounced, visually-hidden live region", async () => {
