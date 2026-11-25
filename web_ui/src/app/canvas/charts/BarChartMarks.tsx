@@ -80,6 +80,7 @@ export function BarChartMarks({ chartData, theme, width, height, onHover, wrappe
         yScale={yScale}
         xAxisLabel={chartData.xAxis ?? ""}
         yAxisLabel={chartData.yAxis ?? ""}
+        yAxisTitleX={8 - marginLeft}
         xTicks={xTicks}
         rotateXTicks={rotate}
         zeroLineY={zeroLineY}

@@ -1,10 +1,14 @@
 import { describe, expect, it } from "vitest";
+import histogramParityFixtures from "./histogramBinParityFixtures.json";
 import {
   computeHistogramBins,
   computeBoxplotStats,
   heatmapColor,
   createLinearScale,
   formatValue,
+  formatLegacyTick,
+  fitContinuousTicks,
+  legacyLinePadding,
   mean,
   median,
   niceTicks,
@@ -111,6 +115,14 @@ describe("pickCategoricalTicks", () => {
 });
 
 describe("computeHistogramBins", () => {
+  // The publication exporter exercises the same fixtures through Axes.hist.
+  it.each(histogramParityFixtures)("matches publication bin edges and counts: $name", ({ values, bins, counts, edges }) => {
+    const result = computeHistogramBins(values, bins);
+    expect(result.map((bin) => bin.count)).toEqual(counts);
+    expect(result.map((bin) => bin.x0)).toEqual(edges.slice(0, -1));
+    expect(result.map((bin) => bin.x1)).toEqual(edges.slice(1));
+  });
+
   it("splits the value range into equal-width bins and counts membership", () => {
     const bins = computeHistogramBins([0, 1, 2, 3, 4, 5, 6, 7, 8, 9], 5);
     expect(bins).toHaveLength(5);
@@ -185,5 +197,61 @@ describe("boxplot statistics and heatmap palette", () => {
     expect(heatmapColor(1, 0, 1)).toBe("#0a6275");
     expect(heatmapColor(1, 1, 1)).toBe("#e5f5f9");
     expect(heatmapColor(0.5, 0, 1)).not.toBe(heatmapColor(0, 0, 1));
+  });
+});
+
+describe("legacy scientific-magnitude axes", () => {
+  it.each([
+    [0, 1.18e-120], [-1e-200, 1e-200], [0, Number.MIN_VALUE],
+    [1e308, 1.0000000000000002e308], [-1e308, 1e308],
+  ])("keeps ticks bounded, ordered, finite and informative for [%s, %s]", (min, max) => {
+    const ticks = niceTicks(min, max);
+    expect(ticks.length).toBeGreaterThanOrEqual(2);
+    expect(ticks.length).toBeLessThanOrEqual(103);
+    expect(ticks.every(Number.isFinite)).toBe(true);
+    expect(ticks[0]).toBeLessThanOrEqual(min);
+    expect(ticks[ticks.length - 1]).toBeGreaterThanOrEqual(max);
+    expect(ticks.every((tick, index) => index === 0 || tick > ticks[index - 1])).toBe(true);
+    expect(new Set(ticks.map(formatLegacyTick)).size).toBe(ticks.length);
+    for (const tick of ticks) {
+      expect(Number(formatLegacyTick(tick).replace(/,/g, ""))).toBe(tick);
+    }
+  });
+
+  it("preserves ordinary ticks and labels small nonzero data", () => {
+    expect(niceTicks(0, 97)).toEqual([0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100]);
+    expect(formatValue(1e-120)).toBe("1e-120");
+    expect(formatValue(-1e-120)).toBe("-1e-120");
+    expect(formatLegacyTick(0.012)).toBe("0.012");
+  });
+
+  it.each([215, 335, 535])("fits exact scientific tick labels at a %spx plot width", (width) => {
+    const domain: [number, number] = [1e-120, 2e-120];
+    const scale = createLinearScale(domain, [0, width]);
+    const ticks = niceTicks(...domain, 6).filter((tick) => tick >= domain[0] && tick <= domain[1]);
+    const fitted = fitContinuousTicks(ticks, scale, width);
+    expect(fitted.length).toBeGreaterThan(1);
+    expect(fitted[0]).toEqual({ position: 0, lines: ["1e-120"], anchor: "start" });
+    expect(fitted[fitted.length - 1]).toEqual({ position: width, lines: ["2e-120"], anchor: "end" });
+    let previousRight = -4;
+    for (const tick of fitted) {
+      const labelWidth = tick.lines[0].length * 6.5;
+      const left = tick.anchor === "start" ? tick.position
+        : tick.anchor === "end" ? tick.position - labelWidth : tick.position - labelWidth / 2;
+      expect(left).toBeGreaterThanOrEqual(previousRight + 4);
+      expect(left + labelWidth).toBeLessThanOrEqual(width);
+      expect(tick.position).toBe(scale(Number(tick.lines[0])));
+      previousRight = left + labelWidth;
+    }
+  });
+
+  it("keeps constant tiny domains and bin counts in data units", () => {
+    expect(legacyLinePadding(1e-120, 1e-120) / 1e-120).toBeCloseTo(0.18);
+    const bins = computeHistogramBins([1e-120, 1e-120], 2);
+    expect(bins[0].x0).toBeGreaterThan(0);
+    expect(bins[0].x0).toBeLessThan(1e-120);
+    expect(bins[1].x1).toBeGreaterThan(1e-120);
+    expect(bins[1].x1).toBeLessThan(2e-120);
+    expect(bins.reduce((sum, bin) => sum + bin.count, 0)).toBe(2);
   });
 });

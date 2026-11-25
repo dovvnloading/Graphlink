@@ -146,3 +146,26 @@ def test_canonicalize_chart_data_stamps_the_spec_version():
     # field presence to know which shape it's looking at.
     canonical = canonicalize_chart_data(_bar_data(), "bar")
     assert canonical["version"] == CHART_SPEC_VERSION == 1
+
+@pytest.mark.parametrize("kind", ["bar", "line", "histogram"])
+@pytest.mark.parametrize("values", [[1e-120, 2e-120], [1e-120, 1e-120], [-1e-120, 1e-120],
+                                    [-1e300, 1e300]])
+def test_legacy_chart_preserves_supported_scientific_magnitudes(kind, values):
+    payload = {"type": kind, "labels": ["A", "B"], "values": values, "bins": 2}
+    assert canonicalize_chart_data(payload)["values"] == values
+
+
+@pytest.mark.parametrize("kind", ["bar", "line", "histogram"])
+@pytest.mark.parametrize("values", [[5e-324, 1e-323], [1e308, 1.0000000000000002e308],
+                                    [-1e308, 1e308]])
+def test_legacy_chart_rejects_extreme_data_before_persistence(kind, values):
+    payload = {"type": kind, "labels": ["A", "B"], "values": values, "bins": 2}
+    with pytest.raises(ChartDataError, match="rescale the data"):
+        canonicalize_chart_data(payload)
+
+
+@pytest.mark.parametrize("kind", ["line", "histogram"])
+def test_legacy_chart_rejects_indistinguishable_nonconstant_range(kind):
+    payload = {"type": kind, "labels": ["A", "B"], "values": [1e100, 1.0000000000000002e100], "bins": 2}
+    with pytest.raises(ChartDataError, match="subtract a common offset"):
+        canonicalize_chart_data(payload)

@@ -6,7 +6,7 @@
  */
 
 import { useId } from "react";
-import { createLinearScale, formatValue, niceTicks, pickCategoricalTicks, wrapLabel } from "./chartScales";
+import { createLinearScale, formatValue, legacyLinePadding, niceTicks, pickCategoricalTicks, wrapLabel } from "./chartScales";
 import { computeBottomMargin, computeLeftMargin, tooltipPositionFromEvent } from "./chartLayout";
 import { CartesianAxes, type XTick } from "./CartesianAxes";
 import type { ChartMarksProps } from "./BarChartMarks";
@@ -22,8 +22,7 @@ export function LineChartMarks({ chartData, theme, width, height, onHover, wrapp
 
   const rawMin = Math.min(...values);
   const rawMax = Math.max(...values);
-  const span = rawMax - rawMin;
-  const buffer = span * 0.18 || Math.max(Math.abs(rawMax), 1) * 0.18 || 1;
+  const buffer = legacyLinePadding(rawMin, rawMax);
   let domainMin = rawMin - buffer;
   let domainMax = rawMax + buffer;
   const baseTicks = niceTicks(domainMin, domainMax, 5);
@@ -76,6 +75,7 @@ export function LineChartMarks({ chartData, theme, width, height, onHover, wrapp
         yScale={yScale}
         xAxisLabel={chartData.xAxis ?? ""}
         yAxisLabel={chartData.yAxis ?? ""}
+        yAxisTitleX={8 - marginLeft}
         xTicks={xTicks}
         rotateXTicks={rotate}
         zeroLineY={visibleY[0] < 0 && visibleY[1] > 0 ? yScale(0) : null}

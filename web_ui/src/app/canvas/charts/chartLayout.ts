@@ -7,7 +7,7 @@
  */
 
 import type { PointerEvent as ReactPointerEvent, RefObject } from "react";
-import { formatValue } from "./chartScales";
+import { formatLegacyTick } from "./chartScales";
 
 export interface Margin {
   top: number;
@@ -22,7 +22,7 @@ const APPROX_CHAR_WIDTH_PX = 6.5;
  * rendered, rather than a fixed guess - a chart with values in the
  * thousands needs more room than one with single digits. */
 export function computeLeftMargin(yTicks: number[], hasYAxisLabel: boolean): number {
-  const widest = yTicks.reduce((max, tick) => Math.max(max, formatValue(tick).length), 1);
+  const widest = yTicks.reduce((max, tick) => Math.max(max, formatLegacyTick(tick).length), 1);
   const tickSpace = widest * APPROX_CHAR_WIDTH_PX + 14;
   return Math.max(hasYAxisLabel ? 44 : 32, tickSpace + (hasYAxisLabel ? 16 : 0));
 }
