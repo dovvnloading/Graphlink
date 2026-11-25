@@ -74,7 +74,7 @@
 .chart-composite-editor-heading span { color: var(--gl-surface-text-secondary); }
 .chart-composite-edit-layer { display: flex; flex-wrap: wrap; gap: var(--gl-space-2); padding: var(--gl-space-2); border: 1px solid var(--gl-surface-border); }
 .chart-composite-editor label { display: inline-flex; flex-direction: column; gap: var(--gl-space-1); }
-.chart-composite-editor select, .chart-composite-editor input {
+.chart-composite-editor input {
   min-width: 85px; max-width: 145px; padding: var(--gl-space-1);
   background: var(--gl-surface-inset-deep); border: 1px solid var(--gl-surface-border);
   color: var(--gl-surface-text-primary); border-radius: var(--gl-radius-sm);

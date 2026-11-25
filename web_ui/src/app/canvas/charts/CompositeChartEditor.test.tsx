@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import userEvent from "@testing-library/user-event";
 import { canonicalizeChartSpec } from "../chartSpec";
 import { CompositeChartEditor } from "./CompositeChartEditor";
 import { compositeDesignOf, withCompositeDesign } from "./compositeDesign";
@@ -18,10 +19,13 @@ describe("composite native editor", () => {
     const input = JSON.stringify(SOURCE);
     render(<CompositeChartEditor chartData={SOURCE}
       onPreview={onPreview} onSave={onSave} onClose={onClose} />);
-    fireEvent.change(screen.getByLabelText("Facet panels"), { target: { value: "treatment" } });
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Facet panels" }));
+    await user.click(screen.getByRole("option", { name: "treatment" }));
     fireEvent.click(screen.getByRole("button", { name: "Add layer" }));
-    expect(screen.getByLabelText("Mark 2")).toHaveValue("point");
-    fireEvent.change(screen.getByLabelText("Mark 2"), { target: { value: "line" } });
+    expect(screen.getByRole("button", { name: "Mark 2" })).toHaveTextContent("point");
+    await user.click(screen.getByRole("button", { name: "Mark 2" }));
+    await user.click(screen.getByRole("option", { name: "line" }));
     expect(onPreview).toHaveBeenCalled();
     const latest = onPreview.mock.lastCall?.[0];
     expect(latest.composite.layers).toHaveLength(2);
@@ -31,7 +35,7 @@ describe("composite native editor", () => {
     await waitFor(() => expect(onSave).toHaveBeenCalledOnce());
     expect(onSave.mock.calls[0][0].layers).toHaveLength(2);
     expect(onSave.mock.calls[0][1]).toEqual(compositeDesignOf(SOURCE));
-    expect(onClose).toHaveBeenCalledOnce();
+    await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
     expect(JSON.stringify(SOURCE)).toBe(input);
   });
 
@@ -46,15 +50,18 @@ describe("composite native editor", () => {
     expect(SOURCE.composite?.layers).toEqual(old.layers);
   });
 
-  it("shows invalid band previews and blocks save until a valid column is selected", () => {
+  it("shows invalid band previews and blocks save until a valid column is selected", async () => {
     const onPreview = vi.fn(), onSave = vi.fn(), onClose = vi.fn();
     render(<CompositeChartEditor chartData={SOURCE}
       onPreview={onPreview} onSave={onSave} onClose={onClose} />);
-    fireEvent.change(screen.getByLabelText("Mark 1"), { target: { value: "band" } });
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Mark 1" }));
+    await user.click(screen.getByRole("option", { name: "band" }));
     expect(screen.getByRole("alert")).toHaveTextContent(/lower bounds must not exceed upper/);
     expect(screen.getByRole("button", { name: "Save figure design" })).toBeDisabled();
     expect(onPreview).toHaveBeenLastCalledWith(null);
-    fireEvent.change(screen.getByLabelText("Upper bound 1"), { target: { value: "upper" } });
+    await user.click(screen.getByRole("button", { name: "Upper bound 1" }));
+    await user.click(screen.getByRole("option", { name: "upper" }));
     expect(screen.queryByRole("alert")).toBeNull();
     expect(screen.getByRole("button", { name: "Save figure design" })).not.toBeDisabled();
   });
