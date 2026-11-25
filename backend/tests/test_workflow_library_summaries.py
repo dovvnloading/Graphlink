@@ -1,13 +1,18 @@
 """Regression tests for lightweight operator history reads."""
 from __future__ import annotations
 
+import asyncio
 import json
 import sqlite3
+import threading
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
 
+from fastapi import FastAPI
+from httpx import ASGITransport, AsyncClient
+
 from backend.chat_library import get_default_workspace_id
-from backend.workflow.api import WorkflowService
+from backend.workflow.api import WorkflowService, register_workflow_api
 from backend.workflow.detached_store import DetachedRunStore
 
 
@@ -83,3 +88,46 @@ def test_preset_summaries_keep_display_metadata_without_requests(tmp_path):
     assert len(json.dumps(summaries).encode()) < 1000
     assert automation.list_summaries(ws + 1) == []
     assert automation.list(ws) == presets
+
+def test_history_routes_dispatch_sqlite_reads_off_the_event_loop(tmp_path, monkeypatch):
+    """Exercise the real route handlers rather than a transcription of their queries."""
+    async def scenario():
+        db = tmp_path / "chats.db"
+        ws = get_default_workspace_id(db)
+        service = WorkflowService(db)
+        store = service.engine().store
+        app = FastAPI()
+        register_workflow_api(app, service)
+        event_loop_thread = threading.get_ident()
+        calls = []
+
+        def instrument(owner, name):
+            original = getattr(owner, name)
+
+            def observed(*args):
+                calls.append((owner, name, threading.get_ident()))
+                return original(*args)
+
+            monkeypatch.setattr(owner, name, observed)
+
+        expected = [(store, "list_summaries"), (store, "list"), (store, "read_visible"),
+                    (service.automation, "list_summaries"), (service.automation, "list")]
+        for owner, name in expected:
+            instrument(owner, name)
+        try:
+            async with AsyncClient(transport=ASGITransport(app=app), base_url="http://localhost") as client:
+                base = f"/api/workflows/{ws}"
+                for path in ("/runs?summary=true", "/runs", "/runs/missing",
+                             "/presets?summary=true", "/presets"):
+                    response = await client.get(base + path)
+                    if path == "/runs/missing":
+                        assert response.status_code == 404
+                    else:
+                        assert response.status_code == 200
+                        assert response.json() == []
+            assert [(owner, name) for owner, name, _ in calls] == expected
+            assert all(thread_id != event_loop_thread for _, _, thread_id in calls)
+        finally:
+            await service.shutdown()
+
+    asyncio.run(scenario())

@@ -135,6 +135,13 @@ test("library revision selection and keyboard dismissal in both themes", async (
 
 test("a reviewed human approval gate waits until explicit keyboard approval", async ({ page }) => {
   await openTable(page);
+  const reads: string[] = [];
+  page.on("request", request => {
+    const url = new URL(request.url());
+    if (request.method() === "GET" && /^\/api\/workflows\/\d+\/(runs|presets)(\/|$)/.test(url.pathname)) {
+      reads.push(url.pathname + url.search);
+    }
+  });
   await page.locator('[data-overlay-trigger="workflow-library"]').press("Enter");
   const history = page.getByRole("dialog", { name: "Workflow library" });
   await history.getByRole("tab", { name: /^Runs/ }).press("Enter");
@@ -158,6 +165,16 @@ test("a reviewed human approval gate waits until explicit keyboard approval", as
   const inspector = history.getByRole("region", { name: "Run detail" });
   await expect(inspector.getByRole("button", { name: "Approve step", exact: true })).toBeEnabled();
   await expect(history.getByRole("status").filter({ hasText: "Waiting for approval: Review" })).toBeAttached();
+
+  // Observe a second real poll while the receipt is still awaiting approval.
+  // The two-second cadence must never request a full list or another receipt.
+  const activeDetail = reads.find(path => /\/runs\/[^/]+$/.test(path));
+  expect(activeDetail).toBeDefined();
+  const detailReads = () => reads.filter(path => path === activeDetail).length;
+  const beforePoll = detailReads();
+  await expect.poll(detailReads, { timeout: 8000 }).toBeGreaterThan(beforePoll);
+  expect(reads.some(path => /\/runs\?summary=true$/.test(path))).toBe(true);
+  expect(reads.some(path => /\/(runs|presets)$/.test(path))).toBe(false);
 
   // A notification must navigate even while the existing library dialog is open
   // on an unsaved JSON launcher. Reviewing is not an approval or submission.
@@ -422,9 +439,13 @@ test("large workflow history uses bounded summaries and on-demand receipts", asy
     expect(count("/runs")).toBe(0);
     expect(count("/presets")).toBe(0);
     expect(requests.filter(path => /^\/runs\/[^/]+$/.test(path))).toEqual([detailPath]);
+    const measurements = JSON.stringify({ sizes, timings, requests }, null, 2);
     await testInfo.attach("Large history HTTP sizes and browser interaction timings", {
-      body: JSON.stringify({ sizes, timings, requests }, null, 2), contentType: "application/json",
+      body: measurements, contentType: "application/json",
     });
+    // Successful browser runs retain their Actions log even when a reporter
+    // does not persist non-image attachments.
+    console.info("Large workflow history benchmark:\n" + measurements);
     await page.keyboard.press("Escape");
     await expect(library).toBeHidden();
   } finally {
