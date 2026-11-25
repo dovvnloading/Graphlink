@@ -655,7 +655,19 @@ def _main(argv: list[str]) -> int:
                 continue
             checked_in = path.read_text(encoding="utf-8")
             if checked_in != fresh:
-                stale.append(f"{path} does not match regenerating it from {entry['source']}")
+                # Include a small unified diff so a CI-only environment can
+                # show the exact contract drift without weakening the gate.
+                import difflib
+                from itertools import islice
+
+                delta = list(islice(difflib.unified_diff(
+                    checked_in.splitlines(), fresh.splitlines(),
+                    fromfile="checked-in", tofile="regenerated", lineterm="",
+                ), 80))
+                stale.append(
+                    f"{path} does not match regenerating it from {entry['source']}"
+                    + ("\n" + "\n".join(delta) if delta else "")
+                )
 
     # Workflow formats are standalone contracts, never live WebSocket topics.
     workflow_artifacts = generated_workflow_artifacts()

@@ -90,7 +90,7 @@ def test_strict_log_axis_validation_rejects_malformed_analysis(invalid):
         canonicalize_chart_data({**SPECS["scatter"], "analysis": invalid}, "scatter")
 
 
-@pytest.mark.parametrize("kind", ["bar", "pie", "sankey", "heatmap"])
+@pytest.mark.parametrize("kind", ["bar", "pie", "sankey"])
 def test_analysis_is_not_silently_accepted_on_other_chart_types(kind):
     with pytest.raises(ChartDataError, match="only supported"):
         canonicalize_chart_analysis({"annotations": []}, kind)

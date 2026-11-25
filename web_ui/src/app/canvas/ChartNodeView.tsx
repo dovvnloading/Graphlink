@@ -10,7 +10,7 @@ import { ToggleButton } from "../ui/ToggleButton";
 import { Tooltip } from "../ui/Tooltip";
 import { InlineAlert } from "../ui/InlineAlert";
 import "./ChartNodeView.css";
-import type { ChartDataRow } from "../../lib/bridge-core/generated/scene-state";
+import type { ChartDataRow, ChartCompositeSpecRow } from "../../lib/bridge-core/generated/scene-state";
 import {
   CHART_MAX_HEIGHT,
   CHART_MAX_WIDTH,
@@ -23,7 +23,8 @@ import TableOutput, { type TableOutputBinding } from "./TableOutput";
 import { NodeShell } from "./NodeShell";
 import { useLodVisibility } from "./useLodVisibility";
 import type { ChartAnalysis, PublicationExportOptions, PublicationFormat, PublicationSize } from "./chartSpec";
-import { saveChartAnalysis } from "./charts/analysisIntent";
+import { saveChartAnalysis, saveCompositeDesign, branchCompositeSelection } from "./charts/analysisIntent";
+import type { CompositeDesign } from "./charts/compositeDesign";
 import { downloadPublicationChartExport } from "./charts/publicationExport";
 
 // ADR-013 stage 13.2: the interactive renderer lives in its own lazily
@@ -104,6 +105,7 @@ export type ChartFlowNode = Node<ChartNodeData, "chart">;
 function chartTypeBadgeLabel(chartType: string): string {
   if (chartType === "boxplot") return "Box plot";
   if (chartType === "heatmap") return "Heatmap";
+  if (chartType === "composite") return "Composite figure";
   return chartType ? chartType.charAt(0).toUpperCase() + chartType.slice(1) : "Chart";
 }
 
@@ -171,6 +173,7 @@ export const ChartNodeView = memo(function ChartNodeView({
   const overview = useLodVisibility();
   const resizeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const analysisSaveQueue = useRef<Promise<void>>(Promise.resolve());
+  const compositeSaveQueue = useRef<Promise<void>>(Promise.resolve());
   const [publicationOpen, setPublicationOpen] = useState(false);
   const [publicationFormat, setPublicationFormat] = useState<PublicationFormat>("svg");
   const [publicationSize, setPublicationSize] = useState<PublicationSize>("single");
@@ -187,6 +190,16 @@ export const ChartNodeView = memo(function ChartNodeView({
     // request's scene publication returns; each edit is one undo step.
     const next = analysisSaveQueue.current.then(() => saveChartAnalysis(id, analysis));
     analysisSaveQueue.current = next.catch(() => {});
+    return next;
+  }
+
+  function branchSelection(indices: number[], expected: ChartCompositeSpecRow): Promise<void> {
+    return branchCompositeSelection(id, indices, expected);
+  }
+
+  function persistCompositeDesign(design: CompositeDesign, expected: CompositeDesign): Promise<void> {
+    const next = compositeSaveQueue.current.then(() => saveCompositeDesign(id, design, expected));
+    compositeSaveQueue.current = next.catch(() => {});
     return next;
   }
 
@@ -297,7 +310,9 @@ export const ChartNodeView = memo(function ChartNodeView({
       <Suspense fallback={<div className="chart-node-placeholder">Loading chart…</div>}>
         {overview
           ? <LazyChartOverview chartType={data.chartType} chartData={data.chartData} />
-          : <LazyChartRenderer chartType={data.chartType} chartData={data.chartData} onAnalysisChange={persistChartAnalysis} />}
+          : <LazyChartRenderer chartType={data.chartType} chartData={data.chartData}
+              onAnalysisChange={persistChartAnalysis} onCompositeDesignChange={persistCompositeDesign}
+              onBranchSelection={branchSelection} />}
       </Suspense>
     </NodeShell>
   );

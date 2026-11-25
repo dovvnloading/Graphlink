@@ -262,18 +262,18 @@ def test_the_registry_covers_exactly_what_the_spa_imports():
 
 
 def test_chart_wire_type_accepts_new_scientific_fields_and_all_saved_workspaces():
-    """The optional nested type remains readable; fresh canonical data stamps it."""
+    """Historical chart shapes stay readable alongside the V2 composite grammar."""
     from graphlink_chart_data import canonicalize_chart_data
     from graphlink_scene_payload import ChartDataRow
     from graphlink_wire_schema import validate_payload
 
     schema = json_schema_for(ChartDataRow)
     assert schema["properties"]["type"]["enum"] == [
-        "bar", "line", "pie", "histogram", "sankey", "scatter", "boxplot", "heatmap",
+        "bar", "line", "pie", "histogram", "sankey", "scatter", "boxplot", "heatmap", "composite",
     ]
     assert {"series", "xValues", "xError", "yError", "xScale", "yScale",
             "xUnit", "yUnit", "groups", "rowLabels", "columnLabels", "matrix",
-            "valueUnit"} <= schema["properties"].keys()
+            "valueUnit", "composite"} <= schema["properties"].keys()
     historic = [
         ("bar", {"labels": ["A"], "values": [2]}),
         ("line", {"labels": ["A", "B"], "values": [2, 3]}),
@@ -294,3 +294,17 @@ def test_chart_wire_type_accepts_new_scientific_fields_and_all_saved_workspaces(
         assert validate_payload(saved, ChartDataRow) == []
         assert canonicalize_chart_data(saved, chart_type) == fresh
         assert fresh["type"] == chart_type
+
+    # ChartSpec V2 is additive: the old eight chart shapes still stamp v1
+    # while column-bound composite figures carry and round-trip v2.
+    composite = canonicalize_chart_data({
+        "type": "composite", "version": 2,
+        "composite": {
+            "numbers": {"time": [0, 1, 2], "response": [1, 2, 3]},
+            "layers": [{"mark": "line", "x": "time", "y": "response"}],
+        },
+    }, "composite")
+    assert composite["version"] == 2
+    assert validate_payload(composite, ChartDataRow) == []
+    assert canonicalize_chart_data({k: v for k, v in composite.items() if k != "type"},
+                                   "composite") == composite

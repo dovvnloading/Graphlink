@@ -2,7 +2,7 @@
  * pane so bar/pie/heatmap/sankey retain their historic pan/zoom behavior.
  * Every committed annotation is expressed in original data units.
  */
-import { useId, useRef, useState, type PointerEvent, type RefObject, type KeyboardEvent, type WheelEvent } from "react";
+import { useId, useMemo, useRef, useState, type PointerEvent, type RefObject, type KeyboardEvent, type WheelEvent } from "react";
 import { Button } from "../../ui/Button";
 import { IconButton } from "../../ui/IconButton";
 import { ToggleButton } from "../../ui/ToggleButton";
@@ -18,6 +18,7 @@ import { ScientificChartMarks } from "./ScientificChartMarks";
 import { HistogramChartMarks } from "./HistogramChartMarks";
 import { BoxplotChartMarks } from "./BoxplotChartMarks";
 import { ChartTooltip, type TooltipContent } from "./ChartTooltip";
+import { linearFits } from "./linearFit";
 import {
   chartFrame, datumAt, domainFromPixels, panDomain, scaleFor, zoomDomain,
   type ViewDomains,
@@ -49,14 +50,20 @@ export function ChartAnalysisPane({
   chartType, chartData, width, height, theme, wrapperRef, onAnalysisChange, interactive, onActivate,
 }: ChartAnalysisPaneProps) {
   const [toolsOpen, setToolsOpen] = useState(false);
-  const plotHeight = Math.max(80, height - (toolsOpen ? 200 : 32));
-  const frame = chartFrame(chartData, chartType, width, plotHeight);
   const persisted = chartAnalysisOf(chartData);
   // Optimistic edits are valid only for the exact scene snapshot they edit.
   // On save, reload or undo a new chartData object automatically wins, so
   // there is no synchronous setState-in-effect update (or stale overlay).
   const [pending, setPending] = useState<{ source: ChartDataRow; value: ChartAnalysis } | null>(null);
   const analysis = pending?.source === chartData ? pending.value : persisted;
+  const plotHeight = Math.max(80, height - (toolsOpen ? 200 : 32)
+    - (analysis.regression || analysis.distribution || analysis.density ? 18 : 0));
+  const fits = useMemo(() => (chartType === "line" || chartType === "scatter") ? linearFits(chartData) : null, [chartData, chartType]);
+  const displayData = analysis === persisted ? chartData : { ...chartData, analysis };
+  const scientificObservations = chartType === "scatter" || chartType === "line"
+    ? (chartData.series?.reduce((sum, series) => sum + series.values.length, 0)
+      ?? chartData.values?.length ?? 0) : 0;
+  const frame = chartFrame(displayData, chartType, width, plotHeight);
   const [view, setView] = useState<ViewDomains | null>(null);
   const current: ViewDomains = {
     x: analysis.lockX && analysis.xRange ? analysis.xRange : view?.x ?? frame.base.x,
@@ -76,7 +83,7 @@ export function ChartAnalysisPane({
   function commit(next: ChartAnalysis): void {
     try {
       const normalized = canonicalizeChartAnalysis(
-        next, chartType, frame.xKind, frame.yKind,
+        next, chartType, frame.xKind, frame.yKind, chartData,
       );
       setError("");
       setPending({ source: chartData, value: normalized });
@@ -228,12 +235,20 @@ export function ChartAnalysisPane({
   }
 
   function toggleLock(axis: "x" | "y"): void {
-    // Unlocking does not unexpectedly jump back to the data domain.
+    // A missing optional range must be OMITTED, not serialized as undefined:
+    // both the Python and TypeScript validators reject present-but-empty keys.
+    // Preserve the live view when unlocking, without persisting an unlocked range.
     setView(current);
     if (axis === "x") {
-      commit({ ...analysis, lockX: !analysis.lockX, xRange: !analysis.lockX ? [current.x[0], current.x[1]] : undefined });
+      const next: ChartAnalysis = { ...analysis, lockX: !analysis.lockX };
+      if (analysis.lockX) delete next.xRange;
+      else next.xRange = [current.x[0], current.x[1]];
+      commit(next);
     } else {
-      commit({ ...analysis, lockY: !analysis.lockY, yRange: !analysis.lockY ? [current.y[0], current.y[1]] : undefined });
+      const next: ChartAnalysis = { ...analysis, lockY: !analysis.lockY };
+      if (analysis.lockY) delete next.yRange;
+      else next.yRange = [current.y[0], current.y[1]];
+      commit(next);
     }
   }
 
@@ -244,14 +259,13 @@ export function ChartAnalysisPane({
       const proposedY: [number, number] = [Number(fields.get("ymin")), Number(fields.get("ymax"))];
       const parsed = canonicalizeChartAnalysis({
         ...analysis, xRange: proposedX, yRange: proposedY,
-      }, chartType, frame.xKind, frame.yKind);
+      }, chartType, frame.xKind, frame.yKind, chartData);
       setView({ x: parsed.xRange!, y: parsed.yRange! });
       if (analysis.lockX || analysis.lockY) {
-        commit({
-          ...analysis,
-          xRange: analysis.lockX ? parsed.xRange : analysis.xRange,
-          yRange: analysis.lockY ? parsed.yRange : analysis.yRange,
-        });
+        const next: ChartAnalysis = { ...analysis };
+        if (analysis.lockX) next.xRange = parsed.xRange;
+        if (analysis.lockY) next.yRange = parsed.yRange;
+        commit(next);
       } else setError("");
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Invalid axis limits");
@@ -295,6 +309,21 @@ export function ChartAnalysisPane({
             {cursor ? "X: " + exact(cursor.x, chartData.xUnit) + " · Y: " + exact(cursor.y, chartData.yUnit) : ""}
           </div>
         </div>
+        {analysis.regression === "ols95" && fits && <div className="chart-analysis-status">
+          Unweighted OLS · 95% pointwise mean CI · {fits.map((fit, i) =>
+            (chartData.series?.[i].name ? chartData.series[i].name + ": " : "")
+            + "n=" + fit.n + ", R²=" + (fit.r2 === null ? "undefined" : fit.r2.toFixed(3))).join(" · ")}
+        </div>}
+        {scientificObservations > 1200 && !analysis.density && <div className="chart-analysis-status">
+          {scientificObservations.toLocaleString("en-US")} original observations retained ·
+          viewport-aware SVG sampling · export uses all observations
+        </div>}
+        {analysis.density === "hexbin" && <div className="chart-analysis-status">
+          Hexagonal bin counts · {scientificObservations.toLocaleString("en-US")} original observations retained
+        </div>}
+        {analysis.distribution === "raincloud" && <div className="chart-analysis-status">
+          Gaussian density (relative peak) · quartiles · individual observations
+        </div>}
         {toolsOpen && (
           <div id={toolsId} role="group" aria-label="Chart analysis tools" className="chart-analysis-tools-panel">
             <div className="chart-analysis-tool-modes">
@@ -310,6 +339,32 @@ export function ChartAnalysisPane({
               <ToggleButton size="sm" icon="lock" pressed={analysis.lockY}
                 label={analysis.lockY ? "Unlock Y" : "Lock Y range"} onPressedChange={() => toggleLock("y")} />
               <Button size="sm" onClick={() => setView(null)}>Reset zoom</Button>
+              {fits && <ToggleButton size="sm" icon="crosshair"
+                pressed={analysis.regression === "ols95"} label="Linear fit (95% CI)"
+                onPressedChange={() => {
+                  const next = { ...analysis };
+                  if (next.regression) delete next.regression;
+                  else next.regression = "ols95";
+                  commit(next);
+                }} />}
+              {chartType === "scatter" && (!chartData.series || chartData.series.length === 1)
+                && (chartData.xScale ?? "linear") === "linear" && (chartData.yScale ?? "linear") === "linear"
+                && <ToggleButton size="sm" icon="filter"
+                  pressed={analysis.density === "hexbin"} label="Hexbin density"
+                  onPressedChange={() => {
+                    const next = { ...analysis };
+                    if (next.density) delete next.density;
+                    else next.density = "hexbin";
+                    commit(next);
+                  }} />}
+              {chartType === "boxplot" && <ToggleButton size="sm" icon="crosshair"
+                pressed={analysis.distribution === "raincloud"} label="Raincloud distribution"
+                onPressedChange={() => {
+                  const next = { ...analysis };
+                  if (next.distribution) delete next.distribution;
+                  else next.distribution = "raincloud";
+                  commit(next);
+                }} />}
             </div>
             <form aria-label="Set exact visible axis ranges" onSubmit={(event) => {
               event.preventDefault(); applyPreciseRanges(event.currentTarget);
@@ -373,15 +428,15 @@ export function ChartAnalysisPane({
         style={{ cursor: mode === "pan" ? "grab" : "crosshair" }}
       >
         {chartType === "line" && (usesScientificMarks(chartData, chartType)
-          ? <ScientificChartMarks chartType={chartType} chartData={chartData} theme={theme} width={width} height={plotHeight}
+          ? <ScientificChartMarks chartType={chartType} chartData={displayData} theme={theme} width={width} height={plotHeight}
               onHover={setHover} wrapperRef={wrapperRef} viewport={activeViewport} />
           : <LineChartMarks chartData={chartData} theme={theme} width={width} height={plotHeight}
               onHover={setHover} wrapperRef={wrapperRef} viewport={activeViewport} />)}
-        {chartType === "scatter" && <ScientificChartMarks chartType={chartType} chartData={chartData} theme={theme}
+        {chartType === "scatter" && <ScientificChartMarks chartType={chartType} chartData={displayData} theme={theme}
           width={width} height={plotHeight} onHover={setHover} wrapperRef={wrapperRef} viewport={activeViewport} />}
         {chartType === "histogram" && <HistogramChartMarks chartData={chartData} theme={theme}
           width={width} height={plotHeight} onHover={setHover} wrapperRef={wrapperRef} viewport={activeViewport} />}
-        {chartType === "boxplot" && <BoxplotChartMarks chartData={chartData} theme={theme}
+        {chartType === "boxplot" && <BoxplotChartMarks chartData={displayData} theme={theme}
           width={width} height={plotHeight} onHover={setHover} wrapperRef={wrapperRef} viewport={activeViewport} />}
         <defs>
           <clipPath id={clipId}><rect x={frame.left} y={frame.top} width={frame.width} height={frame.height} /></clipPath>

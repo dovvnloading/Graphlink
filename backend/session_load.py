@@ -1636,11 +1636,23 @@ def _restore_charts(
                         {"rowLabels": ["No valid data"], "columnLabels": ["Value"],
                          "matrix": [[0]]}, "heatmap",
                     )
+                elif chart_type == "composite":
+                    chart_data = canonicalize_chart_data({
+                        "type": "composite", "version": 2,
+                        "composite": {"numbers": {"x": [0, 1], "y": [0, 0]},
+                                      "layers": [{"mark": "point", "x": "x", "y": "y"}]},
+                    }, "composite")
                 else:
                     chart_data = _placeholder_chart_data(chart_type)
                 chart_error = f"This chart's saved data could not be validated: {exc}"
+            # A chart can be the parent of a derived chart. Previous
+            # saves only resolved chart parents among ordinary scene nodes,
+            # dropping the edge/source lineage on reload. Earlier charts
+            # have already been reminted in this loop; include their saved
+            # ids alongside ordinary node ids without guessing forward refs.
             parent_id = _resolve_ref(
-                chart_payload, "parent_node_id", "parent_node_index", nodes_by_id, all_nodes_map,
+                chart_payload, "parent_node_id", "parent_node_index",
+                {**nodes_by_id, **charts_by_id}, all_nodes_map,
             )
             x, y = _position(chart_payload)
             chart = with_state(

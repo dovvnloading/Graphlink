@@ -171,3 +171,125 @@ describe("analysis interactions on numerical charts", () => {
     expect(svgFor(container).querySelector(".chart-scientific-point circle")?.getAttribute("cx")).toBe(before);
   });
 });
+
+it("shows and removes a persisted OLS confidence layer without changing observations", () => {
+  const input: ChartDataRow = { ...scatter, xScale: "linear", xValues: [0, 1, 2, 3, 4],
+    values: [1, 3, 2, 5, 4] };
+  const original = JSON.stringify(input);
+  const save = vi.fn();
+  const { container } = render(<ChartRenderer chartType="scatter" chartData={input} onAnalysisChange={save} />);
+  openTools();
+  const toggle = screen.getByRole("button", { name: "Linear fit (95% CI)" });
+  fireEvent.click(toggle);
+  expect(save).toHaveBeenLastCalledWith(expect.objectContaining({ regression: "ols95" }));
+  expect(container.querySelectorAll(".chart-regression-band")).toHaveLength(1);
+  expect(container.querySelectorAll(".chart-regression-line")).toHaveLength(1);
+  expect(container.querySelectorAll(".chart-scientific-point")).toHaveLength(5);
+  expect(screen.getByText(/^Unweighted OLS.*R²=0\.640/)).toBeInTheDocument();
+  fireEvent.click(toggle);
+  expect(save).toHaveBeenLastCalledWith({ lockX: false, lockY: false, annotations: [] });
+  expect(container.querySelector(".chart-regression-band")).toBeNull();
+  expect(JSON.stringify(input)).toBe(original);
+});
+
+it("renders a raincloud density and every original observation, and restores the boxplot", () => {
+  const input = plotData.boxplot;
+  const save = vi.fn();
+  const { container } = render(<ChartRenderer chartType="boxplot" chartData={input} onAnalysisChange={save} />);
+  openTools();
+  const toggle = screen.getByRole("button", { name: "Raincloud distribution" });
+  fireEvent.click(toggle);
+  expect(save).toHaveBeenLastCalledWith(expect.objectContaining({ distribution: "raincloud" }));
+  expect(container.querySelectorAll(".chart-raincloud-density")).toHaveLength(2);
+  expect(container.querySelectorAll(".chart-raincloud-observation")).toHaveLength(8);
+  fireEvent.click(toggle);
+  expect(container.querySelector(".chart-raincloud-density")).toBeNull();
+  expect(container.querySelector(".chart-raincloud-observation")).toBeNull();
+});
+
+it("toggles the full-resolution single-series hexbin density renderer", () => {
+  const original = JSON.stringify(scatter);
+  const spec: ChartDataRow = { ...scatter, xScale: "linear" };
+  const save = vi.fn();
+  const { container } = render(<ChartRenderer chartType="scatter" chartData={spec} onAnalysisChange={save} />);
+  openTools();
+  fireEvent.click(screen.getByRole("button", { name: "Hexbin density" }));
+  expect(save).toHaveBeenLastCalledWith(expect.objectContaining({ density: "hexbin" }));
+  expect(container.querySelectorAll(".chart-hexbin-cell").length).toBeGreaterThan(0);
+  expect(container.querySelectorAll(".chart-scientific-point")).toHaveLength(0);
+  fireEvent.click(screen.getByRole("button", { name: "Hexbin density" }));
+  expect(container.querySelector(".chart-hexbin-cell")).toBeNull();
+  expect(container.querySelectorAll(".chart-scientific-point")).toHaveLength(3);
+  expect(JSON.stringify(scatter)).toBe(original);
+});
+
+it.each([
+  { xValues: [0, 10], values: [0, 10], visible: 0 },
+  { xValues: [4.5, 0, 10, 5.5], values: [2, 0, 10, 8], visible: 2 },
+])("retains connected scientific line segments across the zoom boundary ($visible visible vertices)", ({ xValues, values, visible }) => {
+  const { container } = render(<ChartRenderer chartType="line" chartData={{ type: "line", xValues, values }} />);
+  openTools();
+  fireEvent.change(screen.getByLabelText("X minimum"), { target: { value: "4" } });
+  fireEvent.change(screen.getByLabelText("X maximum"), { target: { value: "6" } });
+  fireEvent.change(screen.getByLabelText("Y minimum"), { target: { value: "0" } });
+  fireEvent.change(screen.getByLabelText("Y maximum"), { target: { value: "10" } });
+  fireEvent.click(screen.getByRole("button", { name: "Apply ranges" }));
+  expect(screen.queryByRole("alert")).toBeNull();
+  const path = container.querySelector(".chart-series-line");
+  expect(path?.getAttribute("d")?.match(/\bL\b/g)).toHaveLength(xValues.length - 1);
+  expect(path?.closest("g[clip-path]")).not.toBeNull();
+  expect(container.querySelectorAll(".chart-scientific-point")).toHaveLength(visible);
+});
+
+it("keeps the full connected path while bounding dense line point glyphs", () => {
+  const xValues = Array.from({ length: 2000 }, (_, i) => i);
+  const { container } = render(<ChartRenderer chartType="line"
+    chartData={{ type: "line", xValues, values: xValues.map(i => Math.sin(i / 10)) }} />);
+  expect(container.querySelector(".chart-series-line")?.getAttribute("d")?.match(/\bL\b/g)).toHaveLength(1999);
+  expect(container.querySelectorAll(".chart-scientific-point").length).toBeLessThanOrEqual(1200);
+});
+
+it.each([
+  { button: "Linear fit (95% CI)", mode: { regression: "ols95" }, mark: ".chart-regression-band" },
+  { button: "Hexbin density", mode: { density: "hexbin" }, mark: ".chart-hexbin-cell" },
+])("applies unlocked and locked precise axis ranges with $button enabled", ({ button, mode, mark }) => {
+  const spec: ChartDataRow = { ...scatter, xScale: "linear", xValues: [0, 1, 2, 3, 4], values: [1, 3, 2, 5, 4] };
+  const save = vi.fn();
+  const { container } = render(<ChartRenderer chartType="scatter" chartData={spec} onAnalysisChange={save} />);
+  openTools();
+  fireEvent.click(screen.getByRole("button", { name: button }));
+  fireEvent.change(screen.getByLabelText("X minimum"), { target: { value: "0.5" } });
+  fireEvent.change(screen.getByLabelText("X maximum"), { target: { value: "3.5" } });
+  fireEvent.change(screen.getByLabelText("Y minimum"), { target: { value: "0" } });
+  fireEvent.change(screen.getByLabelText("Y maximum"), { target: { value: "6" } });
+  fireEvent.click(screen.getByRole("button", { name: "Apply ranges" }));
+  expect(screen.queryByRole("alert")).toBeNull();
+  expect(screen.getByRole("button", { name: "Reset view" })).toBeEnabled();
+  fireEvent.click(screen.getByRole("button", { name: "Lock X range" }));
+  expect(save).toHaveBeenLastCalledWith(expect.objectContaining({ ...mode, lockX: true, xRange: [0.5, 3.5] }));
+  fireEvent.change(screen.getByLabelText("X minimum"), { target: { value: "1" } });
+  fireEvent.change(screen.getByLabelText("X maximum"), { target: { value: "3" } });
+  fireEvent.click(screen.getByRole("button", { name: "Apply ranges" }));
+  expect(screen.queryByRole("alert")).toBeNull();
+  expect(save).toHaveBeenLastCalledWith(expect.objectContaining({ ...mode, lockX: true, xRange: [1, 3] }));
+  expect(container.querySelector(mark)).not.toBeNull();
+});
+
+it("omits unlocked optional axis ranges rather than persisting undefined properties", () => {
+  const save = vi.fn();
+  render(<ChartRenderer chartType="scatter" chartData={scatter} onAnalysisChange={save} />);
+  openTools();
+  fireEvent.click(screen.getByRole("button", { name: "Lock X range" }));
+  expect(save).toHaveBeenLastCalledWith(expect.objectContaining({ lockX: true }));
+  fireEvent.click(screen.getByRole("button", { name: "Unlock X" }));
+  const unlockedX = save.mock.lastCall?.[0] as ChartAnalysis;
+  expect(unlockedX.lockX).toBe(false);
+  expect(unlockedX).not.toHaveProperty("xRange");
+  fireEvent.click(screen.getByRole("button", { name: "Lock Y range" }));
+  expect(save).toHaveBeenLastCalledWith(expect.objectContaining({ lockY: true }));
+  fireEvent.click(screen.getByRole("button", { name: "Unlock Y" }));
+  const unlockedY = save.mock.lastCall?.[0] as ChartAnalysis;
+  expect(unlockedY.lockY).toBe(false);
+  expect(unlockedY).not.toHaveProperty("yRange");
+  expect(screen.queryByRole("alert")).toBeNull();
+});

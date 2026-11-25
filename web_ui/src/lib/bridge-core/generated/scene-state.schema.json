@@ -233,11 +233,37 @@
                     },
                     "type": "array"
                   },
+                  "clustering": {
+                    "enum": [
+                      "rows",
+                      "columns",
+                      "both"
+                    ],
+                    "type": "string"
+                  },
+                  "density": {
+                    "enum": [
+                      "hexbin"
+                    ],
+                    "type": "string"
+                  },
+                  "distribution": {
+                    "enum": [
+                      "raincloud"
+                    ],
+                    "type": "string"
+                  },
                   "lockX": {
                     "type": "boolean"
                   },
                   "lockY": {
                     "type": "boolean"
+                  },
+                  "regression": {
+                    "enum": [
+                      "ols95"
+                    ],
+                    "type": "string"
                   },
                   "xRange": {
                     "items": {
@@ -267,6 +293,75 @@
                   "type": "string"
                 },
                 "type": "array"
+              },
+              "composite": {
+                "additionalProperties": false,
+                "properties": {
+                  "categories": {
+                    "additionalProperties": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "type": "object"
+                  },
+                  "facetBy": {
+                    "type": "string"
+                  },
+                  "layers": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "colorBy": {
+                          "type": "string"
+                        },
+                        "label": {
+                          "type": "string"
+                        },
+                        "mark": {
+                          "enum": [
+                            "point",
+                            "line",
+                            "band",
+                            "area"
+                          ],
+                          "type": "string"
+                        },
+                        "x": {
+                          "type": "string"
+                        },
+                        "y": {
+                          "type": "string"
+                        },
+                        "y2": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "mark",
+                        "x",
+                        "y"
+                      ],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "numbers": {
+                    "additionalProperties": {
+                      "items": {
+                        "type": "number"
+                      },
+                      "type": "array"
+                    },
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "numbers",
+                  "layers"
+                ],
+                "type": "object"
               },
               "flows": {
                 "items": {
@@ -386,7 +481,8 @@
                   "sankey",
                   "scatter",
                   "boxplot",
-                  "heatmap"
+                  "heatmap",
+                  "composite"
                 ],
                 "type": "string"
               },

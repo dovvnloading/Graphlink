@@ -289,7 +289,7 @@ export interface CodeReviewQaRow {
 
 export interface ChartDataRow {
   version?: number | null;
-  type?: "bar" | "line" | "pie" | "histogram" | "sankey" | "scatter" | "boxplot" | "heatmap" | null;
+  type?: "bar" | "line" | "pie" | "histogram" | "sankey" | "scatter" | "boxplot" | "heatmap" | "composite" | null;
   title?: string | null;
   labels?: string[] | null;
   values?: number[] | null;
@@ -310,6 +310,7 @@ export interface ChartDataRow {
   columnLabels?: string[] | null;
   matrix?: number[][] | null;
   valueUnit?: string | null;
+  composite?: ChartCompositeSpecRow | null;
   analysis?: ChartAnalysisRow | null;
 }
 
@@ -331,12 +332,32 @@ export interface ChartBoxplotGroupRow {
   values: number[];
 }
 
+export interface ChartCompositeSpecRow {
+  numbers: Record<string, number[]>;
+  layers: ChartCompositeLayerRow[];
+  categories?: Record<string, string[]> | null;
+  facetBy?: string | null;
+}
+
+export interface ChartCompositeLayerRow {
+  mark: "point" | "line" | "band" | "area";
+  x: string;
+  y: string;
+  y2?: string | null;
+  colorBy?: string | null;
+  label?: string | null;
+}
+
 export interface ChartAnalysisRow {
   lockX: boolean;
   lockY: boolean;
   annotations: ChartAnnotationRow[];
   xRange?: number[] | null;
   yRange?: number[] | null;
+  regression?: "ols95" | null;
+  distribution?: "raincloud" | null;
+  clustering?: "rows" | "columns" | "both" | null;
+  density?: "hexbin" | null;
 }
 
 export interface ChartAnnotationRow {
@@ -547,6 +568,22 @@ const CHART_BOXPLOT_GROUP_ROW_FIELDS: WireFields = [
   ["values", { a: "n" }, 0],
 ];
 
+const CHART_COMPOSITE_LAYER_ROW_FIELDS: WireFields = [
+  ["mark", { e: ["point", "line", "band", "area"] }, 0],
+  ["x", "s", 0],
+  ["y", "s", 0],
+  ["y2", "s", 1],
+  ["colorBy", "s", 1],
+  ["label", "s", 1],
+];
+
+const CHART_COMPOSITE_SPEC_ROW_FIELDS: WireFields = [
+  ["numbers", { d: { a: "n" } }, 0],
+  ["layers", { a: { o: CHART_COMPOSITE_LAYER_ROW_FIELDS } }, 0],
+  ["categories", { d: { a: "s" } }, 1],
+  ["facetBy", "s", 1],
+];
+
 const CHART_ANNOTATION_ROW_FIELDS: WireFields = [
   ["kind", { e: ["label", "arrow", "region"] }, 0],
   ["x", "n", 1],
@@ -565,11 +602,15 @@ const CHART_ANALYSIS_ROW_FIELDS: WireFields = [
   ["annotations", { a: { o: CHART_ANNOTATION_ROW_FIELDS } }, 0],
   ["xRange", { a: "n" }, 1],
   ["yRange", { a: "n" }, 1],
+  ["regression", { e: ["ols95"] }, 1],
+  ["distribution", { e: ["raincloud"] }, 1],
+  ["clustering", { e: ["rows", "columns", "both"] }, 1],
+  ["density", { e: ["hexbin"] }, 1],
 ];
 
 const CHART_DATA_ROW_FIELDS: WireFields = [
   ["version", "n", 1],
-  ["type", { e: ["bar", "line", "pie", "histogram", "sankey", "scatter", "boxplot", "heatmap"] }, 1],
+  ["type", { e: ["bar", "line", "pie", "histogram", "sankey", "scatter", "boxplot", "heatmap", "composite"] }, 1],
   ["title", "s", 1],
   ["labels", { a: "s" }, 1],
   ["values", { a: "n" }, 1],
@@ -590,6 +631,7 @@ const CHART_DATA_ROW_FIELDS: WireFields = [
   ["columnLabels", { a: "s" }, 1],
   ["matrix", { a: { a: "n" } }, 1],
   ["valueUnit", "s", 1],
+  ["composite", { o: CHART_COMPOSITE_SPEC_ROW_FIELDS }, 1],
   ["analysis", { o: CHART_ANALYSIS_ROW_FIELDS }, 1],
 ];
 

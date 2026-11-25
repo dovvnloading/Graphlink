@@ -2,6 +2,9 @@
  * coordinates/error magnitudes checked by both canonicalizers are mapped to
  * SVG; only the scale (linear/log10) changes, never the numeric data. */
 import { useId } from "react";
+import { linearFits, regressionYExtent } from "./linearFit";
+import { scientificMarkBudget, scientificMarkIndices } from "./scientificSampling";
+import { hexbinPoints, hexagonVertices } from "./hexbin";
 import type { AxisScale, ErrorPair } from "../chartSpec";
 import type { ViewDomains } from "./chartViewport";
 import type { ChartMarksProps } from "./BarChartMarks";
@@ -91,7 +94,8 @@ export function ScientificChartMarks({
   const yScaleType = data.yScale ?? "linear";
   const extents = scientificExtents(xValues, series);
   const xDomain = viewport?.x ?? scientificDomain(...extents.x, xScaleType);
-  const yDomain = viewport?.y ?? scientificDomain(...extents.y, yScaleType);
+  const yDomain = viewport?.y ?? scientificDomain(...regressionYExtent(data, extents.y), yScaleType);
+  const fits = data.analysis?.regression === "ols95" ? linearFits(data) : null;
 
   const legendColumns = Math.min(4, named?.length ?? 0);
   const legendRows = named ? Math.ceil(named.length / legendColumns) : 0;
@@ -118,6 +122,9 @@ export function ScientificChartMarks({
         lines: [xScaleType === "log10" ? formatLogTick(value) : formatScientificTick(value)],
       }));
   const palette = theme.categorical.length ? theme.categorical : [theme.text];
+  const bins = data.analysis?.density === "hexbin" && chartType === "scatter"
+    ? hexbinPoints(xValues, series[0].values, xDomain, yDomain, innerWidth, innerHeight) : null;
+  const maxBin = bins?.reduce((v, cell) => Math.max(v, cell.count), 0) ?? 0;
 
   return (
     <g className="chart-scientific-marks" transform={"translate(" + marginLeft + " " + marginTop + ")"}>
@@ -134,7 +141,7 @@ export function ScientificChartMarks({
         rotateXTicks={rotate}
         zeroLineY={yDomain[0] < 0 && yDomain[1] > 0 && yScaleType === "linear" ? y(0) : null}
       />
-      {viewport && <defs><clipPath id={clipId}><rect x={0} y={0} width={innerWidth} height={innerHeight} /></clipPath></defs>}
+      {(viewport || bins) && <defs><clipPath id={clipId}><rect x={0} y={0} width={innerWidth} height={innerHeight} /></clipPath></defs>}
       {named && (
         <g className="chart-series-legend" aria-label="Series legend">
           {named.map((row, index) => {
@@ -151,20 +158,56 @@ export function ScientificChartMarks({
           })}
         </g>
       )}
-      <g clipPath={viewport ? "url(#" + clipId + ")" : undefined}>
+      <g clipPath={viewport || bins ? "url(#" + clipId + ")" : undefined}>
+      {bins && <g className="chart-hexbin-cells">
+        {bins.map((cell) => <polygon key={cell.q + ":" + cell.r} className="chart-hexbin-cell"
+          data-count={cell.count} points={hexagonVertices(cell.cx, cell.cy, 13.5)}
+          fill={palette[0]} fillOpacity={0.18 + 0.78 * Math.sqrt(cell.count / maxBin)}
+          stroke={theme.surface} strokeWidth={0.7}
+          onPointerMove={(event) => onHover({
+            title: "Hexagonal density",
+            rows: [{ label: "Observations", value: String(cell.count) },
+              { label: "Aggregation", value: "Visible X/Y viewport" }],
+            ...tooltipPositionFromEvent(event, wrapperRef),
+          })}
+          onPointerLeave={() => onHover(null)} />)}
+      </g>}
       {series.map((row, seriesIndex) => {
         const color = palette[seriesIndex % palette.length];
         const name = row.name || data.title || "Series";
-        const path = xValues.map((xValue, index) =>
-          (index === 0 ? "M " : "L ") + x(xValue) + " " + y(row.values[index]),
-        ).join(" ");
+        const indices = scientificMarkIndices(xValues, row.values, viewport,
+          scientificMarkBudget(series.length), chartType === "line" ? "line" : "scatter", row.yError);
+        // Sampling limits interactive point/error glyphs, not connectivity.
+        // Keep the single line path in original order (at most 10,000 total
+        // source vertices). SVG clipping preserves crossings even when both
+        // endpoints are offscreen, and never joins nonadjacent visible points.
+        const path = chartType === "line" ? xValues.map((value, index) =>
+          (index === 0 ? "M " : "L ") + x(value) + " " + y(row.values[index]),
+        ).join(" ") : "";
         return (
           <g key={name} className="chart-scientific-series" data-series={name}>
+            {fits && (() => {
+              const fit = fits[seriesIndex];
+              const upper = fit.points.map(p => x(p[0]) + "," + y(p[3]));
+              const lower = [...fit.points].reverse().map(p => x(p[0]) + "," + y(p[2]));
+              const center = fit.points.map(p => x(p[0]) + "," + y(p[1]));
+              return (
+                <g className="chart-regression-layer" pointerEvents="none">
+                  <title>{name + ": unweighted OLS; pointwise 95% mean confidence interval; n=" + fit.n
+                    + "; R²=" + (fit.r2 === null ? "undefined" : fit.r2.toFixed(3))}</title>
+                  <polygon className="chart-regression-band" points={[...upper, ...lower].join(" ")}
+                    fill={color} fillOpacity={0.18} />
+                  <polyline className="chart-regression-line" points={center.join(" ")}
+                    fill="none" stroke={color} strokeWidth={1.8} strokeDasharray="5 3" />
+                </g>
+              );
+            })()}
             {chartType === "line" && (
               <path className="chart-series-line" d={path} fill="none"
                 stroke={color} strokeWidth={2.5} strokeLinejoin="round" strokeLinecap="round" />
             )}
-            {xValues.map((xValue, index) => {
+            {!bins && indices.map((index) => {
+              const xValue = xValues[index];
               const value = row.values[index];
               const centerX = x(xValue);
               const centerY = y(value);

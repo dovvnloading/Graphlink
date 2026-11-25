@@ -7,8 +7,12 @@ import re
 from decimal import Decimal, localcontext
 
 
-SUPPORTED_CHART_TYPES = frozenset({"bar", "line", "pie", "histogram", "sankey", "scatter", "boxplot", "heatmap"})
+SUPPORTED_CHART_TYPES = frozenset({"bar", "line", "pie", "histogram", "sankey", "scatter", "boxplot", "heatmap", "composite"})
 MAX_SERIES_POINTS = 300
+# Scientific line/scatter arrays retain all finite observations, while the
+# SVG renderer uses bounded, viewport-aware samples. Other chart types keep
+# their original 300-item bounds to protect memory and publication output.
+MAX_SCIENTIFIC_OBSERVATIONS = 10_000
 MAX_NAMED_SERIES = 12
 MAX_SANKEY_FLOWS = 300
 MAX_LABEL_LENGTH = 160
@@ -230,6 +234,38 @@ CHART_JSON_SCHEMAS: dict[str, dict] = {
         },
         "required": ["type", "rowLabels", "columnLabels", "matrix"],
     },
+    "composite": {
+        "type": "object",
+        "properties": {
+            "type": {"type": "string", "enum": ["composite"]},
+            "version": {"type": "integer", "enum": [2]},
+            "title": {"type": "string"},
+            "xAxis": {"type": "string"}, "yAxis": {"type": "string"},
+            "xScale": {"type": "string", "enum": ["linear", "log10"]},
+            "yScale": {"type": "string", "enum": ["linear", "log10"]},
+            "xUnit": {"type": "string"}, "yUnit": {"type": "string"},
+            "composite": {
+                "type": "object",
+                "properties": {
+                    "numbers": {"type": "object", "additionalProperties": {
+                        "type": "array", "items": {"type": "number"},
+                    }},
+                    "categories": {"type": "object", "additionalProperties": {
+                        "type": "array", "items": {"type": "string"},
+                    }},
+                    "facetBy": {"type": "string"},
+                    "layers": {"type": "array", "items": {"type": "object", "properties": {
+                        "mark": {"type": "string", "enum": ["point", "line", "band", "area"]},
+                        "x": {"type": "string"}, "y": {"type": "string"},
+                        "y2": {"type": "string"}, "colorBy": {"type": "string"},
+                        "label": {"type": "string"},
+                    }, "required": ["mark", "x", "y"]}},
+                },
+                "required": ["numbers", "layers"],
+            },
+        },
+        "required": ["type", "composite"],
+    },
     "sankey": {
         "type": "object",
         "properties": {
@@ -279,7 +315,16 @@ def chart_generation_messages(source_text: str, chart_type: str) -> list[dict]:
         {"role": "system", "content": CHART_GENERATION_SYSTEM_PROMPT},
         {
             "role": "user",
-            "content": f"Chart type: {chart_type}\n\n--- SOURCE TEXT ---\n{source_text}",
+            "content": (
+                f"Chart type: {chart_type}\n\n"
+                + ("For composite figures: use numeric column arrays in composite.numbers; "
+                   "optional grouping columns in composite.categories; connect each "
+                   "layer to existing numeric columns by name. Layer marks are point, "
+                   "line, band (with y2 upper-bound column), or area. Optional facetBy "
+                   "names a categorical column. Never fabricate observations or "
+                   "uncertainty intervals.\n\n" if chart_type == "composite" else "")
+                + f"--- SOURCE TEXT ---\n{source_text}"
+            ),
         },
     ]
 
@@ -441,8 +486,8 @@ def _scientific_chart(data, chart_type, result):
             raise ChartDataError("xValues must be a list")
         if not raw_x:
             raise ChartDataError("xValues require at least one data point")
-        if len(raw_x) > MAX_SERIES_POINTS:
-            raise ChartDataError(f"Charts support at most {MAX_SERIES_POINTS} data points")
+        if len(raw_x) > MAX_SCIENTIFIC_OBSERVATIONS:
+            raise ChartDataError(f"Charts support at most {MAX_SCIENTIFIC_OBSERVATIONS} data points")
         x_values = [_finite_number(value, f"xValues at index {i}") for i, value in enumerate(raw_x)]
         result["xValues"] = x_values
     else:
@@ -464,8 +509,8 @@ def _scientific_chart(data, chart_type, result):
     if labels is not None:
         if not isinstance(labels, list):
             raise ChartDataError("Labels must be a list")
-        if len(labels) > MAX_SERIES_POINTS:
-            raise ChartDataError(f"Charts support at most {MAX_SERIES_POINTS} data points")
+        if len(labels) > MAX_SCIENTIFIC_OBSERVATIONS:
+            raise ChartDataError(f"Charts support at most {MAX_SCIENTIFIC_OBSERVATIONS} data points")
         result["labels"] = [_clean_text(label, f"Label at index {i}") for i, label in enumerate(labels)]
 
     raw_series = data.get("series")
@@ -490,8 +535,8 @@ def _scientific_chart(data, chart_type, result):
                 raise ChartDataError(f"series {name} values must be a list")
             if not values:
                 raise ChartDataError(f"series {name} requires at least one data point")
-            if len(values) > MAX_SERIES_POINTS:
-                raise ChartDataError(f"Charts support at most {MAX_SERIES_POINTS} data points")
+            if len(values) > MAX_SCIENTIFIC_OBSERVATIONS:
+                raise ChartDataError(f"Charts support at most {MAX_SCIENTIFIC_OBSERVATIONS} data points")
             row = {
                 "name": name,
                 "values": [_finite_number(value, f"series {name} value at index {i}") for i, value in enumerate(values)],
@@ -505,8 +550,8 @@ def _scientific_chart(data, chart_type, result):
         raw_values = data.get("values")
         if not isinstance(raw_values, list) or not raw_values:
             raise ChartDataError(f"{chart_type.title()} charts require at least one data point")
-        if len(raw_values) > MAX_SERIES_POINTS:
-            raise ChartDataError(f"Charts support at most {MAX_SERIES_POINTS} data points")
+        if len(raw_values) > MAX_SCIENTIFIC_OBSERVATIONS:
+            raise ChartDataError(f"Charts support at most {MAX_SCIENTIFIC_OBSERVATIONS} data points")
         series = [{
             "values": [_finite_number(value, f"Value at index {i}") for i, value in enumerate(raw_values)],
         }]
@@ -523,8 +568,8 @@ def _scientific_chart(data, chart_type, result):
             raise ChartDataError(f"series {row.get('name', 'values')} length must match the other series ({count})")
     if chart_type == "line" and count < 2:
         raise ChartDataError("Line charts require at least two data points")
-    if count > MAX_SERIES_POINTS or len(series) * count > MAX_SERIES_POINTS:
-        raise ChartDataError(f"Charts support at most {MAX_SERIES_POINTS} total series points")
+    if count > MAX_SCIENTIFIC_OBSERVATIONS or len(series) * count > MAX_SCIENTIFIC_OBSERVATIONS:
+        raise ChartDataError(f"Charts support at most {MAX_SCIENTIFIC_OBSERVATIONS} total series points")
     if x_values is not None and len(x_values) != count:
         raise ChartDataError(f"xValues length must match the series length ({count})")
     if "labels" in result and len(result["labels"]) != count:
@@ -647,6 +692,140 @@ def _heatmap_chart(data, result):
     return result
 
 
+# V2 is deliberately a *data-bound* graphics grammar: every mark refers to
+# a checked original column, never to model-supplied expressions or scripts.
+MAX_COMPOSITE_ROWS = 2_000
+MAX_COMPOSITE_LAYERS = 8
+
+
+def _composite_chart(data, result):
+    """Validate a small, composable, faceted grammar without changing V1 charts."""
+    if data.get("version", 2) != 2:
+        raise ChartDataError("Composite figures require ChartSpec version 2")
+    allowed = {"version", "type", "title", "composite", "xAxis", "yAxis",
+               "xScale", "yScale", "xUnit", "yUnit", "scienceReceipt"}
+    if set(data) - allowed:
+        raise ChartDataError("Unsupported composite figure field")
+    raw = data.get("composite")
+    if not isinstance(raw, dict) or set(raw) - {"numbers", "categories", "layers", "facetBy"}:
+        raise ChartDataError("Composite data must contain only numbers, categories, layers, facetBy")
+    numbers = raw.get("numbers")
+    categories = raw.get("categories", {})
+    layers = raw.get("layers")
+    if not isinstance(numbers, dict) or not 2 <= len(numbers) <= 12:
+        raise ChartDataError("Composite figures require 2-12 numeric columns")
+    if not isinstance(categories, dict) or len(categories) > 4:
+        raise ChartDataError("Composite figures support at most four categorical columns")
+    if not isinstance(layers, list) or not 1 <= len(layers) <= MAX_COMPOSITE_LAYERS:
+        raise ChartDataError("Composite figures require 1-8 mark layers")
+
+    cleaned_numbers, cleaned_categories = {}, {}
+    count = None
+    for source, destination, field_limit in (
+        (numbers, cleaned_numbers, "numeric"),
+        (categories, cleaned_categories, "categorical"),
+    ):
+        for field, values in source.items():
+            if not isinstance(field, str) or _clean_text(field, field_limit) != field:
+                raise ChartDataError(f"Invalid {field_limit} column name")
+            if (field in cleaned_numbers or field in cleaned_categories or len(field) > 80
+                    or field in {"__proto__", "constructor", "prototype"}):
+                raise ChartDataError(f"Duplicate or oversized composite column: {field}")
+            if not isinstance(values, list):
+                raise ChartDataError(f"Composite column {field} must contain an array")
+            if count is None:
+                count = len(values)
+            if len(values) != count or not 2 <= count <= MAX_COMPOSITE_ROWS:
+                raise ChartDataError("Composite columns must have 2-2000 aligned observations")
+            if field_limit == "numeric":
+                numbers_clean = [_finite_number(value, f"Composite {field}[{i}]")
+                                 for i, value in enumerate(values)]
+                if not math.isfinite(max(numbers_clean) - min(numbers_clean)):
+                    raise ChartDataError(f"Composite {field} range must be finite")
+                destination[field] = numbers_clean
+            else:
+                labels = [_clean_text(value, f"Composite {field}[{i}]")
+                          for i, value in enumerate(values)]
+                if len(set(labels)) > 30:
+                    raise ChartDataError("Composite categorical columns support at most 30 categories")
+                destination[field] = labels
+
+    facet = raw.get("facetBy")
+    if facet is not None:
+        if not isinstance(facet, str) or facet not in cleaned_categories:
+            raise ChartDataError("Composite facetBy must name a categorical column")
+        if len(set(cleaned_categories[facet])) > 6:
+            raise ChartDataError("Composite figures support at most six facets")
+
+    xs, ys = [], []
+    result_layers = []
+    # The whole figure shares one eight-slot legend. Equal category text in
+    # different fields has distinct meaning; repeated field bindings reuse slots.
+    color_slots = set()
+    for index, layer in enumerate(layers):
+        if not isinstance(layer, dict) or set(layer) - {"mark", "x", "y", "y2", "colorBy", "label"}:
+            raise ChartDataError(f"Composite layer {index} has unknown fields")
+        mark = layer.get("mark")
+        if mark not in ("point", "line", "band", "area"):
+            raise ChartDataError(f"Unsupported composite mark in layer {index}")
+        x, y, y2 = layer.get("x"), layer.get("y"), layer.get("y2")
+        if not isinstance(x, str) or x not in cleaned_numbers or not isinstance(y, str) or y not in cleaned_numbers:
+            raise ChartDataError(f"Composite layer {index} must reference numeric x/y columns")
+        if (mark == "band") != (y2 is not None):
+            raise ChartDataError("Composite band requires y2; other marks forbid y2")
+        if mark == "band":
+            if not isinstance(y2, str) or y2 not in cleaned_numbers:
+                raise ChartDataError("Composite y2 must reference a numeric column")
+            if any(low > high for low, high in zip(cleaned_numbers[y], cleaned_numbers[y2])):
+                raise ChartDataError("Composite band lower bounds must not exceed upper bounds")
+        color = layer.get("colorBy")
+        if color is not None:
+            if not isinstance(color, str) or color not in cleaned_categories:
+                raise ChartDataError("Composite colorBy must name a categorical column")
+            color_slots.update((color, value) for value in cleaned_categories[color])
+        else:
+            color_slots.add((index,))
+        if len(color_slots) > 8:
+            raise ChartDataError("Composite figures support at most eight color legend entries across all layers")
+        clean = {"mark": mark, "x": x, "y": y}
+        if y2 is not None:
+            clean["y2"] = y2
+        if color is not None:
+            clean["colorBy"] = color
+        if layer.get("label") is not None:
+            clean["label"] = _clean_text(layer["label"], f"Composite layer {index} label")
+        result_layers.append(clean)
+        xs.extend(cleaned_numbers[x])
+        ys.extend(cleaned_numbers[y])
+        if y2 is not None:
+            ys.extend(cleaned_numbers[y2])
+        if mark == "area":
+            ys.append(0.0)
+
+    for axis, values in (("x", xs), ("y", ys)):
+        scale = data.get(axis + "Scale", "linear")
+        if scale not in ("linear", "log10"):
+            raise ChartDataError(f"Composite {axis}Scale must be linear or log10")
+        if scale == "log10" and any(value <= 0 for value in values):
+            raise ChartDataError(f"Composite {axis}Scale requires positive observations")
+        if not math.isfinite(max(values) - min(values)):
+            raise ChartDataError(f"Composite {axis} domain is not finite")
+        result[axis + "Scale"] = scale
+        result[axis + "Axis"] = _clean_text(data.get(axis + "Axis"), f"Composite {axis}Axis",
+                                           default=axis.upper())
+        if data.get(axis + "Unit") is not None:
+            result[axis + "Unit"] = _clean_text(data[axis + "Unit"], f"Composite {axis}Unit")
+
+    result["version"] = 2
+    result["composite"] = {
+        "numbers": cleaned_numbers, "categories": cleaned_categories,
+        "layers": result_layers,
+    }
+    if facet is not None:
+        result["composite"]["facetBy"] = facet
+    return result
+
+
 def _canonicalize_chart_data_base(data, chart_type=None):
     """Return a new, bounded chart payload or raise :class:`ChartDataError`.
 
@@ -688,6 +867,9 @@ def _canonicalize_chart_data_base(data, chart_type=None):
                        for field in ("resultHash", "receiptHash"))):
             raise ChartDataError("Invalid scientific chart receipt")
         result["scienceReceipt"] = dict(receipt)
+
+    if expected_type == "composite":
+        return _composite_chart(data, result)
 
     if expected_type in {"boxplot", "heatmap"}:
         return (_boxplot_chart(data, result) if expected_type == "boxplot"
@@ -788,15 +970,211 @@ def _canonicalize_chart_data_base(data, chart_type=None):
 # Chart analysis is an additive, explicitly user-authored part of ChartSpec.
 # Omit it entirely for unedited charts: generating or opening an existing chart
 # must not alter its measurements, its visible domain, or the legacy defaults.
-CHART_ANALYSIS_TYPES = frozenset({"line", "scatter", "histogram", "boxplot"})
+CHART_ANALYSIS_TYPES = frozenset({"line", "scatter", "histogram", "boxplot", "heatmap"})
 MAX_CHART_ANNOTATIONS = 60
 
 
-def canonicalize_chart_analysis(analysis, chart_type, *, x_scale="linear", y_scale="linear"):
+# Pointwise 95% Student-t critical values for df 1..30; the asymptotic
+# expansion below is accurate to < 2e-6 for df > 30 at this quantile.
+_T95 = (
+    12.706204736, 4.302652730, 3.182446305, 2.776445105, 2.570581836, 2.446911851,
+    2.364624252, 2.306004135, 2.262157163, 2.228138852, 2.200985160, 2.178812830,
+    2.160368656, 2.144786688, 2.131449546, 2.119905299, 2.109815578, 2.100922040,
+    2.093024054, 2.085963447, 2.079613845, 2.073873068, 2.068657610, 2.063898562,
+    2.059538553, 2.055529439, 2.051830516, 2.048407142, 2.045229642, 2.042272456,
+)
+
+
+def _t95(df):
+    if df <= len(_T95):
+        return _T95[df - 1]
+    z = 1.959963984540054
+    return (z + (z**3 + z) / (4 * df)
+            + (5 * z**5 + 16 * z**3 + 3 * z) / (96 * df**2)
+            + (3 * z**7 + 19 * z**5 + 17 * z**3 - 15 * z) / (384 * df**3))
+
+
+def chart_regression_fits(data):
+    """Unweighted OLS and pointwise mean-response CI from canonical samples.
+
+    Normalize both axes before computing moments to avoid squaring huge or
+    tiny physical coordinates. Never modify observations, extrapolate, or
+    treat measurement-error bars as sampling confidence intervals. Return
+    None for unsupported/degenerate data or nonrepresentable output.
+    """
+    xs = data.get("xValues")
+    if (not xs or len(xs) < 3 or data.get("xScale", "linear") != "linear"
+            or data.get("yScale", "linear") != "linear"):
+        return None
+    xmin, xmax = min(xs), max(xs)
+    span = xmax - xmin
+    if not math.isfinite(span) or span <= 0:
+        return None
+    n = len(xs)
+    u = [(x - xmin) / span for x in xs]
+    umean = sum(u) / n
+    suu = sum((x - umean)**2 for x in u)
+    if suu <= 0:
+        return None
+    rows = data.get("series") or [{"name": "", "values": data.get("values", []),
+                                    "yError": data.get("yError")}]
+    fits = []
+    all_y = []
+    for row in rows:
+        ys = row["values"]
+        if len(ys) != n:
+            return None
+        ymin, ymax = min(ys), max(ys)
+        yspan = ymax - ymin
+        if not math.isfinite(yspan):
+            return None
+        yscale = yspan or 1.0
+        v = [(y - ymin) / yscale for y in ys]
+        vmean = sum(v) / n
+        beta = sum((x - umean) * (y - vmean) for x, y in zip(u, v)) / suu
+        sse = sum((y - (vmean + beta * (x - umean)))**2 for x, y in zip(u, v))
+        sst = sum((y - vmean)**2 for y in v)
+        r2 = max(0.0, min(1.0, 1.0 - sse / sst)) if sst else None
+        sigma = math.sqrt(sse / (n - 2))
+        samples = []
+        # The line and confidence band are sampled over the observed X span.
+        # The same fixed 65 positions are used by the SVG renderer.
+        for i in range(65):
+            p = i / 64
+            x = xmin + p * span
+            mean = vmean + beta * (p - umean)
+            half = _t95(n - 2) * sigma * math.sqrt(1 / n + (p - umean)**2 / suu)
+            point = (x, ymin + mean * yscale,
+                     ymin + (mean - half) * yscale, ymin + (mean + half) * yscale)
+            if not all(math.isfinite(value) for value in point):
+                return None
+            samples.append(point)
+            all_y.extend(point[2:])
+        for i, value in enumerate(ys):
+            minus, plus = row["yError"][i] if row.get("yError") else (0, 0)
+            all_y.extend((value - minus, value + plus))
+        fits.append({"n": n, "r2": r2, "points": samples})
+    if not math.isfinite(max(all_y) - min(all_y)):
+        return None
+    return fits
+
+
+# Agglomerative average-linkage heatmap clustering. This operates solely on
+# original finite matrix observations. Returned order/merge trees are
+# presentation metadata and never mutate the stored chart or numeric values.
+def heatmap_cluster_axis(vectors):
+    from heapq import heappop, heappush
+
+    n = len(vectors)
+    if n == 0:
+        return {"order": [], "tree": None}
+    active = {
+        i: {"id": i, "minLeaf": i, "leaf": i, "height": 0.0, "depth": 0, "size": 1}
+        for i in range(n)
+    }
+    if n == 1:
+        return {"order": [0], "tree": active[0]}
+
+    scale = max(abs(value) for row in vectors for value in row) or 1.0
+    normalized = [[value / scale for value in row] for row in vectors]
+    distances = {}
+    heap = []
+
+    def key(a, b):
+        return (min(a, b), max(a, b))
+
+    for i in range(n):
+        for j in range(i + 1, n):
+            distance = math.sqrt(sum((a - b)**2 for a, b in zip(normalized[i], normalized[j])))
+            distances[(i, j)] = distance
+            heappush(heap, (distance, i, j, i, j))
+
+    next_id = n
+    while len(active) > 1:
+        while True:
+            distance, _, _, aid, bid = heappop(heap)
+            if aid in active and bid in active:
+                break
+        a, b = active.pop(aid), active.pop(bid)
+        left, right = (a, b) if a["minLeaf"] < b["minLeaf"] else (b, a)
+        merged = {
+            "id": next_id, "minLeaf": min(a["minLeaf"], b["minLeaf"]),
+            "size": a["size"] + b["size"], "height": distance,
+            "depth": max(a["depth"], b["depth"]) + 1,
+            "left": left, "right": right,
+        }
+        for other in active.values():
+            d = ((a["size"] * distances[key(aid, other["id"])]
+                  + b["size"] * distances[key(bid, other["id"])]) / merged["size"])
+            distances[key(next_id, other["id"])] = d
+            first, second = sorted((merged["minLeaf"], other["minLeaf"]))
+            heappush(heap, (d, first, second, next_id, other["id"]))
+        active[next_id] = merged
+        next_id += 1
+
+    tree = next(iter(active.values()))
+
+    def order(node):
+        if "leaf" in node:
+            return [node["leaf"]]
+        return order(node["left"]) + order(node["right"])
+
+    return {"order": order(tree), "tree": tree}
+
+
+def heatmap_cluster_plan(matrix, mode=None):
+    rows = len(matrix)
+    columns = len(matrix[0]) if rows else 0
+    row = heatmap_cluster_axis(matrix) if mode in ("rows", "both") else None
+    col = (heatmap_cluster_axis([[row[j] for row in matrix] for j in range(columns)])
+           if mode in ("columns", "both") else None)
+    return {
+        "rowOrder": row["order"] if row else list(range(rows)),
+        "columnOrder": col["order"] if col else list(range(columns)),
+        "rowTree": row["tree"] if row else None,
+        "columnTree": col["tree"] if col else None,
+    }
+
+
+def raincloud_density(values):
+    """Scott/Silverman normal-reference Gaussian KDE on the observed span.
+
+    Compute in normalized coordinates, return (original value, relative
+    density) points. Each group's peak is scaled to 1 for visual shape
+    comparison, not absolute probability-density comparison. Constant
+    samples have no estimable bandwidth; return no cloud for that group.
+    """
+    if len(values) < 2:
+        return []
+    lo, hi = min(values), max(values)
+    span = hi - lo
+    if not math.isfinite(span) or span <= 0:
+        return []
+    u = [(value - lo) / span for value in values]
+    avg = sum(u) / len(u)
+    sd = math.sqrt(sum((value - avg)**2 for value in u) / (len(u) - 1))
+    bandwidth = 1.06 * sd * len(u)**(-0.2)
+    if bandwidth <= 0 or not math.isfinite(bandwidth):
+        return []
+    estimates = []
+    for i in range(65):
+        q = i / 64
+        density = sum(math.exp(-0.5 * ((q - value) / bandwidth)**2) for value in u)
+        estimates.append((lo + q * span, density))
+    peak = max(density for _, density in estimates)
+    return [(value, density / peak) for value, density in estimates] if peak else []
+
+
+def raincloud_jitter(index):
+    """Stable visual offset; never change or randomize a measurement."""
+    return min(0.43, max(0.15, 0.15 + 0.28 * ((index * 137) % 307) / 306))
+
+
+def canonicalize_chart_analysis(analysis, chart_type, *, x_scale="linear", y_scale="linear", chart_data=None):
     """Bounded document-state annotations and frozen axes; no data mutation."""
     if not isinstance(analysis, dict):
         raise ChartDataError("Chart analysis must be an object")
-    allowed = {"lockX", "lockY", "xRange", "yRange", "annotations"}
+    allowed = {"lockX", "lockY", "xRange", "yRange", "annotations", "regression", "distribution", "clustering", "density"}
     if set(analysis) - allowed:
         raise ChartDataError("Unknown chart analysis field")
     if chart_type not in CHART_ANALYSIS_TYPES:
@@ -822,6 +1200,27 @@ def canonicalize_chart_analysis(analysis, chart_type, *, x_scale="linear", y_sca
             result[field] = [lo, hi]
         if value and field not in result:
             raise ChartDataError(locked + " requires " + field)
+    if "regression" in analysis:
+        if (analysis["regression"] != "ols95" or chart_type not in ("line", "scatter")
+                or x_scale != "linear" or y_scale != "linear" or chart_data is None
+                or chart_regression_fits(chart_data) is None):
+            raise ChartDataError("Linear regression requires at least three numeric observations, "
+                                 "varying X, linear axes and finite confidence bounds")
+        result["regression"] = "ols95"
+    if "distribution" in analysis:
+        if chart_type != "boxplot" or analysis["distribution"] != "raincloud":
+            raise ChartDataError("Raincloud distributions require a box plot")
+        result["distribution"] = "raincloud"
+    if "clustering" in analysis:
+        if chart_type != "heatmap" or analysis["clustering"] not in ("rows", "columns", "both"):
+            raise ChartDataError("Heatmap clustering requires a heatmap and rows, columns, or both")
+        result["clustering"] = analysis["clustering"]
+    if "density" in analysis:
+        if (chart_type != "scatter" or analysis["density"] != "hexbin"
+                or chart_data is None or len(chart_data.get("series") or [1]) != 1
+                or x_scale != "linear" or y_scale != "linear"):
+            raise ChartDataError("Hexbin density requires single-series scatter with linear axes")
+        result["density"] = "hexbin"
     annotations = analysis.get("annotations", [])
     if not isinstance(annotations, list) or len(annotations) > MAX_CHART_ANNOTATIONS:
         raise ChartDataError("Chart annotations must be a list of at most 60 items")
@@ -858,6 +1257,10 @@ def canonicalize_chart_analysis(analysis, chart_type, *, x_scale="linear", y_sca
                 raise ChartDataError(where + " region must be positive on log10 axes")
             row.update({"axis": item["axis"], "from": lo, "to": hi})
         result["annotations"].append(row)
+    if chart_type == "heatmap" and (result["lockX"] or result["lockY"]
+                                   or "xRange" in result or "yRange" in result
+                                   or result["annotations"]):
+        raise ChartDataError("Heatmap analysis supports only clustering")
     return result
 
 
@@ -871,6 +1274,7 @@ def canonicalize_chart_data(data, chart_type=None):
             data["analysis"], canonical["type"],
             x_scale=canonical.get("xScale", "linear"),
             y_scale=canonical.get("yScale", "linear"),
+            chart_data=canonical,
         )
     return canonical
 

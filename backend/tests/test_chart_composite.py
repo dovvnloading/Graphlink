@@ -1,0 +1,322 @@
+"""ChartSpec V2 composable figures: numerical fidelity, security, export, persistence."""
+from copy import deepcopy
+from xml.etree import ElementTree as ET
+
+import pytest
+
+from graphlink_chart_data import ChartDataError, CHART_JSON_SCHEMAS, canonicalize_chart_data
+from graphlink_chart_rendering import render_chart_publication
+from backend.domain.graph import SceneDocument
+from backend.session_save import build_chat_data
+from backend.session_load import restore_chat_into_document
+
+RAW = {
+    "type": "composite", "version": 2, "title": "Experiment A",
+    "xAxis": "Elapsed time", "yAxis": "Response", "xUnit": "hours", "yUnit": "AU",
+    "composite": {
+        "numbers": {
+            "time": [0, 1, 2, 3, 4, 5],
+            "response": [1.2, 1.8, 2.1, 2.5, 3.0, 3.1],
+            "low": [0.9, 1.5, 1.8, 2.2, 2.7, 2.8],
+            "high": [1.5, 2.1, 2.4, 2.8, 3.3, 3.4],
+        },
+        "categories": {"treatment": ["A", "A", "A", "B", "B", "B"]},
+        "facetBy": "treatment",
+        "layers": [
+            {"mark": "band", "x": "time", "y": "low", "y2": "high",
+             "colorBy": "treatment", "label": "Uncertainty"},
+            {"mark": "line", "x": "time", "y": "response",
+             "colorBy": "treatment", "label": "Trend"},
+            {"mark": "point", "x": "time", "y": "response", "colorBy": "treatment"},
+        ],
+    },
+}
+
+
+def test_v2_composition_is_canonical_idempotent_and_nonmutating():
+    original = deepcopy(RAW)
+    canonical = canonicalize_chart_data(RAW, "composite")
+    assert canonical["version"] == 2
+    assert canonical["type"] == "composite"
+    assert canonical["composite"]["numbers"] == RAW["composite"]["numbers"]
+    assert canonical["composite"]["layers"] == RAW["composite"]["layers"]
+    assert canonical["composite"]["categories"] == RAW["composite"]["categories"]
+    assert canonical["composite"]["facetBy"] == "treatment"
+    assert canonicalize_chart_data(canonical, "composite") == canonical
+    assert RAW == original
+    assert canonicalize_chart_data({"type": "line", "labels": ["a", "b"], "values": [2, 3]})["version"] == 1
+
+
+def test_v2_generation_schema_describes_composable_marks():
+    schema = CHART_JSON_SCHEMAS["composite"]
+    assert schema["required"] == ["type", "composite"]
+    assert schema["properties"]["composite"]["properties"]["layers"]["items"]["properties"]["mark"]["enum"] == [
+        "point", "line", "band", "area",
+    ]
+
+
+@pytest.mark.parametrize("fmt,signature", [
+    ("svg", b"<svg"), ("pdf", b"%PDF"), ("png", b"\x89PNG"),
+])
+def test_composite_figures_export_all_original_data_in_multiple_facets(fmt, signature):
+    spec = canonicalize_chart_data(RAW)
+    before = deepcopy(spec)
+    result = render_chart_publication("composite", spec, width_mm=180, height_mm=100, fmt=fmt)
+    assert signature in result[:300]
+    assert b"Chart rendering issue" not in result
+    assert spec == before
+    if fmt == "svg":
+        root = ET.fromstring(result)
+        text = " ".join("".join(item.itertext()) for item in root.iter()
+                        if item.tag.endswith("}text"))
+        assert "Experiment A" in text
+        assert "treatment: A" in text
+        assert "treatment: B" in text
+        assert "Uncertainty" in text
+
+
+@pytest.mark.parametrize("bad", [
+    {"version": 1},
+    {"composite": {"numbers": {"x": [0, 1]}, "layers": [{"mark": "point", "x": "x", "y": "x"}]}},
+    {"composite": {"numbers": {"x": [0, 1], "y": [1]}, "layers": [{"mark": "point", "x": "x", "y": "y"}]}},
+    {"composite": {"numbers": {"x": [0, 1], "y": [1, float("nan")]},
+                   "layers": [{"mark": "point", "x": "x", "y": "y"}]}},
+    {"composite": {"numbers": {"x": [0, 1], "y": [0, 1]},
+                   "layers": [{"mark": "javascript", "x": "x", "y": "y"}]}},
+    {"composite": {"numbers": {"x": [0, 1], "y": [0, 1]},
+                   "layers": [{"mark": "point", "x": "missing", "y": "y"}]}},
+    {"composite": {"numbers": {"x": [0, 1], "y": [0, 1]},
+                   "layers": [{"mark": "point", "x": "x", "y": "y", "url": "https://bad.example"}]}},
+    {"composite": {"numbers": {"x": [0, 1], "y": [0, 1], "__proto__": [0, 1]},
+                   "layers": [{"mark": "point", "x": "x", "y": "y"}]}},
+    {"composite": {"numbers": {"x": [0, 1], "low": [2, 3], "upper": [1, 2]},
+                   "layers": [{"mark": "band", "x": "x", "y": "low", "y2": "upper"}]}},
+    {"xScale": "log10"},
+    {"yScale": "log10", "composite": {"numbers": {"x": [1, 2], "y": [-1, 2]},
+                                      "layers": [{"mark": "point", "x": "x", "y": "y"}]}},
+    {"composite": {"numbers": {"x": list(range(2001)), "y": list(range(2001))},
+                   "layers": [{"mark": "point", "x": "x", "y": "y"}]}},
+])
+def test_rejects_invalid_or_insecure_v2_specs(bad):
+    raw = deepcopy(RAW)
+    raw.update(bad)
+    if "composite" in bad:
+        raw["composite"] = bad["composite"]
+    with pytest.raises(ChartDataError):
+        canonicalize_chart_data(raw, "composite")
+
+
+def test_v2_can_render_multiple_layer_families_on_the_same_axis():
+    raw = deepcopy(RAW)
+    raw["composite"]["facetBy"] = None
+    raw["composite"].pop("facetBy")
+    raw["composite"]["layers"].append({
+        "mark": "area", "x": "time", "y": "response",
+    })
+    result = render_chart_publication("composite", canonicalize_chart_data(raw),
+                                      width_mm=180, height_mm=100, fmt="svg")
+    assert b"Chart rendering issue" not in result
+
+
+def test_v2_save_reload_fidelity():
+    doc = SceneDocument()
+    parent = doc.add_chat_node(0, 0, "Original", is_user=True)
+    canonical = canonicalize_chart_data(RAW)
+    doc.add_chart_node(500, 0, parent.id, "composite", canonical)
+    saved = build_chat_data(doc)
+    notes = saved.pop("notes_data")
+    pins = saved.pop("pins_data")
+    restored = SceneDocument()
+    restore_chat_into_document(restored, {"data": saved}, notes, pins)
+    restored_chart = next(node for node in restored.nodes.values() if node.kind == "chart")
+    assert restored_chart.state.chart_type == "composite"
+    assert restored_chart.state.chart_data == canonical
+
+def test_v2_shared_palette_is_field_aware_and_bounded():
+    raw = {
+        "type": "composite", "version": 2, "composite": {
+            "numbers": {"x": list(range(4)), "y": [1, 2, 3, 4]},
+            "categories": {"treatment": ["A", "B", "C", "D"], "batch": ["A", "B", "C", "D"]},
+            "layers": [
+                {"mark": "point", "x": "x", "y": "y", "colorBy": "treatment"},
+                {"mark": "point", "x": "x", "y": "y", "colorBy": "batch"},
+                {"mark": "line", "x": "x", "y": "y", "colorBy": "treatment"},
+            ],
+        },
+    }
+    canonical = canonicalize_chart_data(raw)
+    assert canonicalize_chart_data(canonical) == canonical
+    result = render_chart_publication("composite", canonical, width_mm=180, height_mm=100, fmt="svg")
+    assert b"Chart rendering issue" not in result
+    root = ET.fromstring(result)
+    text = " ".join("".join(item.itertext()) for item in root.iter() if item.tag.endswith("}text"))
+    for field in ("treatment", "batch"):
+        for value in ("A", "B", "C", "D"):
+            assert f"{field}: {value}" in text
+    # Repeated field bindings share slots, but an ungrouped layer needs one.
+    raw["composite"]["layers"].append({"mark": "area", "x": "x", "y": "y"})
+    with pytest.raises(ChartDataError, match="eight color legend entries"):
+        canonicalize_chart_data(raw)
+
+
+def test_v2_rejects_too_many_groups_across_color_fields():
+    raw = {
+        "type": "composite", "composite": {
+            "numbers": {"x": list(range(5)), "y": list(range(5))},
+            "categories": {"treatment": list("ABCDE"), "batch": list("ABCDE")},
+            "layers": [
+                {"mark": "point", "x": "x", "y": "y", "colorBy": "treatment"},
+                {"mark": "point", "x": "x", "y": "y", "colorBy": "batch"},
+            ],
+        },
+    }
+    with pytest.raises(ChartDataError, match="eight color legend entries"):
+        canonicalize_chart_data(raw)
+
+
+
+def test_composite_design_intent_only_changes_view_bindings_and_is_undoable():
+    import asyncio
+    from backend.api.intents_chart import register_chart_intents
+    from backend.events import SessionBus
+    from backend.notifications import NotificationState
+
+    async def run():
+        bus = SessionBus("composite-edit-regression")
+        document = SceneDocument()
+        notice = NotificationState()
+        bus.register_topic("scene", document.scene_payload)
+        bus.register_topic("notification", notice.payload)
+        register_chart_intents(bus, document, notice, object())
+        root = document.add_chat_node(0, 0, "Source", is_user=True)
+        initial = canonicalize_chart_data(RAW, "composite")
+        chart = document.add_chart_node(500, 0, root.id, "composite", initial)
+        old = deepcopy(chart.state.chart_data["composite"])
+        expected = {"layers": deepcopy(old["layers"]), "facetBy": old.get("facetBy")}
+        change = {"layers": [
+            {"mark": "point", "x": "time", "y": "response", "colorBy": "treatment"},
+        ], "facetBy": None}
+        await bus.dispatch_intent("scene", "setCompositeDesign", [chart.id, change, expected])
+        updated = chart.state.chart_data["composite"]
+        assert updated["numbers"] == old["numbers"]
+        assert updated["categories"] == old["categories"]
+        assert updated["layers"] == change["layers"]
+        assert "facetBy" not in updated
+        with pytest.raises(ChartDataError, match="changed"):
+            await bus.dispatch_intent("scene", "setCompositeDesign", [chart.id, change, expected])
+        with pytest.raises(ChartDataError):
+            await bus.dispatch_intent("scene", "setCompositeDesign", [chart.id,
+                {"layers": [{"mark": "line", "x": "time", "y": "unknown"}]}, {
+                "layers": updated["layers"], "facetBy": None,
+            }])
+        assert document.undo().command_type == "setCompositeDesign"
+        assert document.nodes[chart.id].state.chart_data["composite"] == old
+        assert document.redo().command_type == "setCompositeDesign"
+        assert document.nodes[chart.id].state.chart_data["composite"] == updated
+
+    asyncio.run(run())
+
+
+def test_brush_selection_branches_original_rows_into_connected_undoable_chart():
+    import asyncio
+    from backend.api.intents_chart import register_chart_intents
+    from backend.events import SessionBus
+    from backend.notifications import NotificationState
+
+    async def run():
+        bus = SessionBus("composite-selection")
+        document = SceneDocument()
+        notice = NotificationState()
+        bus.register_topic("scene", document.scene_payload)
+        bus.register_topic("notification", notice.payload)
+        register_chart_intents(bus, document, notice, object())
+        root = document.add_chat_node(0, 0, "Source", is_user=True)
+        source = document.add_chart_node(300, 0, root.id, "composite",
+                                         canonicalize_chart_data(RAW))
+        before = deepcopy(source.state.chart_data)
+        expected = deepcopy(before["composite"])
+        selection = [0, 1, 3, 4]
+        result = await bus.dispatch_intent(
+            "scene", "branchCompositeSelection", [source.id, selection, expected],
+        )
+        child = document.nodes[result["chartNodeId"]]
+        assert child.id != source.id
+        assert child.state.chart_source_node_id == source.id
+        assert any(edge.source == source.id and edge.target == child.id
+                   for edge in document.edges.values())
+        assert child.state.chart_type == "composite"
+        comp = child.state.chart_data["composite"]
+        assert comp["numbers"] == {
+            name: [values[i] for i in selection]
+            for name, values in expected["numbers"].items()
+        }
+        assert comp["categories"] == {
+            name: [values[i] for i in selection]
+            for name, values in expected["categories"].items()
+        }
+        assert comp["facetBy"] == expected["facetBy"]
+        assert comp["layers"] == expected["layers"]
+        assert document.nodes[source.id].state.chart_data == before
+        assert result == {
+            "chartNodeId": child.id, "selected": 4, "sourceCount": 6,
+        }
+        # Derivations preserve all source numeric values, not sampled SVG.
+        for indices in ([0], list(range(6)), [2, 2], [4, 2], [-1, 3],
+                        [2, 6], [True, 2], [1.5, 2], "0,2"):
+            with pytest.raises(ChartDataError):
+                await bus.dispatch_intent(
+                    "scene", "branchCompositeSelection", [source.id, indices, expected],
+                )
+        with pytest.raises(ChartDataError, match="changed"):
+            stale = deepcopy(expected)
+            stale["numbers"]["time"][0] = 123
+            await bus.dispatch_intent(
+                "scene", "branchCompositeSelection", [source.id, [0, 2], stale],
+            )
+        assert len([node for node in document.nodes.values() if node.kind == "chart"]) == 2
+        assert document.undo().command_type == "branchCompositeSelection"
+        assert child.id not in document.nodes
+        assert document.redo().command_type == "branchCompositeSelection"
+        assert child.id in document.nodes
+
+    asyncio.run(run())
+
+
+def test_brushed_derived_figures_keep_data_and_parent_lineage_after_save_reload():
+    import asyncio
+    from backend.api.intents_chart import register_chart_intents
+    from backend.events import SessionBus
+    from backend.notifications import NotificationState
+
+    async def run():
+        bus = SessionBus("composite-branch-save")
+        document = SceneDocument()
+        notice = NotificationState()
+        bus.register_topic("scene", document.scene_payload)
+        bus.register_topic("notification", notice.payload)
+        register_chart_intents(bus, document, notice, object())
+        root = document.add_chat_node(0, 0, "Source", is_user=True)
+        chart = document.add_chart_node(300, 0, root.id, "composite",
+                                        canonicalize_chart_data(RAW))
+        result = await bus.dispatch_intent("scene", "branchCompositeSelection", [
+            chart.id, [0, 1, 2], deepcopy(chart.state.chart_data["composite"]),
+        ])
+        derived = document.nodes[result["chartNodeId"]]
+        original = deepcopy(derived.state.chart_data)
+        saved = build_chat_data(document)
+        notes = saved.pop("notes_data")
+        pins = saved.pop("pins_data")
+        restored = SceneDocument()
+        restore_chat_into_document(restored, {"data": saved}, notes, pins)
+        restored_derived = [
+            node for node in restored.nodes.values()
+            if node.kind == "chart" and node.state.chart_data["title"] == original["title"]
+        ]
+        assert len(restored_derived) == 1
+        assert restored_derived[0].state.chart_data == original
+        assert restored_derived[0].state.chart_source_node_id
+        assert any(edge.target == restored_derived[0].id
+                   and edge.source == restored_derived[0].state.chart_source_node_id
+                   for edge in restored.edges.values())
+
+    asyncio.run(run())

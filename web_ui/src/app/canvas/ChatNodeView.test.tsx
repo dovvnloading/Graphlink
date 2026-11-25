@@ -482,7 +482,7 @@ describe("ChatNodeView", () => {
     expect(screen.queryByRole("menuitem", { name: "Bar" })).toBeNull();
   });
 
-  it("clicking Generate Chart expands a submenu offering all 5 chart types in legacy's own order", async () => {
+  it("clicking Generate Chart exposes all 9 supported chart types", async () => {
     const user = userEvent.setup();
     renderChatNode({ isUser: true });
     fireEvent.contextMenu(screen.getByText("You"));
@@ -493,7 +493,24 @@ describe("ChatNodeView", () => {
 
     const submenu = screen.getByRole("menu", { name: "Chart" });
     const optionNames = Array.from(submenu.querySelectorAll('[role="menuitem"]')).map((el) => el.textContent);
-    expect(optionNames).toEqual(["Bar", "Line", "Histogram", "Pie", "Sankey"]);
+    expect(optionNames).toEqual(["Bar", "Line", "Scatter", "Histogram", "Box plot", "Heatmap", "Composite figure", "Pie", "Sankey"]);
+  });
+
+  it.each([
+    ["Scatter", "scatter"],
+    ["Box plot", "boxplot"],
+    ["Heatmap", "heatmap"],
+    ["Composite figure", "composite"],
+  ])("new %s chart option dispatches backend type %s", async (label, type) => {
+    const user = userEvent.setup();
+    const { onGenerateChart } = renderChatNode({ isUser: true });
+    fireEvent.contextMenu(screen.getByText("You"));
+    await user.click(screen.getByRole("menuitem", { name: "Generate" }));
+    await user.click(screen.getByRole("menuitem", { name: "Chart" }));
+    await user.click(screen.getByRole("menuitem", { name: label }));
+    expect(onGenerateChart).toHaveBeenCalledOnce();
+    expect(onGenerateChart).toHaveBeenCalledWith(type);
+    expect(screen.queryByRole("menu", { name: "Chart" })).toBeNull();
   });
 
   it("clicking a chart-type submenu item calls onGenerateChart with the correct lowercase type and closes the whole menu", async () => {

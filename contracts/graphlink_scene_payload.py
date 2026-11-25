@@ -495,11 +495,33 @@ class ChartAnalysisRow:
     annotations: list[ChartAnnotationRow]
     xRange: list[float] | None = None
     yRange: list[float] | None = None
+    regression: Literal["ols95"] | None = None
+    distribution: Literal["raincloud"] | None = None
+    clustering: Literal["rows", "columns", "both"] | None = None
+    density: Literal["hexbin"] | None = None
+
+
+@dataclass
+class ChartCompositeLayerRow:
+    mark: Literal["point", "line", "band", "area"]
+    x: str
+    y: str
+    y2: str | None = None
+    colorBy: str | None = None
+    label: str | None = None
+
+
+@dataclass
+class ChartCompositeSpecRow:
+    numbers: dict[str, list[float]]
+    layers: list[ChartCompositeLayerRow]
+    categories: dict[str, list[str]] | None = None
+    facetBy: str | None = None
 
 
 @dataclass
 class ChartDataRow:
-    """The additive union of all eight chart shapes on the scene wire.
+    """The additive union of the V1 charts and versioned composite figures.
 
     Every field remains optional: non-chart nodes send {}, and workspaces saved
     before this contract change omit the nested type on scatter, boxplot and
@@ -513,7 +535,7 @@ class ChartDataRow:
     # on every feature addition. A future migration reads this to know which
     # shape it's looking at rather than sniffing field presence.
     version: int | None = None
-    type: Literal["bar", "line", "pie", "histogram", "sankey", "scatter", "boxplot", "heatmap"] | None = None
+    type: Literal["bar", "line", "pie", "histogram", "sankey", "scatter", "boxplot", "heatmap", "composite"] | None = None
     title: str | None = None
     # bar/line/pie
     labels: list[str] | None = None
@@ -540,6 +562,8 @@ class ChartDataRow:
     columnLabels: list[str] | None = None
     matrix: list[list[float]] | None = None
     valueUnit: str | None = None
+    # Declarative ChartSpec V2: named columns, composable marks and facets.
+    composite: ChartCompositeSpecRow | None = None
     # Saved by the chart canonicalizer only when analysis has been opted into.
     analysis: ChartAnalysisRow | None = None
 

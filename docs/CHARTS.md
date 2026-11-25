@@ -77,8 +77,9 @@ Example:
 * All coordinates, values, and error magnitudes must be finite numbers.
   NaN, positive/negative infinity, and numeric overflow are rejected.
 * Series must be nonempty and named. Every series, coordinate array, and
-  error array must have the same number of points, within the existing
-  300-point chart limit. The validator never truncates or drops points.
+  error array must have the same number of points, within the
+  10,000-total-observation scientific chart limit. Other chart types retain
+  their legacy capacity limits. The validator never truncates or drops points.
 * Error magnitudes must be nonnegative. The two magnitudes of an
   asymmetric error must both be present and valid.
 * A log10 axis requires **strictly positive** coordinates, including the
@@ -226,15 +227,11 @@ The existing `scene.generateChart` intent accepts `"boxplot"` and
 `[sourceNodeId, "heatmap"]`). The model extraction schemas require the
 fields described above and do not invent missing observations. Invalid
 model output still creates a valid error-state chart node, just as with
-scatter in PR #586. The existing chart-creation submenu is defined outside
-this change's permitted file scope and does not yet expose these two
-choices. Programmatic intent calls and live scene chart nodes are supported.
-The legacy session-save/load path is also outside this scope: it serializes
-only the canonical nested chart data, while its loader looks for `data.type`.
-Because the version-1 wire format omits that nested discriminator for these
-new types (as for scatter in PR #586), legacy session reload currently drops
-them. Persisted-session round trips require a separate scoped migration to
-carry the enclosing `chartType` through save/load.
+scatter in PR #586. The chat node's Generate → Chart submenu now exposes all
+eight supported chart types. Programmatic intent calls and live scene chart
+nodes are also supported. Saved sessions load these types using the nested
+`data.type` where present, or the backward-compatible unambiguous shape
+recovery in `backend/session_load.py::_saved_chart_type` for older payloads.
 
 Regression fixtures live under `backend/evals/fixtures/chart/`, with
 Python canonicalizer/export tests in `backend/tests/` and TypeScript
@@ -319,3 +316,243 @@ the same validated chart data. Exported locked ranges match the saved axis
 limits. SVG text stays selectable; the PDF keeps embedded text, and neither
 export path mutates the stored data. Unsaved, local pan and zoom are not
 exported unless their bounds are locked.
+
+
+### Scientific regression layer
+
+For scatter and line charts with numeric X values on linear axes, open
+**Chart tools → Linear fit (95% CI)**. The opt-in layer is an unweighted
+ordinary least-squares line per series, drawn only over the observed X
+range, with a translucent pointwise 95% confidence interval for the fitted
+mean response (Student-t; an asymptotic quantile approximation is used above
+30 residual degrees of freedom). At least three observations and varying X
+are required. Constant Y is supported with undefined R². Nonrepresentable
+bounds, categorical X and logarithmic axes are rejected.
+
+The interval assumes independent, homoscedastic errors and a correctly
+specified linear model; it is **not** a prediction interval or an uncertainty
+estimate from supplied measurement error bars. Error bars remain visible
+and unchanged, and are not used as regression weights. Fit summaries include
+sample count and R². The original observations and axes' units are preserved;
+the natural Y domain includes the confidence bounds, while locked bounds
+are honored. SVG/PDF/PNG publication exports include the same fitted layer.
+
+Only the method choice (`analysis.regression: "ols95"`) is persisted via
+the existing undoable chart-analysis intent; numerical results are derived
+deterministically from the original samples at render time. Unedited charts
+retain their existing behavior and shape. This is a first composable
+statistical layer, not a replacement for the existing visualization engine.
+
+
+### Raincloud distributions
+
+Open **Chart tools → Raincloud distribution** on a box plot. This
+combines the original Tukey summary with a Gaussian kernel density estimate
+(on the left) and all original observations (on the right). A deterministic
+horizontal jitter separates points without changing their values or sample
+order. Constant groups show the box and all observations but omit an
+undefined density. Density bandwidth uses the normal reference rule
+1.06 × sample standard deviation × n^(-1/5), computed in normalized
+coordinates; clouds are restricted to the observed span. Each cloud is
+scaled to its own peak, so compare distribution shapes, not absolute
+density heights. The layer is persisted as
+`analysis.distribution: "raincloud"` and can be undone. Live charts,
+low-zoom overviews and publication exports render the same three components.
+
+
+### Hierarchically clustered heatmaps
+
+Heatmap toolbar controls **Cluster rows** and **Cluster columns** are independent,
+undoable options. Each axis is reordered using Euclidean distance and
+agglomerative **average-linkage (UPGMA)**; merges use deterministic original
+index tie breaks. Row and column dendrograms are drawn beside the matrix.
+A common magnitude normalization is used for robust distance computations,
+not as a color or measurement transformation.
+
+The options are stored under `chartData.analysis.clustering` as
+`"rows"`, `"columns"` or `"both"`; disabling both removes the field.
+Raw `matrix`, labels, underlying row numbers and source values are never
+reordered. Hover tooltips and cell source indices continue to reference
+the original matrix; the full data color domain and colorbar are unchanged.
+The on-canvas SVG, overview and publication export use the same deterministic
+reordering rule. This is exploratory clustering, not an inferential test;
+the Euclidean metric is sensitive to units and feature scaling.
+
+
+### Full-resolution scientific data with adaptive SVG sampling
+
+Scientific `line` (with numeric X) and `scatter` charts now accept up to
+**10,000 total series observations** with canonical finite-range checking.
+Bar, pie, histogram, Sankey, box plot and heatmap limits are unchanged.
+The v1 schema remains backwards compatible: no observations are truncated
+during validation, persistence, statistics or publication export.
+
+To keep the local-first canvas responsive, its scientific SVG shows at most
+1,200 representative point glyphs shared across series (and at most 400 in
+the minimap preview). The sampling is deterministic: input-order buckets
+contribute X extrema, Y/error endpoints extrema, plus the first and last
+observations. On pan and zoom, visible observations are reselected from the
+full original array. For scatter, samples are additionally restricted by
+the current Y viewport. A live scientific line uses one connected path per
+series with all original vertices in source order (at most 10,000 total),
+clipped to the viewport; only its point/error glyphs are sampled. This
+preserves crossing segments even without visible vertices and prevents
+invented connections across nonmonotonic traces. Marker sampling is a
+**display-only** approximation: it
+does not represent point density and must not be used for inferential
+calculations. The chart status indicates when sampling is active.
+The publication exporter and numerical fit use all measurements.
+This does not yet implement external Arrow datasets or unrestricted
+million-point visualizations.
+
+
+### Hexbin density for large scatter plots
+
+A **Hexbin density** control is available on single-series scatter plots
+with linear axes. It aggregates every observation in the current visible
+X/Y viewport into hexagonal cells; opacity encodes bin count and tooltips
+report the number of observations per cell. Unlike the representative
+scatter marks used for large datasets, bins communicate local point
+concentration. Toggle the control off to inspect point coordinates.
+Regression bands can be used with the density view.
+
+The mode persists as `analysis.density: "hexbin"` and never edits the
+input measurements. Its interactive implementation uses deterministic
+pointy-top axial hexagon assignment; the publication exporter uses
+Matplotlib's optimized hexbin implementation, with a count colorbar.
+The bin tessellation and resolution may differ between interactive
+and printed figures, but both count the unmodified original observations.
+
+For a persisted axis lock, the publication hexbin counts only observations
+inside that X/Y range, matching the interactive viewport's inclusion rule.
+A range containing zero observations renders a clear empty state rather
+than suggesting that offscreen points are present.
+
+## ChartSpec V2 — composable multi-panel figures
+
+Graphlink accepts `type: "composite"` with **`version: 2`**, without changing
+or upgrading any existing version-1 chart data. Choose **Composite figure**
+from the chat node's Generate → Chart submenu, or create a chart through
+the existing programmatic `scene.generateChart` intent with chart type
+`"composite"`. The model may propose a composition, but all data bindings
+and observations are validated before a chart becomes renderable.
+
+A figure uses **columnar typed data**: `numbers` contains 2–12 named
+finite numeric columns with 2–2,000 aligned observations per column.
+`categories` optionally holds up to four aligned categorical columns.
+The optional `facetBy` groups rows into at most six panels sharing
+identical X and Y scales. Up to eight independently specified mark layers
+reference numeric columns by name:
+
+- `point`: scatter marks, with original-index tooltips.
+- `line`: X-ordered connected traces.
+- `band`: filled region between explicit lower (`y`) and upper (`y2`)
+  columns. Every source row must satisfy lower ≤ upper; confidence or
+  uncertainty bounds are **never fabricated**.
+- `area`: filled area down to numeric zero (linear Y axes only).
+
+`colorBy` optionally binds each layer to a categorical column, with
+a maximum of eight distinct color legend entries **across the whole figure**.
+Each (categorical column, category value) pair gets a shared color slot,
+and each ungrouped layer gets its own slot. Reusing the same field across
+layers reuses its slots; equal category names from different fields remain
+distinct. Live and publication legends identify the field and category.
+All categorical keys and field references
+are validated; unknown expressions, scripts, URLs and callbacks are
+rejected. Original arrays are never modified or ordered in place.
+Tooltips use original numeric coordinates, regardless of display sampling.
+Numeric axis labels, units, and linear/log10 scales are supported.
+
+An example:
+
+```json
+{
+  "type": "composite",
+  "version": 2,
+  "title": "Experimental response",
+  "xAxis": "Time",
+  "yAxis": "Signal",
+  "composite": {
+    "numbers": {
+      "time": [0, 1, 2, 3],
+      "response": [1, 2, 2.4, 3],
+      "low": [0.8, 1.8, 2.1, 2.8],
+      "high": [1.2, 2.2, 2.7, 3.3]
+    },
+    "categories": {
+      "group": ["control", "control", "treated", "treated"]
+    },
+    "facetBy": "group",
+    "layers": [
+      {"mark": "band", "x": "time", "y": "low", "y2": "high", "colorBy": "group", "label": "Reported interval"},
+      {"mark": "line", "x": "time", "y": "response", "colorBy": "group", "label": "Signal"},
+      {"mark": "point", "x": "time", "y": "response", "colorBy": "group"}
+    ]
+  }
+}
+```
+
+Live React SVG and low-zoom overview render the same faceting and layer
+references. They display a bounded, extrema-preserving sample of dense
+marks; the original values remain in chart state. The Matplotlib
+publication exporter (SVG/PDF/PNG) uses every observation with the same
+facets, layer types, labels and scale semantics. Numerical data, generated
+layers, typed columns and figure version survive chart save/reload.
+
+**Current V2 limitations:** inline columnar data only (2,000 observations),
+no external columnar storage, no arbitrary user-defined expressions,
+and no linked cross-chart selections yet. This is a native composable
+graphics foundation, not a complete Vega-Lite implementation.
+
+
+
+### Native layer-and-facet editor
+
+Composite figure nodes now provide **Edit layers…** directly in the chart
+toolbar. Users can add/remove/reorder (via removal and re-addition) mark
+layers, choose their point/line/band/area mark, set X/Y and upper-bound
+columns, switch categorical colors and facets, and edit legend labels.
+The canvas previews valid edits before saving. The editor never exposes
+numeric or categorical data arrays for direct mutation.
+
+**Save figure design** submits only `layers` and `facetBy` through the
+authenticated `scene.setCompositeDesign` intent. The server canonicalizes
+the resulting figure against its current original columns, rejects invalid
+references and unsafe combinations, checks the expected previous design to
+reject stale edits, and records a single undoable command. Cancel/failed
+validation never mutates the saved chart. All previous version-1 charts,
+renderers and outputs remain unchanged.
+
+### Source-row brushing and connected analysis branches
+
+Composite figures have a **Brush source rows** mode. Drag a rectangle
+inside a panel to select the original observations whose point/line
+coordinates lie inside that range. If only interval-band layers are
+present, the brush matches intervals overlapping the vertical range.
+Selections are computed from the full canonical column arrays—not from
+the sampled SVG point glyphs. The panel's X/Y scales are inverted in
+data units, including log10 axes.
+
+Selected observations receive prominent marks across every layer using
+their immutable **source-row indices**. Other observations are dimmed,
+but not removed. For keyboard access, focus a facet's brushing surface
+and press **Enter** or **Space** to select all its rows; press **Escape**
+or **Clear selection** to discard the transient selection.
+
+With at least two but fewer than all original rows selected, choose
+**Branch selected rows**. The authenticated `scene.branchCompositeSelection`
+intent sends only ordered original row indices and an expected snapshot
+of the source's data bindings. The backend rejects stale, duplicated,
+out-of-range and unreasonably broad selections; it derives all filtered
+numeric and categorical columns from the *current* stored original chart,
+not client-supplied replacements. The resulting ChartSpec V2 figure is
+created as a new **connected child chart** beside the source. All original
+measurement precision, layer bindings and axis units are preserved.
+Creation is one undoable document command, and the chart-to-chart parent
+edge survives save/load. The selected-row state itself is temporary and
+is not saved until a new chart is explicitly branched.
+
+This provides native within-figure linked brushing and graph-native
+derivation. It does **not** yet synchronize selections among independent
+chart nodes sourced from separate datasets; that requires a shared
+verified dataset identity and row-key contract.

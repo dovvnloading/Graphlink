@@ -12,13 +12,15 @@
  * checked before it reaches the renderer.
  */
 
+import { linearFits } from "./charts/linearFit";
 import type { ChartBoxplotGroupRow, ChartDataRow, ChartFlowRow, ChartScientificSeriesRow } from "../../lib/bridge-core/generated/scene-state";
 
 export const CHART_SPEC_VERSION = 1;
-export const SUPPORTED_CHART_TYPES = ["bar", "line", "pie", "histogram", "sankey", "scatter", "boxplot", "heatmap"] as const;
+export const SUPPORTED_CHART_TYPES = ["bar", "line", "pie", "histogram", "sankey", "scatter", "boxplot", "heatmap", "composite"] as const;
 export type SupportedChartType = (typeof SUPPORTED_CHART_TYPES)[number];
 
 const MAX_SERIES_POINTS = 300;
+const MAX_SCIENTIFIC_OBSERVATIONS = 10_000;
 const MAX_NAMED_SERIES = 12;
 const MAX_SANKEY_FLOWS = 300;
 const MAX_LABEL_LENGTH = 160;
@@ -136,6 +138,10 @@ export interface ChartAnalysis {
   xRange?: [number, number];
   yRange?: [number, number];
   annotations: ChartAnnotation[];
+  regression?: "ols95";
+  distribution?: "raincloud";
+  clustering?: "rows" | "columns" | "both";
+  density?: "hexbin";
 }
 
 export const EMPTY_CHART_ANALYSIS: ChartAnalysis = { lockX: false, lockY: false, annotations: [] };
@@ -148,15 +154,16 @@ export function chartAnalysisOf(data: ChartDataRow): ChartAnalysis {
  * drop malformed annotations or reinterpret real data as view coordinates. */
 export function canonicalizeChartAnalysis(
   value: unknown, type: string, xScale: AxisScale = "linear", yScale: AxisScale = "linear",
+  data?: ChartDataRow,
 ): ChartAnalysis {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new ChartSpecError("Chart analysis must be an object");
   }
-  if (!["line", "scatter", "histogram", "boxplot"].includes(type)) {
+  if (!["line", "scatter", "histogram", "boxplot", "heatmap"].includes(type)) {
     throw new ChartSpecError("Chart analysis is only supported on cartesian analysis charts");
   }
   const raw = value as Record<string, unknown>;
-  if (Object.keys(raw).some((key) => !["lockX", "lockY", "xRange", "yRange", "annotations"].includes(key))) {
+  if (Object.keys(raw).some((key) => !["lockX", "lockY", "xRange", "yRange", "annotations", "regression", "distribution", "clustering", "density"].includes(key))) {
     throw new ChartSpecError("Unknown chart analysis field");
   }
   const result: ChartAnalysis = { lockX: false, lockY: false, annotations: [] };
@@ -182,6 +189,32 @@ export function canonicalizeChartAnalysis(
       result[range] = [low, high];
     }
     if (locked && !result[range]) throw new ChartSpecError(lock + " requires " + range);
+  }
+  if ("regression" in raw) {
+    if (raw.regression !== "ols95" || !["line", "scatter"].includes(type) || xScale !== "linear"
+        || yScale !== "linear" || !data || !linearFits(data)) {
+      throw new ChartSpecError("Linear regression requires at least three numeric observations, varying X, linear axes and finite confidence bounds");
+    }
+    result.regression = "ols95";
+  }
+  if ("distribution" in raw) {
+    if (type !== "boxplot" || raw.distribution !== "raincloud") {
+      throw new ChartSpecError("Raincloud distributions require a box plot");
+    }
+    result.distribution = "raincloud";
+  }
+  if ("clustering" in raw) {
+    if (type !== "heatmap" || !["rows", "columns", "both"].includes(raw.clustering as string)) {
+      throw new ChartSpecError("Heatmap clustering requires a heatmap and rows, columns, or both");
+    }
+    result.clustering = raw.clustering as "rows" | "columns" | "both";
+  }
+  if ("density" in raw) {
+    if (type !== "scatter" || raw.density !== "hexbin" || !data
+        || (data.series?.length ?? 1) !== 1 || xScale !== "linear" || yScale !== "linear") {
+      throw new ChartSpecError("Hexbin density requires single-series scatter with linear axes");
+    }
+    result.density = "hexbin";
   }
   if (raw.annotations !== undefined && (!Array.isArray(raw.annotations) || raw.annotations.length > 60)) {
     throw new ChartSpecError("Chart annotations must be a list of at most 60 items");
@@ -231,6 +264,9 @@ export function canonicalizeChartAnalysis(
       }
       result.annotations.push({ kind: "region", axis: item.axis, from: start, to: end });
     }
+  }
+  if (type === "heatmap" && (result.lockX || result.lockY || result.xRange || result.yRange || result.annotations.length)) {
+    throw new ChartSpecError("Heatmap analysis supports only clustering");
   }
   return result;
 }
@@ -302,7 +338,7 @@ function canonicalizeScientific(raw: Record<string, unknown>, type: "line" | "sc
   if (raw.xValues != null) {
     if (!Array.isArray(raw.xValues)) throw new ChartSpecError("xValues must be a list");
     if (raw.xValues.length === 0) throw new ChartSpecError("xValues require at least one data point");
-    if (raw.xValues.length > MAX_SERIES_POINTS) throw new ChartSpecError("Charts support at most 300 data points");
+    if (raw.xValues.length > MAX_SCIENTIFIC_OBSERVATIONS) throw new ChartSpecError("Scientific charts support at most 10000 data points");
     xValues = raw.xValues.map((value, i) => finiteNumber(value, "xValues at index " + i));
     output.xValues = xValues;
   }
@@ -342,7 +378,7 @@ function canonicalizeScientific(raw: Record<string, unknown>, type: "line" | "sc
       names.add(name);
       if (!Array.isArray(item.values)) throw new ChartSpecError("series " + name + " values must be a list");
       if (!item.values.length) throw new ChartSpecError("series " + name + " requires at least one data point");
-      if (item.values.length > MAX_SERIES_POINTS) throw new ChartSpecError("Charts support at most 300 data points");
+      if (item.values.length > MAX_SCIENTIFIC_OBSERVATIONS) throw new ChartSpecError("Scientific charts support at most 10000 data points");
       const values = item.values.map((value, i) => finiteNumber(value, "series " + name + " value at index " + i));
       const row: ChartScientificSeriesRow = { name, values };
       for (const field of ["xError", "yError"] as const) {
@@ -356,7 +392,7 @@ function canonicalizeScientific(raw: Record<string, unknown>, type: "line" | "sc
     if (!Array.isArray(raw.values) || !raw.values.length) {
       throw new ChartSpecError(type[0].toUpperCase() + type.slice(1) + " charts require at least one data point");
     }
-    if (raw.values.length > MAX_SERIES_POINTS) throw new ChartSpecError("Charts support at most 300 data points");
+    if (raw.values.length > MAX_SCIENTIFIC_OBSERVATIONS) throw new ChartSpecError("Scientific charts support at most 10000 data points");
     const values = raw.values.map((value, i) => finiteNumber(value, "Value at index " + i));
     const row: ScientificValues = { values };
     output.values = values;
@@ -375,8 +411,8 @@ function canonicalizeScientific(raw: Record<string, unknown>, type: "line" | "sc
     }
   }
   if (type === "line" && count < 2) throw new ChartSpecError("Line charts require at least two data points");
-  if (count > MAX_SERIES_POINTS || series.length * count > MAX_SERIES_POINTS) {
-    throw new ChartSpecError("Charts support at most 300 total series points");
+  if (count > MAX_SCIENTIFIC_OBSERVATIONS || series.length * count > MAX_SCIENTIFIC_OBSERVATIONS) {
+    throw new ChartSpecError("Scientific charts support at most 10000 total series points");
   }
   if (xValues && xValues.length !== count) {
     throw new ChartSpecError("xValues length must match the series length (" + count + ")");
@@ -447,6 +483,162 @@ function canonicalizeBoxplot(raw: Record<string, unknown>, result: ChartDataRow)
   result.yAxis = cleanText(raw.yAxis, "Y-axis label", { default: "Value" });
   return result;
 }
+
+/** Strict V2 grammar: every layer references bounded, typed source columns.
+ * No execution, expression, fetch, URL, or arbitrary renderer properties. */
+function canonicalizeComposite(raw: Record<string, unknown>, result: ChartDataRow): ChartDataRow {
+  if (raw.version != null && raw.version !== 2) {
+    throw new ChartSpecError("Composite figures require ChartSpec version 2");
+  }
+  if (Object.keys(raw).some(key => ![
+    "version", "type", "title", "composite", "xAxis", "yAxis",
+    "xScale", "yScale", "xUnit", "yUnit", "scienceReceipt",
+  ].includes(key))) throw new ChartSpecError("Unsupported composite figure field");
+
+  const data = raw.composite;
+  if (!data || typeof data !== "object" || Array.isArray(data)) {
+    throw new ChartSpecError("Composite data must be an object");
+  }
+  const spec = data as Record<string, unknown>;
+  if (Object.keys(spec).some(key => !["numbers", "categories", "layers", "facetBy"].includes(key))) {
+    throw new ChartSpecError("Unsupported composite figure field");
+  }
+  const rawNumbers = spec.numbers;
+  const rawCategories = spec.categories ?? {};
+  const rawLayers = spec.layers;
+  const isObject = (v: unknown): v is Record<string, unknown> =>
+    v !== null && typeof v === "object" && !Array.isArray(v);
+  if (!isObject(rawNumbers) || Object.keys(rawNumbers).length < 2 || Object.keys(rawNumbers).length > 12) {
+    throw new ChartSpecError("Composite figures require 2-12 numeric columns");
+  }
+  if (!isObject(rawCategories) || Object.keys(rawCategories).length > 4) {
+    throw new ChartSpecError("Composite figures support at most four categorical columns");
+  }
+  if (!Array.isArray(rawLayers) || rawLayers.length < 1 || rawLayers.length > 8) {
+    throw new ChartSpecError("Composite figures require 1-8 mark layers");
+  }
+  const numbers: Record<string, number[]> = {};
+  const categories: Record<string, string[]> = {};
+  let count: number | null = null;
+  for (const [source, target, kind] of [
+    [rawNumbers, numbers, "numeric"], [rawCategories, categories, "categorical"],
+  ] as const) {
+    for (const [key, values] of Object.entries(source)) {
+      if (key !== key.trim().replace(/\s+/g, " ") || !key || key.length > 80
+          || Object.hasOwn(numbers, key) || Object.hasOwn(categories, key)
+          || ["__proto__", "constructor", "prototype"].includes(key)) {
+        throw new ChartSpecError("Duplicate or invalid composite column: " + key);
+      }
+      if (!Array.isArray(values)) throw new ChartSpecError("Composite columns must contain arrays");
+      if (count === null) count = values.length;
+      if (values.length !== count || count < 2 || count > 2000) {
+        throw new ChartSpecError("Composite columns must have 2-2000 aligned observations");
+      }
+      if (kind === "numeric") {
+        (target as Record<string, number[]>)[key] = values.map((value, index) =>
+          finiteNumber(value, "Composite " + key + "[" + index + "]"));
+        const col = (target as Record<string, number[]>)[key];
+        if (!Number.isFinite(Math.max(...col) - Math.min(...col))) {
+          throw new ChartSpecError("Composite numeric column range must be finite");
+        }
+      } else {
+        const cleaned = values.map((value, index) => cleanText(value,
+          "Composite " + key + "[" + index + "]"));
+        if (new Set(cleaned).size > 30) throw new ChartSpecError("Composite categories exceed 30 values");
+        (target as Record<string, string[]>)[key] = cleaned;
+      }
+    }
+  }
+  const facetBy = spec.facetBy;
+  if (facetBy !== undefined && (typeof facetBy !== "string" || !Object.hasOwn(categories, facetBy))) {
+    throw new ChartSpecError("Composite facetBy must name a categorical column");
+  }
+  if (typeof facetBy === "string" && new Set(categories[facetBy]).size > 6) {
+    throw new ChartSpecError("Composite figures support at most six facets");
+  }
+
+  const layers: NonNullable<ChartDataRow["composite"]>["layers"] = [];
+  // One global color/legend slot per (categorical field, value) or
+  // ungrouped layer. Reusing a field across layers does not spend slots twice.
+  const colorSlots = new Set<string>();
+  const xBounds: number[] = [];
+  const yBounds: number[] = [];
+  for (const [index, entry] of rawLayers.entries()) {
+    if (!isObject(entry) || Object.keys(entry).some(k => !["mark", "x", "y", "y2", "colorBy", "label"].includes(k))) {
+      throw new ChartSpecError("Composite layer " + index + " has unknown fields");
+    }
+    if (!["point", "line", "band", "area"].includes(String(entry.mark))) {
+      throw new ChartSpecError("Unsupported composite mark");
+    }
+    const mark = entry.mark as "point" | "line" | "band" | "area";
+    if (typeof entry.x !== "string" || !Object.hasOwn(numbers, entry.x)
+        || typeof entry.y !== "string" || !Object.hasOwn(numbers, entry.y)) {
+      throw new ChartSpecError("Composite layer must reference numeric x/y columns");
+    }
+    if ((mark === "band") !== (entry.y2 != null)) {
+      throw new ChartSpecError("Composite band requires y2; other marks forbid y2");
+    }
+    const x = entry.x, y = entry.y;
+    const layer: (typeof layers)[number] = { mark, x, y };
+    if (entry.y2 != null) {
+      if (typeof entry.y2 !== "string" || !Object.hasOwn(numbers, entry.y2)) {
+        throw new ChartSpecError("Composite y2 must reference a numeric column");
+      }
+      if (numbers[y].some((v, i) => v > numbers[entry.y2 as string][i])) {
+        throw new ChartSpecError("Composite band lower bounds must not exceed upper bounds");
+      }
+      layer.y2 = entry.y2;
+      yBounds.push(...numbers[entry.y2]);
+    }
+    if (entry.colorBy != null) {
+      if (typeof entry.colorBy !== "string" || !Object.hasOwn(categories, entry.colorBy)) {
+        throw new ChartSpecError("Composite colorBy must name a categorical column");
+      }
+      for (const value of categories[entry.colorBy]) colorSlots.add(JSON.stringify([entry.colorBy, value]));
+      layer.colorBy = entry.colorBy;
+    } else {
+      colorSlots.add(JSON.stringify([index]));
+    }
+    if (colorSlots.size > 8) {
+      throw new ChartSpecError("Composite figures support at most eight color legend entries across all layers");
+    }
+    if (entry.label != null) layer.label = cleanText(entry.label, "Composite layer label");
+    if (mark === "area") yBounds.push(0);
+    xBounds.push(...numbers[x]);
+    yBounds.push(...numbers[y]);
+    layers.push(layer);
+  }
+  for (const [axis, values] of [["x", xBounds], ["y", yBounds]] as const) {
+    const scale = raw[axis + "Scale"] ?? "linear";
+    if (scale !== "linear" && scale !== "log10") {
+      throw new ChartSpecError("Composite " + axis + "Scale must be linear or log10");
+    }
+    if (scale === "log10" && values.some(v => v <= 0)) {
+      throw new ChartSpecError("Composite " + axis + "Scale requires positive observations");
+    }
+    if (!Number.isFinite(Math.max(...values) - Math.min(...values))) {
+      throw new ChartSpecError("Composite " + axis + " domain is not finite");
+    }
+    if (axis === "x") outputAxis("x", scale);
+    else outputAxis("y", scale);
+  }
+  function outputAxis(axis: "x" | "y", scale: "linear" | "log10") {
+    if (axis === "x") {
+      result.xScale = scale;
+      result.xAxis = cleanText(raw.xAxis, "Composite xAxis", { default: "X" });
+      if (raw.xUnit != null) result.xUnit = cleanText(raw.xUnit, "Composite xUnit");
+    } else {
+      result.yScale = scale;
+      result.yAxis = cleanText(raw.yAxis, "Composite yAxis", { default: "Y" });
+      if (raw.yUnit != null) result.yUnit = cleanText(raw.yUnit, "Composite yUnit");
+    }
+  }
+  result.version = 2;
+  result.composite = { numbers, layers, categories };
+  if (typeof facetBy === "string") result.composite.facetBy = facetBy;
+  return result;
+}
+
 
 function canonicalizeHeatmap(raw: Record<string, unknown>, result: ChartDataRow): ChartDataRow {
   if (!Array.isArray(raw.rowLabels) || !raw.rowLabels.length) {
@@ -571,6 +763,7 @@ function canonicalizeChartSpecBase(data: unknown, chartType?: string | null): Ch
     }),
   };
 
+  if (expectedType === "composite") return canonicalizeComposite(raw, result);
   if (expectedType === "boxplot") return canonicalizeBoxplot(raw, result);
   if (expectedType === "heatmap") return canonicalizeHeatmap(raw, result);
 
@@ -681,7 +874,7 @@ export function canonicalizeChartSpec(data: unknown, chartType?: string | null):
     if (raw.analysis != null) {
       canonical.analysis = canonicalizeChartAnalysis(
         raw.analysis, canonical.type ?? chartType ?? "",
-        canonical.xScale ?? "linear", canonical.yScale ?? "linear",
+        canonical.xScale ?? "linear", canonical.yScale ?? "linear", canonical,
       );
     }
   }

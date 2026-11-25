@@ -47,7 +47,8 @@ from matplotlib.colors import Colormap, LinearSegmentedColormap, Normalize, TwoS
 from matplotlib.patches import FancyBboxPatch, PathPatch
 from matplotlib.path import Path as MplPath
 
-from graphlink_chart_data import SUPPORTED_CHART_TYPES, canonicalize_chart_data
+from graphlink_chart_data import (SUPPORTED_CHART_TYPES, canonicalize_chart_data, chart_regression_fits,
+                                  raincloud_density, raincloud_jitter, heatmap_cluster_plan)
 
 # -- dark-theme hex palette --------------------------------------------------
 # Copied verbatim from graphlink_config.py's THEME_TOKENS["dark"] (the app's
@@ -71,6 +72,11 @@ FONT_FAMILY = "Segoe UI"  # graphlink_styles.FONT_FAMILY_NAME
 PUBLICATION_COLORS = (
     "#0072B2", "#E69F00", "#009E73", "#CC79A7",
     "#D55E00", "#56B4E9", "#F0E442", "#000000",
+)
+# Standard composite figures share the same eight distinct colors as the live SVG.
+COMPOSITE_COLORS = (
+    "#3f8f5c", "#3f7dc9", "#8a5fd1", "#d98a3d",
+    "#cf5354", "#d9b23d", "#168b91", "#bc568e",
 )
 MONOCHROME_COLORS = ("#202020", "#5A5A5A", "#878787", "#B6B6B6")
 PUBLICATION_HATCHES = ("/", "\\\\", "xx", "--", "++", "oo", "..", "**")
@@ -389,9 +395,51 @@ def _render_scientific_cartesian(ax, data: dict[str, Any], theme: dict[str, Any]
     # palette entries have very similar RGB values.
     markers = ("o", "s", "^", "D", "v", "P", "X", "*")
     styles = ("-", "--", "-.", ":")
+    density = data.get("analysis", {}).get("density") == "hexbin"
+    if density:
+        # A saved locked viewport is the only user viewport persisted into
+        # publication export. Match the interactive hexbin's X/Y inclusion
+        # filter exactly; offscreen observations must not contribute counts
+        # or expand the export's tessellation.
+        analysis = data.get("analysis", {})
+        xrange = analysis.get("xRange") if analysis.get("lockX") else None
+        yrange = analysis.get("yRange") if analysis.get("lockY") else None
+        visible = [
+            (x, y) for x, y in zip(x_values, rows[0]["values"])
+            if (xrange is None or xrange[0] <= x <= xrange[1])
+            and (yrange is None or yrange[0] <= y <= yrange[1])
+        ]
+        if visible:
+            hx, hy = zip(*visible)
+            cmap = LinearSegmentedColormap.from_list(
+                "graphlink-hexbin", [theme["surface"], theme["cycle"][0]]
+            )
+            cloud = ax.hexbin(hx, hy, gridsize=26, mincnt=1,
+                              cmap=cmap, linewidths=0.25,
+                              edgecolors=theme["surface"], zorder=2)
+            colorbar = ax.figure.colorbar(cloud, ax=ax, fraction=0.046, pad=0.04)
+            colorbar.ax.tick_params(colors=theme["muted"], labelsize=8)
+            colorbar.set_label("Observations per bin", color=theme["muted"], fontsize=8)
+        else:
+            ax.text(0.5, 0.5, "No observations in selected range",
+                    transform=ax.transAxes, ha="center", va="center",
+                    color=theme["muted"], fontsize=9)
+        ax.set_title("Hexbin density (count per visible cell)", fontsize=8,
+                     color=theme["text"], loc="left")
+    fits = chart_regression_fits(data) if data.get("analysis", {}).get("regression") == "ols95" else None
     for index, row in enumerate(rows):
         color = theme["cycle"][index % len(theme["cycle"])]
         label = row.get("name")
+        if fits:
+            fit = fits[index]
+            fx, fy, lower, upper = zip(*fit["points"])
+            summary = f"R²={fit['r2']:.3f}" if fit["r2"] is not None else "R² undefined"
+            fit_label = f"{label + ': ' if label else ''}OLS ({summary}, n={fit['n']})"
+            ax.fill_between(fx, lower, upper, color=color, alpha=0.18, zorder=1,
+                            label="95% mean CI" if index == 0 else "_nolegend_")
+            ax.plot(fx, fy, color=color, linestyle="--", linewidth=1.5, zorder=3, label=fit_label)
+        if density:
+            continue
         ax.errorbar(
             x_values,
             row["values"],
@@ -412,7 +460,7 @@ def _render_scientific_cartesian(ax, data: dict[str, Any], theme: dict[str, Any]
             label=label,
             zorder=4 + index,
         )
-    if data.get("series"):
+    if (data.get("series") and not density) or fits:
         legend = ax.legend(frameon=False, loc="best", fontsize=8)
         for text in legend.get_texts():
             text.set_color(theme["text"])
@@ -465,9 +513,21 @@ def _render_boxplot(ax, chart_data: dict[str, Any], theme: dict[str, Any],
     groups = chart_data["groups"]
     entries = [dict(label=group["label"], **_boxplot_statistics(group["values"]))
                for group in groups]
+    raincloud = chart_data.get("analysis", {}).get("distribution") == "raincloud"
+    if raincloud:
+        for index, group in enumerate(groups):
+            color = theme["cycle"][index % len(theme["cycle"])]
+            density = raincloud_density(group["values"])
+            if density:
+                values, relative = zip(*density)
+                ax.fill_betweenx(values, index - 0.12, [index - 0.12 - 0.32 * d for d in relative],
+                                 color=color, alpha=0.35, linewidth=0.8, edgecolor=color)
+            ax.scatter([index + raincloud_jitter(j) for j in range(len(group["values"]))],
+                       group["values"], s=13, color=color, alpha=0.8, edgecolors=theme["text"],
+                       linewidths=0.35, zorder=4)
     artists = ax.bxp(
-        entries, positions=list(range(len(groups))), widths=0.56,
-        patch_artist=True, showfliers=True, manage_ticks=False,
+        entries, positions=list(range(len(groups))), widths=0.14 if raincloud else 0.56,
+        patch_artist=True, showfliers=not raincloud, manage_ticks=False,
         boxprops={"edgecolor": theme["text"], "linewidth": 1.1},
         medianprops={"color": theme["text"], "linewidth": 2.0},
         whiskerprops={"color": theme["muted"], "linewidth": 1.3},
@@ -482,15 +542,22 @@ def _render_boxplot(ax, chart_data: dict[str, Any], theme: dict[str, Any],
             patch.set_hatch(PUBLICATION_HATCHES[index % len(PUBLICATION_HATCHES)])
     _prepare_standard_axes(ax, theme, chart_data["xAxis"], chart_data["yAxis"])
     _set_categorical_ticks(ax, list(range(len(groups))), [group["label"] for group in groups], layout_width)
+    if raincloud:
+        ax.set_xlim(-0.5, len(groups) - 0.5)
+        ax.set_title("Raincloud: density (relative peak), quartiles, raw observations",
+                     fontsize=8, color=theme["text"], loc="left")
     ax.margins(x=0.07, y=0.16)
     return True
 
 
 def _render_heatmap(figure, ax, chart_data: dict[str, Any],
                     theme: dict[str, Any], layout_width: float) -> bool:
-    rows = chart_data["rowLabels"]
-    columns = chart_data["columnLabels"]
-    matrix = chart_data["matrix"]
+    mode = chart_data.get("analysis", {}).get("clustering")
+    plan = heatmap_cluster_plan(chart_data["matrix"], mode)
+    rows = [chart_data["rowLabels"][i] for i in plan["rowOrder"]]
+    columns = [chart_data["columnLabels"][i] for i in plan["columnOrder"]]
+    matrix = [[chart_data["matrix"][i][j] for j in plan["columnOrder"]]
+              for i in plan["rowOrder"]]
     smallest = min(min(row) for row in matrix)
     largest = max(max(row) for row in matrix)
     norm: Normalize
@@ -529,8 +596,41 @@ def _render_heatmap(figure, ax, chart_data: dict[str, Any],
     if shown[-1] != len(rows) - 1:
         shown.append(len(rows) - 1)
     ax.set_yticks(shown, [_wrap_label(rows[i], 14, 2) for i in shown])
-    ax.set_xlim(-0.5, len(columns) - 0.5)
-    ax.set_ylim(len(rows) - 0.5, -0.5)
+    # Draw deterministic UPGMA dendrograms outside the heatmap's cell
+    # coordinates. Preserve identical ticks and physical unit values.
+    def draw_tree(tree, order, axis):
+        if not tree or "left" not in tree:
+            return
+        positions = {leaf: i for i, leaf in enumerate(order)}
+        max_height = tree["height"]
+
+        def visit(node):
+            if "leaf" in node:
+                return (-0.5, positions[node["leaf"]]) if axis == "rows" else (positions[node["leaf"]], -0.5)
+            a, b = visit(node["left"]), visit(node["right"])
+            ratio = (node["height"] / max_height if max_height > 0
+                     else node["depth"] / tree["depth"])
+            if axis == "rows":
+                x = -0.6 - 1.8 * ratio
+                ax.plot([a[0], x, x, b[0]], [a[1], a[1], b[1], b[1]],
+                        color=theme["muted"], linewidth=0.75, zorder=5)
+                return (x, (a[1] + b[1]) / 2)
+            y = -0.6 - 1.8 * ratio
+            ax.plot([a[0], a[0], b[0], b[0]], [a[1], y, y, b[1]],
+                    color=theme["muted"], linewidth=0.75, zorder=5)
+            return ((a[0] + b[0]) / 2, y)
+
+        visit(tree)
+
+    draw_tree(plan["rowTree"], plan["rowOrder"], "rows")
+    draw_tree(plan["columnTree"], plan["columnOrder"], "columns")
+    ax.set_xlim(-2.6 if plan["rowTree"] and plan["rowTree"].get("left") else -0.5,
+                len(columns) - 0.5)
+    ax.set_ylim(len(rows) - 0.5,
+                -2.6 if plan["columnTree"] and plan["columnTree"].get("left") else -0.5)
+    if mode:
+        ax.set_title("Average-linkage clustered heatmap (Euclidean)", fontsize=8,
+                     color=theme["text"], loc="left")
     colorbar = figure.colorbar(image, ax=ax, fraction=0.045, pad=0.04)
     colorbar.ax.tick_params(colors=theme["muted"], labelsize=8)
     colorbar.outline.set_edgecolor(theme["border"])
@@ -908,11 +1008,147 @@ def _render_chart_analysis(ax, analysis: dict[str, Any], theme: dict[str, Any]) 
                         zorder=12, annotation_clip=True)
 
 
+def _render_composite_chart(figure, data: dict[str, Any], theme: dict[str, Any]) -> None:
+    """Render bounded V2 layers/facets from original named columns.
+
+    No AI-generated expression or script executes here. Each mark is a
+    reference to canonicalized arrays; every observation participates in
+    the publication image. Panels share X/Y domains so comparisons cannot
+    silently change scale across experimental groups.
+    """
+    spec = data["composite"]
+    numbers = spec["numbers"]
+    categories = spec["categories"]
+    facet_field = spec.get("facetBy")
+    facets = list(dict.fromkeys(categories[facet_field])) if facet_field else [None]
+    columns = 1 if len(facets) == 1 else 2
+    rows = math.ceil(len(facets) / columns)
+
+    # Establish data-wide domains *before* faceting, including band upper
+    # boundaries and the area baseline.
+    x_values, y_values = [], []
+    for layer in spec["layers"]:
+        x_values.extend(numbers[layer["x"]])
+        y_values.extend(numbers[layer["y"]])
+        if layer.get("y2"):
+            y_values.extend(numbers[layer["y2"]])
+        if layer["mark"] == "area":
+            y_values.append(0.0)
+
+    # Match the live SVG's globally ordered field/value or ungrouped-layer
+    # slots. Facets reuse the same identity even when a group is absent.
+    color_slots = {}
+    for layer_index, layer in enumerate(spec["layers"]):
+        color_by = layer.get("colorBy")
+        keys = [(color_by, value) for value in categories[color_by]] if color_by else [(layer_index,)]
+        for key in keys:
+            color_slots.setdefault(key, len(color_slots))
+    palette = (MONOCHROME_COLORS if theme.get("grayscale") else
+               PUBLICATION_COLORS if theme.get("colorblind") else COMPOSITE_COLORS)
+
+    x_unit, y_unit = data.get("xUnit"), data.get("yUnit")
+    xlabel = data["xAxis"] + (f" ({x_unit})" if x_unit else "")
+    ylabel = data["yAxis"] + (f" ({y_unit})" if y_unit else "")
+    figure.clear()
+    axes = [
+        figure.add_subplot(rows, columns, i + 1)
+        for i in range(rows * columns)
+    ]
+    for i, facet in enumerate(facets):
+        ax = axes[i]
+        _prepare_standard_axes(ax, theme, xlabel, ylabel)
+        if data.get("xScale") == "log10":
+            ax.set_xscale("log", base=10)
+        if data.get("yScale") == "log10":
+            ax.set_yscale("log", base=10)
+        present = [
+            index for index in range(len(next(iter(numbers.values()))))
+            if facet_field is None or categories[facet_field][index] == facet
+        ]
+        for layer_index, layer in enumerate(spec["layers"]):
+            color_by = layer.get("colorBy")
+            groups = (list(dict.fromkeys(categories[color_by][j] for j in present))
+                      if color_by else [None])
+            for group in groups:
+                indices = [
+                    j for j in present
+                    if color_by is None or categories[color_by][j] == group
+                ]
+                indices.sort(key=lambda index: (numbers[layer["x"]][index], index))
+                if not indices:
+                    continue
+                xx = [numbers[layer["x"]][j] for j in indices]
+                yy = [numbers[layer["y"]][j] for j in indices]
+                slot = color_slots[(color_by, group) if group is not None else (layer_index,)]
+                color = palette[slot % len(palette)]
+                label = layer.get("label") or layer["y"]
+                if group is not None:
+                    label = f"{label} · {color_by}: {group}"
+                else:
+                    label = f"Layer {layer_index + 1}: {label}"
+                mark = layer["mark"]
+                # In grayscale, reused luminance slots get different hatches,
+                # line styles or marker shapes instead of relying on color alone.
+                hatch = PUBLICATION_HATCHES[slot] if theme.get("grayscale") else None
+                line_style = (("-", "--", "-.", ":")[(layer_index + slot // len(palette)) % 4]
+                              if theme.get("grayscale") else ("-", "--", "-.", ":")[layer_index % 4])
+                marker = (("o", "s", "^", "D", "v", "P", "X", "*")[slot]
+                          if theme.get("grayscale") else ("o", "s", "^", "D")[layer_index % 4])
+                if mark == "band":
+                    upper = [numbers[layer["y2"]][j] for j in indices]
+                    ax.fill_between(xx, yy, upper, facecolor=color, alpha=0.24,
+                                    linewidth=0.8, edgecolor=color, hatch=hatch, label=label)
+                elif mark == "area":
+                    ax.fill_between(xx, 0, yy, facecolor=color, alpha=0.24,
+                                    linewidth=0.8, edgecolor=color, hatch=hatch, label=label)
+                elif mark == "line":
+                    ax.plot(xx, yy, color=color, linestyle=line_style, linewidth=1.8, label=label)
+                else:
+                    ax.scatter(xx, yy, s=19, color=color, alpha=0.87,
+                               marker=marker, label=label, zorder=4)
+        if facet is not None:
+            ax.set_title(f"{facet_field}: {facet}", fontsize=9, color=theme["text"])
+        if data.get("xScale") == "log10":
+            xmin, xmax = min(x_values), max(x_values)
+            if xmin == xmax:
+                xmin, xmax = xmin / 1.2, xmax * 1.2
+        else:
+            xmin, xmax = min(x_values), max(x_values)
+            if xmin == xmax:
+                delta = max(abs(xmin) * 0.05, 1)
+                xmin, xmax = xmin - delta, xmax + delta
+        if data.get("yScale") == "log10":
+            ymin, ymax = min(y_values), max(y_values)
+            if ymin == ymax:
+                ymin, ymax = ymin / 1.2, ymax * 1.2
+        else:
+            ymin, ymax = min(y_values), max(y_values)
+            if ymin == ymax:
+                delta = max(abs(ymin) * 0.05, 1)
+                ymin, ymax = ymin - delta, ymax + delta
+        ax.set_xlim(xmin, xmax)
+        ax.set_ylim(ymin, ymax)
+        if len(spec["layers"]) > 1 or any(layer.get("colorBy") for layer in spec["layers"]):
+            handles, labels = ax.get_legend_handles_labels()
+            unique = dict(zip(labels, handles))
+            if unique:
+                ax.legend(unique.values(), unique.keys(), fontsize=7, frameon=False,
+                          labelcolor=theme["text"], loc="best")
+    for ax in axes[len(facets):]:
+        ax.set_visible(False)
+    figure.suptitle(data["title"], fontsize=10, color=theme["text"])
+    # The common publication geometry is shared by SVG/PDF/PNG.
+    figure.tight_layout(rect=[0, 0, 1, 0.95], pad=1.35)
+
+
 def _render_chart_content(figure, chart_type: str, chart_data: dict[str, Any], theme: dict[str, Any], layout_width: float) -> None:
     figure.clear()
     figure.patch.set_facecolor(theme["surface"])
-    ax = figure.add_subplot(111)
     canonical = canonicalize_chart_data(chart_data, chart_type)
+    if chart_type == "composite":
+        _render_composite_chart(figure, canonical, theme)
+        return
+    ax = figure.add_subplot(111)
 
     if chart_type == "bar":
         use_tight_layout = _render_bar_chart(ax, canonical, theme, layout_width)

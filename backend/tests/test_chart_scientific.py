@@ -279,3 +279,22 @@ def test_workbench_fitted_model_overlays_measured_values_and_95_percent_envelope
         assert err[0] >= 0 and err[1] >= 0
         assert lo == pytest.approx(fit - err[0], abs=1e-10)
         assert hi == pytest.approx(fit + err[1], abs=1e-10)
+
+
+def test_scientific_10k_budget_preserves_every_sample_and_rejects_overflow():
+    xs = list(range(10000))
+    values = [float(i % 7) for i in xs]
+    before = values.copy()
+    spec = canonicalize_chart_data({"type": "scatter", "xValues": xs, "values": values})
+    assert spec["values"] == before
+    assert len(spec["xValues"]) == 10000
+    assert values == before
+    with pytest.raises(ChartDataError, match="at most 10000"):
+        canonicalize_chart_data({"type": "scatter",
+                                 "xValues": xs + [10000], "values": values + [0]})
+    with pytest.raises(ChartDataError, match="at most 10000 total series points"):
+        canonicalize_chart_data({"type": "scatter", "xValues": xs,
+                                 "series": [
+                                     {"name": "A", "values": values},
+                                     {"name": "B", "values": values},
+                                 ]})

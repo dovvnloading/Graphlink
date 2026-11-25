@@ -142,6 +142,7 @@ def register_chart_edit_intents(bus: SessionBus, document: SceneDocument, publis
             analysis, node.state.chart_type,
             x_scale=canonical.get("xScale", "linear"),
             y_scale=canonical.get("yScale", "linear"),
+            chart_data=canonical,
         )
         if current.get("analysis") == clean:
             return clean
@@ -152,6 +153,98 @@ def register_chart_edit_intents(bus: SessionBus, document: SceneDocument, publis
         document.record_command("setChartAnalysis", "user", update, node_ids=[node_id])
         await publish_scene()
         return clean
+
+    async def set_composite_design(node_id, design, expected):
+        """Undoable view-only composition with stale-edit protection.
+
+        Only layer/face bindings may change. The backend always retains the
+        current numeric/categorical columns and validates every reference;
+        the client cannot smuggle data overrides into this intent.
+        """
+        node = document.nodes.get(node_id) if isinstance(node_id, str) else None
+        if (node is None or node.kind != "chart" or not isinstance(node.state, ChartState)
+                or node.state.chart_type != "composite"):
+            raise ChartDataError("Unknown composite figure")
+        if not isinstance(design, dict) or set(design) - {"layers", "facetBy"} or "layers" not in design:
+            raise ChartDataError("Composite design may only change layers and facetBy")
+        if not isinstance(expected, dict) or set(expected) - {"layers", "facetBy"} or "layers" not in expected:
+            raise ChartDataError("Expected composite design must be provided")
+
+        canonical = canonicalize_chart_data(node.state.chart_data, "composite")
+        current = canonical["composite"]
+        if expected["layers"] != current["layers"] or expected.get("facetBy") != current.get("facetBy"):
+            raise ChartDataError("Composite design changed; review the current figure before saving")
+
+        replacement = {**current, "layers": design["layers"]}
+        replacement.pop("facetBy", None)
+        if design.get("facetBy") is not None:
+            replacement["facetBy"] = design["facetBy"]
+        updated = canonicalize_chart_data({**canonical, "composite": replacement}, "composite")
+        if updated["composite"] == current:
+            return current
+
+        def update():
+            node.state.chart_data = updated
+
+        document.record_command("setCompositeDesign", "user", update, node_ids=[node_id])
+        await publish_scene()
+        return updated["composite"]
+
+    async def branch_composite_selection(node_id, indices, expected):
+        """Create an undoable, connected source-row subset as a new figure.
+
+        A client may send *only* original integer row indices and a full
+        expected snapshot of the source's data bindings. Never trust chart
+        values supplied by the client; derive all columns from the current
+        canonical source on the server, and reject stale selections.
+        """
+        node = document.nodes.get(node_id) if isinstance(node_id, str) else None
+        if (node is None or node.kind != "chart" or not isinstance(node.state, ChartState)
+                or node.state.chart_type != "composite"):
+            raise ChartDataError("Unknown composite source figure")
+        canonical = canonicalize_chart_data(node.state.chart_data, "composite")
+        source = canonical["composite"]
+        if not isinstance(expected, dict) or expected != source:
+            raise ChartDataError("Composite source data changed; review the figure before branching")
+        if not isinstance(indices, list):
+            raise ChartDataError("Selected rows must be an array of original indices")
+        count = len(next(iter(source["numbers"].values())))
+        if not 2 <= len(indices) < count:
+            raise ChartDataError("Select at least two but fewer than all source observations")
+        if (any(type(index) is not int or index < 0 or index >= count for index in indices)
+                or any(a >= b for a, b in zip(indices, indices[1:]))):
+            raise ChartDataError("Selected indices must be unique, ordered and within the source rows")
+        numbers = {
+            name: [values[i] for i in indices]
+            for name, values in source["numbers"].items()
+        }
+        categories = {
+            name: [values[i] for i in indices]
+            for name, values in source["categories"].items()
+        }
+        subset = {**source, "numbers": numbers, "categories": categories}
+        # Receipt verification belongs to the original scientific workbench
+        # source only. A derived chart is connected to its parent chart;
+        # retaining the source's scienceReceipt would incorrectly imply it
+        # can be refreshed as an independent verified workbench result.
+        derived = {key: value for key, value in canonical.items()
+                   if key not in ("scienceReceipt", "analysis")}
+        derived["title"] = ("Selection (" + str(len(indices)) + "/" + str(count)
+                            + ") - " + canonical["title"])[:160]
+        derived["composite"] = subset
+        new_chart_data = canonicalize_chart_data(derived, "composite")
+
+        def create():
+            return document.add_chart_node(
+                *document.place_child(node.id, "chart", prefer="right"),
+                node.id, "composite", new_chart_data,
+            )
+
+        child, _ = document.record_command(
+            "branchCompositeSelection", "user", create, node_ids=[node.id],
+        )
+        await publish_scene()
+        return {"chartNodeId": child.id, "selected": len(indices), "sourceCount": count}
 
     async def resize_chart(node_id, width, height):
         document.record_command(
@@ -169,6 +262,8 @@ def register_chart_edit_intents(bus: SessionBus, document: SceneDocument, publis
         await publish_scene()
 
     bus.register_intent("scene", "setChartAnalysis", set_chart_analysis)
+    bus.register_intent("scene", "setCompositeDesign", set_composite_design)
+    bus.register_intent("scene", "branchCompositeSelection", branch_composite_selection)
     bus.register_intent("scene", "resizeChart", resize_chart)
     bus.register_intent("scene", "toggleChartAspectLock", toggle_chart_aspect_lock)
 
@@ -378,6 +473,12 @@ def register_chart_intents(
                         "type": "heatmap", "rowLabels": ["No valid data"],
                         "columnLabels": ["Value"], "matrix": [[0]],
                     }, "heatmap")
+                elif normalized_chart_type == "composite":
+                    chart_data = canonicalize_chart_data({
+                        "type": "composite", "version": 2,
+                        "composite": {"numbers": {"x": [0, 1], "y": [0, 0]},
+                                      "layers": [{"mark": "point", "x": "x", "y": "y"}]},
+                    }, "composite")
                 else:
                     chart_data = _placeholder_chart_data(normalized_chart_type)
                 chart_error = f"The generated chart data could not be validated: {exc}"
