@@ -46,6 +46,23 @@ def _check_table(table: TableValue) -> None:
                 raise ValueError("table cells must be finite")
 
 
+def table_from_json(columns, rows) -> TableValue:
+    """Strictly decode JSON table containers, then check the table.
+
+    Columns must be a JSON array of strings and rows a JSON array of JSON
+    arrays. Strings, objects or other iterables are rejected rather than
+    converted (a "42" row is not two cells, an object row is not its keys)
+    (#1094).
+    """
+    if not isinstance(columns, list) or any(not isinstance(column, str) for column in columns):
+        raise ValueError("table columns must be a JSON array of strings")
+    if not isinstance(rows, list) or any(not isinstance(row, list) for row in rows):
+        raise ValueError("table rows must be a JSON array of row arrays")
+    table = TableValue(tuple(columns), tuple(tuple(row) for row in rows))
+    _check_table(table)
+    return table
+
+
 def _csv_cell(cell: JsonScalar) -> str:
     if cell is None:
         return ""

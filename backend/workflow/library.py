@@ -12,11 +12,11 @@ from backend.secret_scrub import scrub, scrub_text
 
 from .adapter import StepContext
 from .contracts import (
-    InputBinding, JsonValue, PortSet, PortSpec, StepOutputSource, TableValue,
+    InputBinding, JsonValue, PortSet, PortSpec, StepOutputSource,
     TextValue, WorkflowInputSource, WorkflowOutput, WorkflowSpec, WorkflowStepSpec,
     freeze_config,
 )
-from .ports import ALLOWED_COERCIONS, PORT_KINDS, coerce_port, _check_table
+from .ports import ALLOWED_COERCIONS, PORT_KINDS, coerce_port, table_from_json
 from .registry import builtin_registry
 
 FORMAT = "graphlink-workflow"
@@ -360,8 +360,7 @@ def typed_inputs(spec: WorkflowSpec, inputs: dict, *, require_all=True) -> dict:
         elif kind == "json":
             typed[name] = JsonValue(_json(value))
         elif kind == "table" and isinstance(value, dict) and set(value) == {"columns", "rows"}:
-            typed[name] = TableValue(tuple(value["columns"]), tuple(tuple(row) for row in value["rows"]))
-            _check_table(typed[name])
+            typed[name] = table_from_json(value["columns"], value["rows"])
         else:
             raise ValueError(f"Unsupported value for input {name}.")
     return typed
