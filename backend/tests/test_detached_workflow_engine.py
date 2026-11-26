@@ -487,3 +487,54 @@ def test_unattended_cost_cap_is_per_run_and_never_dispatches_over_cap(tmp_path):
         assert record["status"] == "failed" and "cost limit" in record["error"]
         assert not cloud.started and record["cost_usd"] == 0
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("fail_from", ["first-checkpoint", "pending-cleanup", "after-dispatch"])
+def test_checkpoint_failures_release_the_run_without_replay(tmp_path, monkeypatch, fail_from):
+    """#1081: a storage failure must not strand a dead worker as active."""
+    async def scenario():
+        engine, ws, local, *_ = _engine(tmp_path / "chats.db")
+        spec = _spec(engine.registry, [
+            _entry("slow", wait=True),
+            _entry("after", source=StepOutputSource("slow", "text")),
+        ])
+        params = {"text": TextValue("x")}
+        real = engine.store.checkpoint
+        state = {"broken": fail_from == "first-checkpoint", "calls": 0}
+
+        def checkpoint(workspace_id, record):
+            state["calls"] += 1
+            if state["broken"]:
+                raise sqlite3.OperationalError("disk I/O error")
+            return real(workspace_id, record)
+
+        monkeypatch.setattr(engine.store, "checkpoint", checkpoint)
+        run_id = engine.start(ws, spec, params)
+        if fail_from == "pending-cleanup":
+            # Break storage just before the worker observes cancellation;
+            # every cleanup checkpoint for pending steps then fails too.
+            await _until(lambda: "slow" in local.started)
+            state["broken"] = True
+            assert engine.cancel(ws, run_id)
+        elif fail_from == "after-dispatch":
+            await _until(lambda: "slow" in local.started)
+            state["broken"] = True
+            local.gate.set()
+        record = await asyncio.wait_for(engine.wait(ws, run_id), timeout=3)
+        assert record["status"] in ("failed", "cancelled")
+        assert all(step["status"] not in ("pending", "running") for step in record["steps"].values())
+        assert run_id not in engine._runs
+        assert engine.cancel(ws, run_id) is False
+        # Storage recovers: the stale receipt is reconciled on the next
+        # admission and a fresh run of the same workflow is admitted.
+        state["broken"] = False
+        local.gate.set()
+        await _until(lambda: not engine._draining)
+        started = list(local.started)
+        second = engine.start(ws, spec, params)
+        assert engine.store.read(ws, run_id)["status"] == record["status"]
+        assert (await asyncio.wait_for(engine.wait(ws, second), timeout=3))["status"] == "completed"
+        # Nothing from the failed run was replayed: only the new run's steps ran.
+        assert local.started[:len(started)] == started
+        assert local.started[len(started):] == ["slow", "after"]
+    asyncio.run(scenario())

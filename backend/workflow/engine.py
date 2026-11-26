@@ -105,6 +105,9 @@ class _Run:
     parent: _Run | None = None
     map_step: str | None = None
     item_index: int | None = None
+    # Set once the run is winding down: persistence failures from then on
+    # are logged instead of aborting the cleanup that releases the run.
+    settling: bool = False
 
     def stop(self, reason: str, status: str = "cancelled") -> None:
         if self.stop_reason is None:
@@ -185,6 +188,9 @@ class WorkflowEngine:
         self._draining: dict[str, set[asyncio.Task]] = {}
         self._previews: dict[tuple[int | None, str], tuple[RunPreview, float]] = {}
         self._approvals: dict[str, tuple[str, int, float]] = {}
+        # Terminal receipts whose final write failed. Retried before each
+        # admission so a storage outage never leaves a stale "running" row.
+        self._unpersisted: dict[str, tuple[int, dict[str, Any]]] = {}
         if recover:
             self.store.interrupt_unfinished()
 
@@ -240,6 +246,7 @@ class WorkflowEngine:
             if entry is None or entry[:2] != (approved_fingerprint, workspace_id):
                 self._approvals.pop(approval_token, None)
                 raise PermissionError("Approve this exact workflow preview before running it.")
+        self._retry_unpersisted()
         # Validate consent before reporting a busy workflow, so replayed
         # approval tokens are rejected even while the original run is active.
         # No await separates the active-run check from durable admission.
@@ -381,7 +388,30 @@ class WorkflowEngine:
             run.stop("The backend is shutting down.", "interrupted")
         await asyncio.gather(*(asyncio.shield(run.task) for run in runs), return_exceptions=True)
 
+    def _retry_unpersisted(self) -> None:
+        for run_id, (workspace_id, record) in list(self._unpersisted.items()):
+            try:
+                self.store.checkpoint(workspace_id, record)
+            except RuntimeError:
+                pass  # Already finished or removed: nothing left to reconcile.
+            except Exception:
+                logging.getLogger(__name__).warning("Workflow run receipt still could not be saved.", exc_info=True)
+                return
+            self._unpersisted.pop(run_id, None)
+
     def _checkpoint(self, run: _Run) -> None:
+        root = run
+        while root.parent is not None:
+            root = root.parent
+        if not (run.settling or root.settling):
+            self._write_checkpoint(run)
+            return
+        try:
+            self._write_checkpoint(run)
+        except Exception:
+            logging.getLogger(__name__).warning("Workflow checkpoint failed while settling a run.", exc_info=True)
+
+    def _write_checkpoint(self, run: _Run) -> None:
         if run.parent is not None:
             parent = run.parent
             step = parent.record["steps"][run.map_step]
@@ -765,6 +795,15 @@ class WorkflowEngine:
                     )
 
     async def _drive(self, run: _Run) -> dict[str, Any]:
+        # Ownership is released however the worker ends, including when
+        # storage fails during startup, cleanup or the final checkpoint;
+        # dispatched adapters stay in _draining until they settle (#1081).
+        try:
+            return await self._drive_run(run)
+        finally:
+            self._runs.pop(run.record["run_id"], None)
+
+    async def _drive_run(self, run: _Run) -> dict[str, Any]:
         active: dict[str, _Attempt] = {}
         admitted = 0
         record = run.record
@@ -833,13 +872,17 @@ class WorkflowEngine:
             else:
                 status, reason = "completed", None
         except asyncio.CancelledError:
+            run.settling = True
             run.stop("The workflow was interrupted.", "interrupted")
             await self._cancel_attempts(run, active)
             status, reason = "interrupted", run.stop_reason
         except Exception:
+            logging.getLogger(__name__).warning("Workflow run failed.", exc_info=True)
+            run.settling = True
             run.stop("The workflow could not finish.", "failed")
             await self._cancel_attempts(run, active)
             status, reason = "failed", run.stop_reason
+        run.settling = True
         for step_id, step in record["steps"].items():
             if step["status"] in ("pending", "running"):
                 self._finish_step(run, step_id, "interrupted" if status == "interrupted" else "blocked", reason)
@@ -848,10 +891,13 @@ class WorkflowEngine:
         record.update(status=status, finished_at=utc_now(), error=reason)
         _event(record, f"run-{status}", message=reason or "")
         try:
-            self._checkpoint(run)
-            return record
-        finally:
-            self._runs.pop(record["run_id"], None)
+            self._write_checkpoint(run)
+        except Exception:
+            logging.getLogger(__name__).warning(
+                "Workflow run finished but its receipt could not be saved; retrying later.", exc_info=True)
+            if run.parent is None:
+                self._unpersisted[record["run_id"]] = (run.workspace_id, copy.deepcopy(record))
+        return record
 
     def save_result_as_graph(self, workspace_id: int, run_id: str, *, title: str | None = None) -> int:
         from .scratch_adapters import save_result_graph
