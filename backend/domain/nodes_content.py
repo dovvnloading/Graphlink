@@ -411,6 +411,11 @@ class ContentOps(SceneDocumentParts):
             raise SceneError("Choose a Model node to configure.")
         validate_local_model_identity(provider, model_id)
         self._text_output(source_id)
+        # The shared typed traversal also follows reusable Workflow inputs,
+        # so Model -> Workflow -> Model is rejected before any change (#1090).
+        from backend.workflow.canvas import contains_dependency
+        if contains_dependency(self, source_id, target_id):
+            raise SceneError("A Model input cannot form a dependency cycle.")
         current = source_id
         seen = {target_id}
         while current:
