@@ -7,7 +7,8 @@ import { createLinearScale, createLog10Scale, formatLogTick, formatScientificTic
   log10Ticks, scientificLinearTicks } from "./chartScales";
 import { tooltipPositionFromEvent } from "./chartLayout";
 import { compositeColorKey, compositeColorKeys, compositeDomains, compositeFacets, compositeGroups, compositeSample } from "./compositeGeometry";
-import { brushPixelToData, compositeBrushBounds, compositeRowsInRect, type CompositeBrushPoint } from "./compositeSelection";
+import { brushPixelToData, compositeBrushBounds, compositeHighlightBudget, compositeRowsInRect,
+  type CompositeBrushPoint } from "./compositeSelection";
 
 // Eight distinct slots, mirrored by the standard composite publication palette.
 // Keep other chart types on the existing theme palette.
@@ -116,8 +117,14 @@ export function CompositeChartMarks({ chartData, theme, width, height, onHover, 
                     : "";
                   const name = (layer.label ?? layer.y) + (record.group === null ? "" : " · " + layer.colorBy + ": " + record.group);
                   const id = layerIndex + ":" + record.key;
+                  // Linked highlights come from the exact selected source rows,
+                  // so a brushed observation stays visible even when the
+                  // ordinary display sampler dropped it. Point layers skip
+                  // rows already drawn as a selected point glyph.
+                  const drawn = layer.mark === "point" ? new Set(indices) : null;
                   const highlighted = compositeSample(spec, layer,
-                    record.indices.filter(index => selected.has(index)), compact ? 24 : 250);
+                    record.indices.filter(index => selected.has(index) && !drawn?.has(index)),
+                    compositeHighlightBudget(compact));
                   return <g key={id} data-layer={layer.mark} data-group={record.group ?? ""} data-color-field={layer.colorBy ?? ""}>
                     {layer.mark === "band" && <polygon className="chart-composite-band"
                       points={vertices + " " + lower} fill={color} fillOpacity={0.24} stroke={color}
@@ -145,7 +152,7 @@ export function CompositeChartMarks({ chartData, theme, width, height, onHover, 
                           ...tooltipPositionFromEvent(event, wrapperRef),
                         })}
                         onPointerLeave={compact ? undefined : () => onHover(null)} />)}
-                    {hasSelection && layer.mark !== "point" && highlighted.map(index =>
+                    {hasSelection && highlighted.map(index =>
                       <circle key={"selected-" + index} className="chart-composite-linked-highlight"
                         data-index={index} data-selected="true"
                         cx={x(spec.numbers[layer.x][index])} cy={y(spec.numbers[layer.y][index])}

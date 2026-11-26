@@ -6,6 +6,7 @@
  * consistent across independent mark layers and across zoom levels.
  */
 import type { ChartCompositeSpecRow } from "../../../lib/bridge-core/generated/scene-state";
+import { compositeFacets, compositeGroups } from "./compositeGeometry";
 
 export interface CompositeDataRect {
   x: [number, number];
@@ -67,4 +68,24 @@ export function brushPixelToData(
       : domain[0] + t * (domain[1] - domain[0]);
   }
   return { x: interpolate(xDomain, px, xLog), y: interpolate(yDomain, 1 - py, yLog) };
+}
+
+/** Per-group cap on linked selection highlights drawn in one panel. */
+export function compositeHighlightBudget(compact: boolean): number {
+  return compact ? 24 : 250;
+}
+
+/** True when some group has more selected rows than the highlight budget,
+ * so the drawn highlights are a display sample of the exact selection. */
+export function compositeHighlightsSampled(spec: ChartCompositeSpecRow,
+  selectedIndices: readonly number[]): boolean {
+  if (selectedIndices.length <= compositeHighlightBudget(false)) return false;
+  const selected = new Set(selectedIndices);
+  const budget = compositeHighlightBudget(false);
+  return compositeFacets(spec).some(facet => spec.layers.some(layer =>
+    compositeGroups(spec, layer, facet).some(record => {
+      let count = 0;
+      for (const index of record.indices) if (selected.has(index) && ++count > budget) return true;
+      return false;
+    })));
 }
