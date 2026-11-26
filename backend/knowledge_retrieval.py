@@ -26,6 +26,13 @@ _RERANK_CANDIDATE_MULTIPLIER = 4
 _MAX_CANDIDATES_PER_INDEX = 100
 _NEAR_DUPLICATE_JACCARD = 0.85
 _TOKEN_RE = re.compile(r"\w+", flags=re.UNICODE)
+# A quantity with its comparison operator, sign and following unit word.
+# Word-only tokens drop all three, which made "+5 volts" equal "-5 volts".
+_QUANTITY_RE = re.compile(
+    r"(<=|>=|[<>≤≥≈~=±])?\s*([+\-−])?(?<![\w.])(\d+(?:[.,]\d+)*(?:[eE][+\-]?\d+)?)\s*(%|[^\W\d_]+)?",
+    flags=re.UNICODE,
+)
+_NEGATIONS = frozenset({"no", "not", "never", "none", "without", "cannot", "neither", "nor"})
 
 
 def reciprocal_rank_fusion(result_lists: list[list[dict]], *, k: int = DEFAULT_RRF_K) -> list[dict]:
@@ -57,6 +64,20 @@ def reciprocal_rank_fusion(result_lists: list[list[dict]], *, k: int = DEFAULT_R
 
 def _normalized_tokens(text: str) -> tuple[str, ...]:
     return tuple(_TOKEN_RE.findall(text.casefold()))
+
+
+def _material_signature(text: str, tokens: tuple[str, ...]) -> tuple:
+    """Facts that approximate similarity must never merge across.
+
+    Two passages that differ in a signed value, comparison, unit or a
+    negation report different evidence even when their wording matches.
+    """
+    quantities = sorted(
+        (operator or "", "-" if sign in ("-", "−") else "", number, (unit or "").casefold())
+        for operator, sign, number, unit in _QUANTITY_RE.findall(text.casefold())
+    )
+    negations = sorted(token for token in tokens if token in _NEGATIONS or token.endswith("n't"))
+    return tuple(quantities), tuple(negations)
 
 
 def _near_duplicate(left_tokens: tuple[str, ...], right_tokens: tuple[str, ...]) -> bool:
@@ -93,16 +114,19 @@ def _near_duplicate(left_tokens: tuple[str, ...], right_tokens: tuple[str, ...])
 def remove_near_duplicates(results: list[dict], *, k: int) -> list[dict]:
     """Keep the highest-ranked representative of each near-duplicate group."""
     chosen: list[dict] = []
-    chosen_tokens: list[tuple[str, ...]] = []
+    chosen_keys: list[tuple[tuple[str, ...], tuple]] = []
     for candidate in results:
-        tokens = _normalized_tokens(candidate["text"])
+        text = candidate["text"]
+        tokens = _normalized_tokens(text)
+        signature = _material_signature(text, tokens)
+        # Conflicting measurements are kept with their own citations.
         if any(
-            _near_duplicate(tokens, prior_tokens)
-            for prior_tokens in chosen_tokens
+            signature == prior_signature and _near_duplicate(tokens, prior_tokens)
+            for prior_tokens, prior_signature in chosen_keys
         ):
             continue
         chosen.append(candidate)
-        chosen_tokens.append(tokens)
+        chosen_keys.append((tokens, signature))
         if len(chosen) == k:
             break
     return chosen
