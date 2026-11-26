@@ -89,7 +89,7 @@ BACKUP_FILENAME_PREFIX = "knowledge-"
 # a mid-batch crash without re-snapshotting on every single document.
 BACKUP_CADENCE_SECONDS = 600.0
 
-KNOWLEDGE_DB_SCHEMA_VERSION = 9
+KNOWLEDGE_DB_SCHEMA_VERSION = 10
 
 
 def display_source_label(source_uri: str, title: str = "") -> str:
@@ -452,6 +452,27 @@ def _migration_009_watched_folders(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_watched_folder_files_uri ON watched_folder_files (source_uri)")
 
 
+def _migration_010_retained_sources(conn: sqlite3.Connection) -> None:
+    """Record every retained non-file source (web page, harness note) that
+    owns a deduplicated document, independently of its canonical URI.
+
+    Before this, a URL retained after a file with identical text recorded
+    nothing, so re-indexing or removing that file deleted the URL's only
+    copy (#1085). No historical rows are inferred: a document whose
+    canonical URI is already a non-file source stays protected by that.
+    """
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS retained_sources (
+            document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+            source_uri TEXT NOT NULL,
+            title TEXT NOT NULL,
+            PRIMARY KEY (document_id, source_uri)
+        )
+        """
+    )
+
+
 _MIGRATIONS: dict[int, Callable[[sqlite3.Connection], None]] = {
     1: _migration_001_initial_schema,
     2: _migration_002_fts5_lexical_index,
@@ -462,6 +483,7 @@ _MIGRATIONS: dict[int, Callable[[sqlite3.Connection], None]] = {
     7: _migration_007_file_sources,
     8: _migration_008_document_size,
     9: _migration_009_watched_folders,
+    10: _migration_010_retained_sources,
 }
 
 
@@ -675,6 +697,7 @@ def add_document_with_chunks(
     collection_id: int = 0,
     notifications: NotificationState | None = None,
     last_saved: dict[str, Any] | None = None,
+    retained_source: bool = False,
 ) -> IngestOutcome:
     """The one write entry point for stage 17.1's ingestion pipeline:
     content-hash idempotency check, then (only on a genuine miss) one
@@ -693,13 +716,26 @@ def add_document_with_chunks(
     `last_saved`/`notifications` are optional and threaded straight to
     maybe_backup_before_write/the corruption-rescue path respectively -
     omitted (None) by any caller that does not want either (e.g. a unit
-    test using a throwaway tmp_path db)."""
+    test using a throwaway tmp_path db).
+
+    `retained_source=True` records `source_uri` as an independent owner of
+    the (possibly shared) document, so it survives the departure of any
+    file alias with identical text."""
     conn = _connect(db_path, notifications=notifications)
+
+    def retain(document_id: int) -> None:
+        if retained_source:
+            conn.execute(
+                "INSERT OR IGNORE INTO retained_sources (document_id, source_uri, title) VALUES (?, ?, ?)",
+                (document_id, source_uri, title),
+            )
+
     try:
         hash_value = content_hash(text)
         with conn:
             existing_id = get_document_by_hash(conn, content_hash_value=hash_value, collection_id=collection_id)
             if existing_id is not None:
+                retain(existing_id)
                 existing_count = conn.execute(
                     "SELECT COUNT(*) FROM chunks WHERE document_id = ?", (existing_id,),
                 ).fetchone()[0]
@@ -733,6 +769,7 @@ def add_document_with_chunks(
                 existing_id = get_document_by_hash(conn, content_hash_value=hash_value, collection_id=collection_id)
                 if existing_id is None:
                     raise  # the constraint rejected this INSERT for some other reason - do not mask it
+                retain(existing_id)
                 existing_count = conn.execute(
                     "SELECT COUNT(*) FROM chunks WHERE document_id = ?", (existing_id,),
                 ).fetchone()[0]
@@ -741,6 +778,7 @@ def add_document_with_chunks(
             # lastrowid is Optional only because it is None before the first
             # INSERT on a cursor; this reads it directly after one.
             document_id: int = cursor.lastrowid  # type: ignore[assignment]
+            retain(document_id)
             conn.executemany(
                 "INSERT INTO chunks (document_id, ordinal, text, token_count, offset_start, offset_end) "
                 "VALUES (?, ?, ?, ?, ?, ?)",
@@ -922,22 +960,11 @@ def upsert_file_with_chunks(
                     "DELETE FROM file_sources WHERE collection_id = ? AND source_uri = ?",
                     (collection_id, source_uri),
                 )
-                if old_id != existing:
-                    survivor = conn.execute(
-                        "SELECT source_uri FROM file_sources WHERE document_id = ? ORDER BY source_uri LIMIT 1",
-                        (old_id,),
-                    ).fetchone()
-                    if survivor is None:
-                        # Never delete a non-file document that happened to
-                        # share content with a file (e.g. a retained URL).
-                        if old[2] == source_uri:
-                            conn.execute("DELETE FROM documents WHERE id = ?", (old_id,))
-                    elif old[2] == source_uri:
-                        alternate = str(survivor[0])
-                        conn.execute(
-                            "UPDATE documents SET source_uri = ?, title = ? WHERE id = ?",
-                            (alternate, Path(alternate).name, old_id),
-                        )
+                # Never delete a document another source still owns: a
+                # canonical non-file URI, another file alias, or a
+                # retained URL deduplicated into it.
+                if old_id != existing and old[2] == source_uri:
+                    _release_canonical_file(conn, old_id)
 
             conn.execute(
                 "INSERT INTO file_sources (collection_id, source_uri, document_id) VALUES (?, ?, ?)",
@@ -1130,6 +1157,12 @@ def move_unscoped_documents_to_workspace(db_path: Path, workspace_id: int) -> in
                     "DELETE FROM file_sources WHERE collection_id = 0 AND document_id = ?",
                     (document_id,),
                 )
+                if existing_id is not None:
+                    conn.execute(
+                        "INSERT OR IGNORE INTO retained_sources (document_id, source_uri, title) "
+                        "SELECT ?, source_uri, title FROM retained_sources WHERE document_id = ?",
+                        (destination_id, document_id),
+                    )
                 if existing_id is None:
                     conn.execute(
                         "UPDATE documents SET collection_id = ? WHERE id = ?",
@@ -1369,6 +1402,32 @@ def track_watched_file(
         conn.close()
 
 
+def _surviving_owner(conn: sqlite3.Connection, document_id: int) -> tuple[str, str] | None:
+    """The source that should carry a document's citation once its
+    canonical file path leaves: another file alias first, then a retained
+    non-file source, each chosen deterministically by URI."""
+    row = conn.execute(
+        "SELECT source_uri FROM file_sources WHERE document_id = ? ORDER BY source_uri LIMIT 1",
+        (document_id,),
+    ).fetchone()
+    if row is not None:
+        return str(row[0]), Path(str(row[0])).name
+    row = conn.execute(
+        "SELECT source_uri, title FROM retained_sources WHERE document_id = ? ORDER BY source_uri LIMIT 1",
+        (document_id,),
+    ).fetchone()
+    return (str(row[0]), str(row[1])) if row is not None else None
+
+
+def _release_canonical_file(conn: sqlite3.Connection, document_id: int) -> None:
+    """Delete a document whose canonical file left, unless a source still owns it."""
+    owner = _surviving_owner(conn, document_id)
+    if owner is None:
+        conn.execute("DELETE FROM documents WHERE id = ?", (document_id,))
+    else:
+        conn.execute("UPDATE documents SET source_uri = ?, title = ? WHERE id = ?", (*owner, document_id))
+
+
 def _unlink_file_source(conn: sqlite3.Connection, collection_id: int, source_uri: str) -> None:
     """Unlink one disappeared path while retaining shared-content documents."""
     row = conn.execute(
@@ -1386,18 +1445,7 @@ def _unlink_file_source(conn: sqlite3.Connection, collection_id: int, source_uri
     )
     if canonical_uri != source_uri:
         return  # a retained web/branch/other document owns this content
-    other = conn.execute(
-        "SELECT source_uri FROM file_sources WHERE document_id = ? ORDER BY source_uri LIMIT 1",
-        (document_id,),
-    ).fetchone()
-    if other is None:
-        conn.execute("DELETE FROM documents WHERE id = ?", (document_id,))
-    else:
-        replacement = str(other[0])
-        conn.execute(
-            "UPDATE documents SET source_uri = ?, title = ? WHERE id = ?",
-            (replacement, Path(replacement).name, document_id),
-        )
+    _release_canonical_file(conn, document_id)
 
 
 def reconcile_watched_files(
