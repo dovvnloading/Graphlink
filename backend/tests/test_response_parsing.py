@@ -32,24 +32,35 @@ def test_single_fenced_code_block_with_language_produces_text_then_code():
     ]
 
 
-def test_two_fenced_code_blocks_collapse_into_one_combined_code_part():
+def test_mixed_language_fences_become_separate_code_parts():
+    # #1102: deliberately replaces the legacy contract that merged every
+    # fence into one Python-labelled artifact with a separator comment.
     response = (
         "Two snippets:\n"
-        "```python\nprint('one')\n```\n"
+        "```python\nprint('server')\n```\n"
         "and\n"
-        "```javascript\nconsole.log('two')\n```"
+        "```javascript\nconst greeting = 'client';\n```"
     )
     result = parse_response(response)
+    assert [p for p in result if p["type"] == "code"] == [
+        {"type": "code", "language": "python", "content": "print('server')"},
+        {"type": "code", "language": "javascript", "content": "const greeting = 'client';"},
+    ]
     text_parts = [p for p in result if p["type"] == "text"]
-    code_parts = [p for p in result if p["type"] == "code"]
-    assert len(code_parts) == 1
-    code_part = code_parts[0]
-    assert code_part["language"] == "python", "language comes from the FIRST fence only"
-    assert code_part["content"] == (
-        "print('one')\n\n# --- Next Code Block ---\n\nconsole.log('two')"
-    )
-    assert len(text_parts) == 1
-    assert "```" not in text_parts[0]["content"]
+    assert len(text_parts) == 1 and "```" not in text_parts[0]["content"]
+    assert "Next Code Block" not in str(result)
+
+
+def test_same_language_fences_stay_separate_and_keep_indentation():
+    response = "```python\n    indented = True\n```\n```python\nsecond = 2\n```"
+    assert [p["content"] for p in parse_response(response)] == ["    indented = True", "second = 2"]
+
+
+def test_fence_metadata_and_nested_shorter_fences_still_parse():
+    response = "````markdown title=readme.md\nUse:\n```sh\nmake\n```\n````"
+    assert parse_response(response) == [
+        {"type": "code", "language": "markdown", "content": "Use:\n```sh\nmake\n```"},
+    ]
 
 
 def test_code_block_tag_with_nested_fences_takes_the_inner_fence_branch():

@@ -40,6 +40,11 @@ PLACEHOLDER_ASSISTANT_REASONING = "[Assistant Reasoning]"
 PLACEHOLDER_EMPTY_RESPONSE = "[Empty Response]"
 
 
+def _snippet(code: str) -> str:
+    """Trim blank lines around a fenced body but keep its first-line indent."""
+    return re.sub(r"\A(?:[ \t]*\r?\n)+", "", code).rstrip()
+
+
 def _fence_language(match: re.Match[str]) -> str:
     tokens = match.group("info").split(maxsplit=1)
     return tokens[0] if tokens else ""
@@ -63,9 +68,11 @@ def parse_response(response_text: str) -> list[dict]:
     Based on graphlink_window_actions.py's WindowActionsMixin._parse_response.
     The returned list, when multiple types are present, is always ordered
     thinking (if any), then text (if any), then code (if any) - never
-    interleaved, never more than one of each type. The "language" key exists
-    ONLY on code-type parts; thinking/text parts have exactly the two keys
-    {"type", "content"}.
+    interleaved. There is at most one thinking and one text part, and one
+    code part per fenced block, each with its own language and source in
+    display order; snippets are never concatenated (#1102). The "language"
+    key exists ONLY on code-type parts; thinking/text parts have exactly
+    the two keys {"type", "content"}.
     """
     parts: list[dict] = []
 
@@ -74,8 +81,7 @@ def parse_response(response_text: str) -> list[dict]:
         parts.append({"type": "thinking", "content": thinking_content})
 
     text_content = ""
-    code_snippets: list[str] = []
-    language = ""
+    snippets: list[tuple[str, str]] = []
 
     code_block_match = CODE_BLOCK_TAG_PATTERN.search(remaining_text)
     if code_block_match:
@@ -85,15 +91,13 @@ def parse_response(response_text: str) -> list[dict]:
         ).strip()
         inner_matches = list(CODE_FENCE_PATTERN.finditer(code_content_raw))
         if inner_matches:
-            language = _fence_language(inner_matches[0])
-            code_snippets = [m.group("code").strip() for m in inner_matches]
+            snippets = [(_fence_language(m), _snippet(m.group("code"))) for m in inner_matches]
         else:
-            code_snippets = [code_content_raw]
+            snippets = [("", code_content_raw)]
     else:
         matches = list(CODE_FENCE_PATTERN.finditer(remaining_text))
         if matches:
-            language = _fence_language(matches[0])
-            code_snippets = [m.group("code").strip() for m in matches]
+            snippets = [(_fence_language(m), _snippet(m.group("code"))) for m in matches]
             text_content = CODE_FENCE_PATTERN.sub("", remaining_text).strip()
         else:
             text_content = remaining_text.strip()
@@ -101,10 +105,9 @@ def parse_response(response_text: str) -> list[dict]:
     if text_content:
         parts.append({"type": "text", "content": text_content})
 
-    if code_snippets:
-        combined_code = "\n\n# --- Next Code Block ---\n\n".join(code_snippets).strip()
-        if combined_code:
-            parts.append({"type": "code", "language": language, "content": combined_code})
+    for language, snippet in snippets:
+        if snippet:
+            parts.append({"type": "code", "language": language, "content": snippet})
 
     if not parts and response_text.strip():
         return [{"type": "text", "content": response_text.strip()}]
