@@ -168,6 +168,26 @@ class WorkflowAutomation:
                                     (workspace_id,))
             return [json.loads(row[0]) for row in rows]
 
+    def get(self, workspace_id: int, preset_id: str):
+        """One complete approved preset, or None."""
+        with self.connection() as conn:
+            row = conn.execute("SELECT payload FROM workflow_presets WHERE workspace_id=? AND preset_id=?",
+                               (workspace_id, preset_id)).fetchone()
+        return None if row is None else json.loads(row[0])
+
+    def scheduled(self):
+        """Trigger metadata for presets that have one. The poll never loads
+        or decodes approved requests; manual-only presets are not returned."""
+        with self.connection() as conn:
+            rows = conn.execute("""
+                SELECT preset_id, workspace_id, json_extract(payload, '$.trigger')
+                FROM workflow_presets
+                WHERE json_type(payload, '$.trigger') = 'object'
+                ORDER BY preset_id
+            """).fetchall()
+        return [{"preset_id": preset_id, "workspace_id": workspace_id, "trigger": json.loads(trigger)}
+                for preset_id, workspace_id, trigger in rows]
+
     def list_summaries(self, workspace_id: int):
         """Only the metadata shown by the operator UI, not approved requests."""
         with self.connection() as conn:
@@ -197,7 +217,11 @@ class WorkflowAutomation:
 
     def run(self, workspace_id: int, preset_id: str, *, operation_id: str | None = None,
             request: dict | None = None):
-        preset = next((p for p in self.list(workspace_id) if p["preset_id"] == preset_id), None)
+        return self.start_preset(self.get(workspace_id, preset_id), operation_id=operation_id, request=request)
+
+    def start_preset(self, preset: dict | None, *, operation_id: str | None = None,
+                     request: dict | None = None):
+        """Admit an already loaded preset; the caller fetched it by exact ID."""
         if preset is None:
             raise ValueError("Workflow preset not found.")
         if request is not None and canonical(request) != canonical(preset["request"]):
@@ -206,12 +230,12 @@ class WorkflowAutomation:
         if operation_id is not None:
             if not isinstance(operation_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{8,100}", operation_id):
                 raise ValueError("Use an operation ID of 8–100 letters, digits, underscores or hyphens.")
-            existing = engine.store.operation_run(workspace_id, operation_id, preset_id)
+            existing = engine.store.operation_run(preset["workspace_id"], operation_id, preset["preset_id"])
             if existing is not None:
                 return existing
         policy = UnattendedPolicy(preset["fingerprint"], frozenset(preset["allowed_effects"]), preset["cost_usd"])
-        return engine.start(workspace_id, *self.resolve(preset["request"]), unattended=policy,
-                            preset_id=preset_id, operation_id=operation_id)
+        return engine.start(preset["workspace_id"], *self.resolve(preset["request"]), unattended=policy,
+                            preset_id=preset["preset_id"], operation_id=operation_id)
 
     def start(self):
         if self.task is None:
@@ -228,15 +252,13 @@ class WorkflowAutomation:
         # Do not create a database just to discover that no presets exist.
         if not self.db_path.is_file():
             return
-        presets = await asyncio.to_thread(self.list)
+        presets = await asyncio.to_thread(self.scheduled)
         live = {p["preset_id"] for p in presets}
         self._baselines = {key: value for key, value in self._baselines.items() if key in live}
         monotonic = time.monotonic() if monotonic is None else monotonic
         now = datetime.now() if now is None else now
         for preset in presets:
             trigger = preset["trigger"]
-            if trigger is None:
-                continue
             key = preset["preset_id"]
             old = self._baselines.get(key)
             kind = trigger["kind"]
@@ -257,7 +279,9 @@ class WorkflowAutomation:
                 try:
                     # Advance the baseline before admission. A busy/deleted
                     # workflow is skipped, not enqueued or caught up later.
-                    self.run(preset["workspace_id"], key)
+                    # Only the firing preset's full request is read, off the loop.
+                    full = await asyncio.to_thread(self.get, preset["workspace_id"], key)
+                    self.start_preset(full)
                 except (ValueError, PermissionError, KeyError):
                     log.info("Skipped workflow preset trigger (busy, changed or invalid preset).")
 
