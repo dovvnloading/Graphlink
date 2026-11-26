@@ -372,6 +372,12 @@ semantic search pauses and keyword search continues. Caches written before
 revisions were recorded (`ollama:<tag>` with no `@`) are never reused; reset
 that exact ID with the command below to reclaim their space.
 
+Ollama embedding requests also disable Ollama's silent input truncation. A
+passage longer than the model's context window is reported as an indexing
+error and left pending instead of being cached from a partial embedding.
+Tag-only caches from before these changes, which may hold such partial
+vectors, are never reused.
+
 OpenAI-compatible responses are paired with chunks by each item's `index`,
 not by array order. A batch with a missing, duplicate or out-of-range index
 is rejected and left pending. Before this check, an endpoint or proxy that

@@ -142,11 +142,16 @@ def chunk_text(
             # it alone exceeds the overlap budget (a single huge trailing
             # piece is still better overlap-context than none at all, and
             # `_hard_split` above already bounds how huge "huge" can be).
+            # That forced piece is skipped when it would push the new
+            # chunk past target_tokens, so overlap never exceeds the
+            # chunk's own budget (#1097).
             overlap_pieces: list[tuple[int, int, str]] = []
             overlap_total = 0
             for piece in reversed(current):
                 piece_tok = estimator.count_tokens(piece[2])
                 if overlap_pieces and overlap_total + piece_tok > overlap_tokens:
+                    break
+                if not overlap_pieces and piece_tok > overlap_tokens and piece_tok + piece_tokens > target_tokens:
                     break
                 overlap_pieces.insert(0, piece)
                 overlap_total += piece_tok
