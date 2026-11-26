@@ -1001,15 +1001,21 @@ def _t_test_power_at(n, effect, alpha, tails, design):
     return _probability(area * (thi - tlo) / 2)
 
 
-def _required_size(target, method):
+_MAX_SAMPLE_SIZE = 1000000
+
+
+def _required_size(target, method, maximum=_MAX_SAMPLE_SIZE):
+    """Smallest n in [3, maximum] whose power reaches target (power is
+    nondecreasing in n). The doubling probe is clamped to the maximum so
+    the last stretch of the supported range is searched too."""
     low, high = 3, 3
     if method(low) >= target:
         return low
     while method(high) < target:
-        low = high
-        high *= 2
-        if high > 1000000:
+        if high == maximum:
             raise ValueError("Target power needs more than 1,000,000 observations per group.")
+        low = high
+        high = min(high * 2, maximum)
     while high - low > 1:
         mid = (low + high) // 2
         if method(mid) >= target:
