@@ -155,6 +155,12 @@ class Command:
     edge_after: dict[str, "SceneEdge | None"] = field(default_factory=dict)
     asset_before: dict[str, "tuple[bytes, str] | None"] = field(default_factory=dict)
     asset_after: dict[str, "tuple[bytes, str] | None"] = field(default_factory=dict)
+    # Edge dict order is semantic: the first eligible legacy incoming edge
+    # is a node's canonical parent. Restoring per-id snapshots alone would
+    # append a re-created edge at the end and change ancestry (#1091), so
+    # an edge-changing command also records the full ordered id list.
+    edge_order_before: "tuple[str, ...] | None" = None
+    edge_order_after: "tuple[str, ...] | None" = None
     # ADR-010 close-out: navigation pins live in a SEPARATE store
     # (SceneDocument.pins, a NavigationPinStore) - not self.nodes/self.edges,
     # so they need their own snapshot shape, not another dict-by-id like the
@@ -226,6 +232,7 @@ class Command:
         entirely)."""
         _restore(document.nodes, self.node_before)
         _restore(document.edges, self.edge_before)
+        _reorder(document.edges, self.edge_order_before)
         _restore(document.image_assets, self.asset_before)
         if self.pin_before is not None:
             # reset() replaces the WHOLE store, unlike _restore's per-key
@@ -253,11 +260,26 @@ class Command:
         REDO, applying a previously-inverted command a second time."""
         _restore(document.nodes, self.node_after)
         _restore(document.edges, self.edge_after)
+        _reorder(document.edges, self.edge_order_after)
         _restore(document.image_assets, self.asset_after)
         if self.pin_after is not None:
             document.pins.reset(list(self.pin_after))
         if self.pointers_after is not None:
             self.pointers_after.restore(document)
+
+
+def _reorder(live: dict, order: "tuple[str, ...] | None") -> None:
+    """Put `live` back in the recorded key order, in place.
+
+    Keys the snapshot does not know (added by a later command that is not
+    being inverted) keep their relative order after the recorded ones.
+    """
+    if order is None or tuple(live) == order:
+        return
+    ordered = {key: live[key] for key in order if key in live}
+    ordered.update((key, value) for key, value in live.items() if key not in ordered)
+    live.clear()
+    live.update(ordered)
 
 
 def _restore(live: dict, snapshot: dict) -> None:
@@ -507,6 +529,10 @@ def _merge_commands(command_type, provenance, commands, run_id=None):
         # union - "first write wins" for before/"last write wins" for after
         # means literally the first non-None pin_before seen and the last
         # non-None pin_after seen, same ordering rule as the dicts above.
+        if command.edge_order_before is not None and merged.edge_order_before is None:
+            merged.edge_order_before = command.edge_order_before
+        if command.edge_order_after is not None:
+            merged.edge_order_after = command.edge_order_after
         if command.pin_before is not None and merged.pin_before is None:
             merged.pin_before = command.pin_before
         if command.pin_after is not None:
@@ -646,7 +672,8 @@ class CommandOps(SceneDocumentParts):
                 asset_snapshot_before[asset_id] = self.image_assets[asset_id]
 
         node_ids_before = set(self.nodes.keys())
-        edge_ids_before = set(self.edges.keys())
+        edge_order_before = tuple(self.edges)
+        edge_ids_before = set(edge_order_before)
         asset_ids_before = set(self.image_assets.keys())
         # ADR-010 close-out: pins are ALWAYS defensively watched as one
         # whole-store unit, unconditionally, the same "always watch, no
@@ -744,6 +771,8 @@ class CommandOps(SceneDocumentParts):
             node_after=node_after_out,
             edge_before=edge_before_out,
             edge_after=edge_after_out,
+            edge_order_before=edge_order_before if edge_before_out else None,
+            edge_order_after=tuple(self.edges) if edge_before_out else None,
             asset_before=asset_before_out,
             asset_after=asset_after_out,
             pin_before=pin_before_out,
