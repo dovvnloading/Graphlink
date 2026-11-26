@@ -496,13 +496,26 @@ class BranchOps(SceneDocumentParts):
         kinds are excluded on purpose - grep confirms neither ever has a
         parent_content_node attribute in legacy, so they structurally can never
         attach to a ChatNode this way."""
-        child_ids = []
-        for edge in self.edges.values():
-            if edge.source != chat_node_id:
+        # Only the reply's OWN artifacts: the reply must be the child's
+        # canonical structural parent. Reference, secondary and association
+        # links never authorize deletion, and a child something else also
+        # links to is kept - only this reply's links to it are removed (#1101).
+        child_ids: list[str] = []
+        detach_edge_ids: list[str] = []
+        for child_id in dict.fromkeys(e.target for e in self.edges.values() if e.source == chat_node_id):
+            child = self.nodes.get(child_id)
+            if child is None or child.kind not in ("code", "document", "image", "thinking"):
                 continue
-            child = self.nodes.get(edge.target)
-            if child is not None and child.kind in ("code", "document", "image", "thinking"):
-                child_ids.append(child.id)
+            owner = self._branch_parent_edge(child_id)
+            if owner is None or owner.source != chat_node_id:
+                continue
+            if any(e.target == child_id and e.source != chat_node_id for e in self.edges.values()):
+                detach_edge_ids.extend(
+                    e.id for e in self.edges.values() if e.source == chat_node_id and e.target == child_id)
+            else:
+                child_ids.append(child_id)
+        if detach_edge_ids:
+            self.remove_edges(detach_edge_ids)
         self.remove_nodes(child_ids)
 
     def resolve_generate_image(self, chat_node_id: str) -> tuple[str, str]:
