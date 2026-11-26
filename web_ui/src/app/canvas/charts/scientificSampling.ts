@@ -12,15 +12,27 @@ export function scientificMarkIndices(
   budget = MAX_SCIENTIFIC_SVG_POINTS,
   kind: "line" | "scatter" = "scatter",
   errors?: ErrorPair[] | null,
+  xErrors?: ErrorPair[] | null,
 ): number[] {
   const visible: number[] = [];
+  const within = (value: number, range: [number, number]) => value >= range[0] && value <= range[1];
+  const overlaps = (low: number, high: number, range: [number, number]) => low <= range[1] && high >= range[0];
   for (let i = 0; i < ys.length; i++) {
+    if (!viewport) {
+      visible.push(i);
+      continue;
+    }
     const x = xs[i];
     const y = ys[i];
-    if (!viewport || (
-      x >= viewport.x[0] && x <= viewport.x[1] &&
-      (kind === "line" || (y >= viewport.y[0] && y <= viewport.y[1]))
-    )) visible.push(i);
+    const yVisible = kind === "line" || within(y, viewport.y);
+    // An observation whose center is outside the viewport still counts
+    // when its whisker crosses it; the SVG clip path trims the rest.
+    const xe = xErrors?.[i];
+    const ye = errors?.[i];
+    const horizontal = xe ? overlaps(x - xe[0], x + xe[1], viewport.x) : within(x, viewport.x);
+    const vertical = kind === "scatter" && !!ye && within(x, viewport.x)
+      && overlaps(y - ye[0], y + ye[1], viewport.y);
+    if ((horizontal && yVisible) || vertical) visible.push(i);
   }
   if (visible.length <= budget) return visible;
   const indexes = new Set<number>();
