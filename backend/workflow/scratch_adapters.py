@@ -4,6 +4,8 @@ from __future__ import annotations
 import csv
 import io
 import json
+import math
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -63,6 +65,27 @@ class GraphNoteAdapter:
         pass
 
 
+# Largest integer every JSON consumer (including JavaScript) reads exactly.
+_MAX_SAFE_INTEGER = 2 ** 53 - 1
+
+
+def _json_number(text: str) -> int | float:
+    """Exact numeric value of a decimal total, or a clear error.
+
+    Never silently degrades to text or to a rounded number.
+    """
+    total = Decimal(text)
+    if total == total.to_integral_value():
+        whole = int(total)
+        if abs(whole) <= _MAX_SAFE_INTEGER:
+            return whole
+    else:
+        number = float(total)
+        if math.isfinite(number) and Decimal(repr(number)) == total:
+            return number
+    raise ValueError(f"The group total {text} cannot be represented exactly as a JSON number.")
+
+
 class GraphGroupSumAdapter:
     adapter_id = "graph.group_sum"
     adapter_version = "1"
@@ -109,7 +132,9 @@ class GraphGroupSumAdapter:
             if kind == "artifact":
                 return TextValue(result)
             columns, *rows = csv.reader(io.StringIO(result))
-            return TableValue(tuple(columns), tuple(tuple(row) for row in rows))
+            # The legacy canvas renders totals as CSV text; restore numbers
+            # so typed numeric filters and sorts downstream work (#1095).
+            return TableValue(tuple(columns), tuple((row[0], _json_number(row[1])) for row in rows))
         finally:
             document.remove_nodes([source.id] if target is None else [source.id, target.id])
 
