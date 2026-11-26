@@ -21,6 +21,7 @@ _quarantine_corrupt_chats_db docstring for the same call made elsewhere).
 
 from __future__ import annotations
 
+import posixpath
 import re
 from contextlib import contextmanager
 from tempfile import TemporaryDirectory
@@ -88,6 +89,73 @@ def _check_ooxml_archive(path: Path) -> None:
         ) from exc
 
 
+_XLSX_MAIN_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+_XLSX_OFFICE_REL_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+_XLSX_PACKAGE_REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
+_XLSX_MAX_COLUMN = 16_384
+_XLSX_MAX_ROW = 1_048_576
+
+
+def _xlsx_letters(column: int) -> str:
+    letters = ""
+    while column:
+        column, remainder = divmod(column - 1, 26)
+        letters = chr(65 + remainder) + letters
+    return letters
+
+
+def _xlsx_column(reference: str | None, fallback: int) -> int:
+    """1-based column of an A1 reference; sequential when it is absent."""
+    match = re.fullmatch(r"\$?([A-Za-z]{1,3})\$?\d+", reference or "")
+    if match is None:
+        if reference:
+            raise ValueError("invalid cell reference")
+        column = fallback
+    else:
+        column = 0
+        for letter in match.group(1).upper():
+            column = column * 26 + ord(letter) - 64
+    if not 1 <= column <= _XLSX_MAX_COLUMN:
+        raise ValueError("cell column out of range")
+    return column
+
+
+def _xlsx_index(value: str | None, fallback: int) -> int:
+    row = int(value) if value else fallback
+    if not 1 <= row <= _XLSX_MAX_ROW:
+        raise ValueError("row number out of range")
+    return row
+
+
+def _xlsx_sheets(workbook: ZipFile, xml_part) -> list[tuple[str, str]]:
+    """Worksheets in workbook order with their real names.
+
+    Resolved through the workbook relationships, like the workspace-agent
+    reader; chartsheets and external targets are skipped. A package with
+    no workbook part falls back to the worksheet file names.
+    """
+    names = set(workbook.namelist())
+    if not {"xl/workbook.xml", "xl/_rels/workbook.xml.rels"} <= names:
+        return [(Path(name).stem, name) for name in sorted(
+            name for name in names if re.fullmatch(r"xl/worksheets/sheet\d+\.xml", name))]
+    targets = {}
+    for item in xml_part("xl/_rels/workbook.xml.rels").findall(f"{{{_XLSX_PACKAGE_REL_NS}}}Relationship"):
+        target = item.get("Target") or ""
+        if not item.get("Type", "").endswith("/worksheet") or item.get("TargetMode") == "External":
+            continue
+        resolved = posixpath.normpath(target.lstrip("/") if target.startswith("/") else posixpath.join("xl", target))
+        if resolved.startswith("xl/") and resolved.endswith(".xml") and resolved in names:
+            targets[item.get("Id")] = resolved
+    sheets = xml_part("xl/workbook.xml").find(f"{{{_XLSX_MAIN_NS}}}sheets")
+    if sheets is None:
+        return []
+    return [
+        ((sheet.get("name") or "Unnamed").strip() or "Unnamed", member)
+        for sheet in sheets.findall(f"{{{_XLSX_MAIN_NS}}}sheet")
+        if (member := targets.get(sheet.get(f"{{{_XLSX_OFFICE_REL_NS}}}id"))) is not None
+    ]
+
+
 def _extract_xlsx(path: Path) -> str:
     """Read OOXML cell values without writing files or executing macros.
 
@@ -125,21 +193,26 @@ def _extract_xlsx(path: Path) -> str:
                     if shared_total > MAX_DOCUMENT_TEXT_CHARS:
                         raise IngestError("Spreadsheet text exceeds the indexing limit.")
 
-            sheets = sorted(
-                name for name in workbook.namelist()
-                if re.fullmatch(r"xl/worksheets/sheet\d+\.xml", name)
-            )
+            sheets = _xlsx_sheets(workbook, xml_part)
             if not sheets:
                 raise IngestError("Spreadsheet contains no readable worksheets.")
             lines: list[str] = []
             total = 0
             cells_found = False
-            for name in sheets:
-                lines.append(f"# {Path(name).stem}")
+            for title, name in sheets:
+                lines.append(f"# {title}")
                 root = xml_part(name)
+                previous_row = 0
                 for row in root.iter(ns + "row"):
+                    # Excel omits blank cells, so every value carries its own
+                    # cell reference; position alone would move a value into
+                    # another column (#1098).
+                    row_number = _xlsx_index(row.get("r"), previous_row + 1)
+                    previous_row = row_number
                     values = []
+                    column = 0
                     for cell in row.findall(ns + "c"):
+                        column = _xlsx_column(cell.get("r"), column + 1)
                         value = cell.find(ns + "v")
                         kind = cell.get("t")
                         if kind == "inlineStr":
@@ -157,8 +230,9 @@ def _extract_xlsx(path: Path) -> str:
                         else:
                             formula = cell.find(ns + "f")
                             text = (formula.text or "") if formula is not None else ""
-                        values.append(text)
-                    if any(value.strip() for value in values):
+                        if text.strip():
+                            values.append(f"{_xlsx_letters(column)}{row_number}: {text}")
+                    if values:
                         cells_found = True
                         line = "\t".join(values)
                         total += len(line) + 1

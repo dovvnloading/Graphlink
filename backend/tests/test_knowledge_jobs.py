@@ -130,8 +130,9 @@ def test_xlsx_imports_shared_strings_inline_strings_and_numbers(tmp_path):
             '<c r="A2" t="s"><v>1</v></c></row></sheetData></worksheet>',
         )
     text, mime = extract_text(file)
-    assert "header\tinline\t42" in text
-    assert "shared value" in text
+    # Each value keeps its cell reference (#1098).
+    assert "A1: header\tB1: inline\tC1: 42" in text
+    assert "A2: shared value" in text
     assert "spreadsheetml.sheet" in mime
     bad = tmp_path / "bad.xlsx"
     bad.write_bytes(b"not a zip file")
