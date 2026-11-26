@@ -231,6 +231,61 @@ def test_presets_pin_parameters_and_triggers_never_backfill(tmp_path):
     asyncio.run(scenario())
 
 
+def test_preset_poll_never_loads_manual_or_idle_preset_requests(tmp_path, monkeypatch):
+    """#1082: the idle scheduler projects trigger metadata only."""
+    import tracemalloc
+    from backend.workflow.api import WorkflowService
+
+    async def scenario():
+        path = tmp_path / "chats.db"
+        workspace = chat_library.get_default_workspace_id(path)
+        with closing(chat_library._connect(path)) as conn, conn:
+            pin = store.save(conn, example(), name="Automation")
+        service = WorkflowService(path)
+        automation = service.automation
+        request = {"workflow_id": pin["workflow_id"], "revision": pin["revision"],
+                   "inputs": {"input": "one two"}, "parameters": {"operation": "word_count"}}
+        preview = automation.preview(request)
+        body = {"request": request, "name": "Count", "allowed_effects": ["pure"],
+                "cost_usd": 0, "fingerprint": preview["fingerprint"], "approved": True,
+                "trigger": {"kind": "interval", "seconds": 10}}
+        scheduled = automation.save(workspace, body)
+        # 99 manual-only presets with ~990 KB requests, the supported maximum.
+        bulk = "x" * 990_000
+        with closing(chat_library._connect(path)) as conn, conn:
+            for i in range(99):
+                payload = {"preset_id": f"manual{i:04d}", "workspace_id": workspace, "name": "Manual",
+                           "request": {"padding": bulk}, "allowed_effects": ["pure"], "cost_usd": 0,
+                           "trigger": None, "fingerprint": "f", "workflow_id": "w", "revision": "r",
+                           "created_at": "2026-01-01T00:00:00Z"}
+                conn.execute("INSERT INTO workflow_presets VALUES (?, ?, ?)",
+                             (payload["preset_id"], workspace, json.dumps(payload)))
+
+        fetched = []
+        real_get = automation.get
+        monkeypatch.setattr(automation, "list", lambda *a, **k: pytest.fail("poll loaded full presets"))
+        monkeypatch.setattr(automation, "get", lambda ws, pid: fetched.append(pid) or real_get(ws, pid))
+
+        tracemalloc.start()
+        await automation.tick(monotonic=0)
+        _, peak = tracemalloc.get_traced_memory()
+        tracemalloc.stop()
+        # Decoding even one manual request would allocate about 1 MB.
+        assert peak < 512 * 1024
+        assert fetched == []
+        assert automation.scheduled() == [{"preset_id": scheduled["preset_id"], "workspace_id": workspace,
+                                           "trigger": {"kind": "interval", "seconds": 10}}]
+
+        # When the interval fires, only that preset's request is fetched.
+        await automation.tick(monotonic=10)
+        assert fetched == [scheduled["preset_id"]]
+        rows = service.engine().store.list(workspace)
+        assert len(rows) == 1
+        assert (await service.engine().wait(workspace, rows[0]["run_id"]))["outputs"]["output"]["text"] == "2"
+        await service.shutdown()
+    asyncio.run(scenario())
+
+
 def test_builder_workflow_edits_preview_and_recheck_after_approval(tmp_path):
     from backend.domain.graph import SceneDocument
     from backend.providers.base import ToolCall
