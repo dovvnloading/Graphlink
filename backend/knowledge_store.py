@@ -1642,6 +1642,15 @@ def reindex_graph_content(
                     "SELECT id FROM documents WHERE source_uri = ?", (source_uri,)
                 ).fetchall()
             ]
+            # An unchanged node keeps its chunk row, so previously issued
+            # citations still open and its cached embeddings survive (#1089).
+            if node_chunks and len(existing_ids) == 1:
+                _update_graph_document_in_place(
+                    conn, int(existing_ids[0]), collection_id=collection_id, source_uri=source_uri,
+                    title=title, node_chunks=node_chunks, estimator=estimator,
+                )
+                conn.commit()
+                return
             for existing_id in existing_ids:
                 # ON DELETE CASCADE removes this document's own chunks rows,
                 # which fires chunks_fts' own AFTER DELETE trigger for each
@@ -1677,6 +1686,47 @@ def reindex_graph_content(
             raise
     finally:
         conn.close()
+
+
+def _update_graph_document_in_place(
+    conn: sqlite3.Connection, document_id: int, *, collection_id: int, source_uri: str,
+    title: str, node_chunks: list[tuple[str, str]], estimator: TokenEstimator,
+) -> None:
+    """Refresh one graph's metadata and replace only changed node chunks.
+
+    A chunk is reused when its node and exact text are unchanged; only its
+    ordinal may move. New or edited nodes get new rows, removed or edited
+    ones are deleted (cascading their embeddings and FTS entries).
+    """
+    full_text = "\n\n".join(text for _, text in node_chunks)
+    conn.execute(
+        "UPDATE documents SET collection_id = ?, title = ?, content_hash = ?, size_bytes = ? WHERE id = ?",
+        (collection_id, title, content_hash(f"{source_uri}\n{full_text}"),
+         len(full_text.encode("utf-8")), document_id),
+    )
+    reusable: dict[tuple[str | None, str], list[tuple[int, int]]] = {}
+    for chunk_id, node_id, text, ordinal in conn.execute(
+        "SELECT id, source_node_id, text, ordinal FROM chunks WHERE document_id = ? ORDER BY ordinal, id",
+        (document_id,),
+    ).fetchall():
+        reusable.setdefault((node_id, text), []).append((int(chunk_id), int(ordinal)))
+    inserts = []
+    for ordinal, (node_id, text) in enumerate(node_chunks):
+        matches = reusable.get((node_id, text))
+        if matches:
+            chunk_id, old_ordinal = matches.pop(0)
+            if old_ordinal != ordinal:
+                conn.execute("UPDATE chunks SET ordinal = ? WHERE id = ?", (ordinal, chunk_id))
+        else:
+            inserts.append((document_id, ordinal, text, estimator.count_tokens(text), 0, len(text), node_id))
+    stale = [chunk_id for rows in reusable.values() for chunk_id, _ in rows]
+    conn.executemany("DELETE FROM chunks WHERE id = ?", [(chunk_id,) for chunk_id in stale])
+    conn.executemany(
+        "INSERT INTO chunks "
+        "(document_id, ordinal, text, token_count, offset_start, offset_end, source_node_id) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        inserts,
+    )
 
 
 def delete_graph_index(db_path: Path, graph_id: int) -> bool:
@@ -2265,21 +2315,32 @@ def open_cited_document(
         return None
     conn = _connect(db_path)
     try:
-        cited = conn.execute(
-            "SELECT d.title, d.source_uri, c.text, c.offset_start, c.offset_end, c.source_node_id "
+        def citation_of(row) -> str:
+            return _stable_chunk_citation({
+                "source_uri": row[1], "source_node_id": row[5],
+                "offset_start": row[3], "offset_end": row[4], "text": row[2],
+            })
+
+        select = (
+            "SELECT d.title, d.source_uri, c.text, c.offset_start, c.offset_end, c.source_node_id, d.id "
             "FROM chunks c JOIN documents d ON d.id = c.document_id "
-            "WHERE d.id = ? AND c.id = ? AND d.collection_id = ?",
+        )
+        cited = conn.execute(
+            select + "WHERE d.id = ? AND c.id = ? AND d.collection_id = ?",
             (document_id, chunk_id, collection_id),
         ).fetchone()
-        if cited is None:
-            return None
-        title, source_uri, excerpt, start, end, source_node_id = cited
-        expected = _stable_chunk_citation({
-            "source_uri": source_uri, "source_node_id": source_node_id,
-            "offset_start": start, "offset_end": end, "text": excerpt,
-        })
-        if citation_id != expected:
-            return None
+        if cited is None or citation_of(cited) != citation_id:
+            # Row IDs are selectors only. If they went stale through a
+            # legitimate reindex, find the exact same passage in this
+            # workspace by its stable citation; never different text (#1089).
+            cited = next(
+                (row for row in conn.execute(select + "WHERE d.collection_id = ?", (collection_id,))
+                 if citation_of(row) == citation_id),
+                None,
+            )
+            if cited is None:
+                return None
+        title, source_uri, excerpt, start, end, source_node_id, document_id = cited
 
         rows = conn.execute(
             "SELECT text, offset_start, offset_end FROM chunks "
