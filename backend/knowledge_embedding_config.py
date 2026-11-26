@@ -25,7 +25,7 @@ from backend.knowledge_retrieval import hybrid_search
 from backend.knowledge_store import cold_collection_embedding_batch
 from backend.providers.base import ProviderCapabilities
 from backend.providers.embedding_response import decode_openai_embeddings
-from backend.providers.ollama_provider import OllamaProvider
+from backend.providers.ollama_provider import OllamaProvider, ollama_model_revision
 
 logger = logging.getLogger(__name__)
 _TEST_TEXT = "Graphlink knowledge embedding connection test."
@@ -64,7 +64,13 @@ def embedding_provider_for_choice(
             raise ValueError("Knowledge embedding choice changed.")
         if not api_provider.ollama_supports_embedding(model):
             raise ValueError(f"Ollama model {model!r} is not installed or does not support embeddings.")
-        yield OllamaProvider(model=model), f"ollama:{model}"
+        revision = ollama_model_revision(model)
+        if revision is None:
+            raise ValueError(f"Could not read the installed revision of Ollama model {model!r}; "
+                             "semantic search is paused and keyword search still works.")
+        # The revision is part of the cache identity: replacing the model
+        # under the same tag selects a fresh vector space (#1088).
+        yield _RevisionPinnedEmbedder(OllamaProvider(model=model), model, revision), f"ollama:{model}@{revision}"
         return
     if source != "cloud":
         raise ValueError("Unknown knowledge embedding source.")
@@ -97,6 +103,32 @@ def embedding_provider_for_choice(
         yield _OpenAICompatibleEmbedder(client, model), f"cloud:{provider_name}:{endpoint_id}:{model}"
     finally:
         client.close()
+
+
+class _RevisionPinnedEmbedder:
+    """Refuse a batch if the Ollama model changed before or during it.
+
+    Raising inside embed() leaves the batch pending, so nothing computed by
+    a different revision is cached under the pinned identity.
+    """
+
+    def __init__(self, provider: object, model: str, revision: str) -> None:
+        self._provider = provider
+        self._model = model
+        self._revision = revision
+        self.model_id = getattr(provider, "model_id", model)
+        self.capabilities = provider.capabilities
+
+    def _check(self) -> None:
+        if ollama_model_revision(self._model) != self._revision:
+            raise ValueError(f"Ollama model {self._model!r} changed while indexing; "
+                             "its vectors will be rebuilt for the new revision.")
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        self._check()
+        vectors = self._provider.embed(texts)
+        self._check()
+        return vectors
 
 
 class _ChoiceGuardedEmbedder:

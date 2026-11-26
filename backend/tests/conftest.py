@@ -74,6 +74,8 @@ def _never_probe_a_real_ollama_daemon(monkeypatch):
         raise RuntimeError("no ollama daemon in tests")
 
     monkeypatch.setattr(ollama_module, "show", unavailable_show, raising=False)
+    # ollama.list() backs the embedding model revision lookup (#1088).
+    monkeypatch.setattr(ollama_module, "list", unavailable_show, raising=False)
 
 
 @pytest.fixture(autouse=True)

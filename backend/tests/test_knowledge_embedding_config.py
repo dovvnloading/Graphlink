@@ -18,6 +18,13 @@ from backend.providers.base import ProviderCapabilities
 from graphlink_settings_store import SettingsManager
 
 
+@pytest.fixture(autouse=True)
+def _pinned_ollama_revision(monkeypatch):
+    """Ollama embedding caches are keyed by model revision (#1088)."""
+    from backend import knowledge_embedding_config
+    monkeypatch.setattr(knowledge_embedding_config, "ollama_model_revision", lambda _model: "r1")
+
+
 @pytest.fixture
 def manager(tmp_path):
     return SettingsManager(tmp_path / "session.dat")
@@ -45,7 +52,7 @@ def test_off_default_never_constructs_local_or_cloud_clients(tmp_path, manager, 
     hits = config.configured_hybrid_search(path, "internal research", settings_manager=manager)
     assert len(hits) == 1
     assert hits[0]["document_title"] == "Research notes"
-    assert not list_embeddings_for_search(path, "ollama:nomic-embed-text:latest")
+    assert not list_embeddings_for_search(path, "ollama:nomic-embed-text:latest@r1")
 
 
 def test_choice_persists_and_requires_consent_across_reload(tmp_path, manager):
@@ -110,16 +117,16 @@ def test_search_uses_background_cache_without_backfilling_inline(tmp_path, manag
     # documents in the latency-sensitive search path.
     first = config.configured_hybrid_search(path, "internal research", settings_manager=manager)
     assert first
-    assert list_embeddings_for_search(path, "ollama:nomic-embed-text:latest") == []
+    assert list_embeddings_for_search(path, "ollama:nomic-embed-text:latest@r1") == []
     assert fake.calls == []
 
     # The worker has populated the cache. Searches now embed only their
     # query; previously indexed passages are never sent again.
-    assert embed_pending_chunks(path, fake, "ollama:nomic-embed-text:latest") == 1
+    assert embed_pending_chunks(path, fake, "ollama:nomic-embed-text:latest@r1") == 1
     second = config.configured_hybrid_search(path, "internal research", settings_manager=manager)
     third = config.configured_hybrid_search(path, "internal research", settings_manager=manager)
     assert second and third
-    assert len(list_embeddings_for_search(path, "ollama:nomic-embed-text:latest")) == 1
+    assert len(list_embeddings_for_search(path, "ollama:nomic-embed-text:latest@r1")) == 1
     assert len(fake.calls) == 3
     assert fake.calls[0][0].startswith("Graphlink archives")
 
@@ -231,7 +238,7 @@ def test_connection_test_rejects_invalid_vectors(manager, monkeypatch, invalid):
 
 def test_invalid_query_falls_back_to_keywords_without_evicting_cache(tmp_path, manager, monkeypatch):
     path = _database(tmp_path)
-    model_id = "ollama:nomic-embed-text:latest"
+    model_id = "ollama:nomic-embed-text:latest@r1"
     manager.set_knowledge_embedding_settings("ollama", "nomic-embed-text:latest")
     monkeypatch.setattr(config.api_provider, "ollama_supports_embedding", lambda _model: True)
     embed_pending_chunks(path, _FakeEmbeddingProvider(), model_id)

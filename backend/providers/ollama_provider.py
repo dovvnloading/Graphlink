@@ -371,3 +371,31 @@ class OllamaProvider:
             return []
         response = ollama.embed(model=self.model_id, input=list(texts))
         return [list(vector) for vector in response["embeddings"]]
+
+
+def _tagged(name: str) -> str:
+    name = name.strip().lower()
+    return name if ":" in name.rsplit("/", 1)[-1] else name + ":latest"
+
+
+def ollama_model_revision(model: str) -> str | None:
+    """Immutable revision of an installed Ollama model, read fresh each call.
+
+    A tag such as ``nomic-embed-text`` can be re-pulled or replaced in
+    place; the digest identifies the exact weights that produced a vector
+    (#1088). Returns a 16-hex-digit prefix, or None when the daemon is
+    unreachable or the model is not installed. Never cached.
+    """
+    try:
+        listing = ollama.list()
+    except Exception:
+        return None
+    models = listing.get("models", []) if isinstance(listing, dict) else getattr(listing, "models", [])
+    wanted = _tagged(model)
+    for entry in models or []:
+        get = entry.get if isinstance(entry, dict) else (lambda key, e=entry: getattr(e, key, None))
+        name = get("model") or get("name")
+        digest = get("digest")
+        if isinstance(name, str) and _tagged(name) == wanted and isinstance(digest, str) and digest:
+            return digest.removeprefix("sha256:")[:16].lower()
+    return None

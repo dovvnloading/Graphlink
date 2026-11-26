@@ -363,6 +363,15 @@ remain cached. Search falls back to keywords if the configured semantic
 search encounters an invalid cached vector. Check the application log for the
 exact model ID and diagnostic.
 
+Ollama caches are keyed by the installed model's revision as well as its tag
+(`ollama:<tag>@<first 16 digest digits>`). The revision is read fresh from
+Ollama and checked before and after every batch. Re-pulling or replacing a
+model under the same tag therefore starts a new cache, and keyword search
+keeps working while it rebuilds. If Ollama cannot report the revision,
+semantic search pauses and keyword search continues. Caches written before
+revisions were recorded (`ollama:<tag>` with no `@`) are never reused; reset
+that exact ID with the command below to reclaim their space.
+
 OpenAI-compatible responses are paired with chunks by each item's `index`,
 not by array order. A batch with a missing, duplicate or out-of-range index
 is rejected and left pending. Before this check, an endpoint or proxy that
@@ -375,10 +384,10 @@ healthy and that you really intend to replace the cached vector space. Stop
 Graphlink completely (including its background embedding jobs) and back up
 the knowledge database. From the repository root or an installed Graphlink
 Python environment, run the following, substituting the exact model ID from
-the log (for example, `ollama:nomic-embed-text`):
+the log (for example, `ollama:nomic-embed-text@0123456789abcdef`):
 
 ```sh
-python -c "import sys; from backend.knowledge_store import DEFAULT_DB_PATH, reset_model_embeddings; print(reset_model_embeddings(DEFAULT_DB_PATH, sys.argv[1]))" "ollama:nomic-embed-text"
+python -c "import sys; from backend.knowledge_store import DEFAULT_DB_PATH, reset_model_embeddings; print(reset_model_embeddings(DEFAULT_DB_PATH, sys.argv[1]))" "ollama:nomic-embed-text@0123456789abcdef"
 ```
 
 For a nondefault database, pass its explicit `Path` to
