@@ -431,3 +431,29 @@ def test_advanced_ops_registered_receipted_and_stdlib_only():
     assert expected <= {op.id for op in operations("fitting")}
     for op in inferential.OPERATIONS:
         assert readable_result({"version": 1, "latest": _run(op.id, **op.example)}, "fitting")
+
+
+def test_required_size_searches_the_last_stretch_below_the_cap():
+    """#1087: the doubling probe used to jump from 786432 past 1000000."""
+    for required in (786433, 889889, 999999, 1000000):
+        assert inferential._required_size(.8, lambda n, r=required: .9 if n >= r else .1) == required
+    with pytest.raises(ValueError, match="more than 1,000,000"):
+        inferential._required_size(.8, lambda n: .1)
+
+
+def test_proportion_and_t_power_find_minimal_sizes_between_786433_and_the_cap():
+    pr = _run("proportion_power", proportion_a=.5021, proportion_b=.5, alpha=.05, target_power=.8,
+              sample_size=1000000, design="two_sample", tails="two_sided")["values"]
+    assert pr["required_sample_size_per_group"] == 889889
+    n = pr["required_sample_size_per_group"]
+    at = lambda size: inferential._proportion_power_at(size, .5021, .5, .05, "two_sided", "two_sample")
+    assert at(n) >= .8 > at(n - 1)
+    t = _run("t_test_power", effect_size=.0042, alpha=.05, target_power=.8,
+             sample_size=1000000, design="two_sample", tails="two_sided")["values"]
+    n = t["required_sample_size_per_group"]
+    assert 786432 < n <= 1000000
+    at = lambda size: inferential._t_test_power_at(size, .0042, .05, "two_sided", "two_sample")
+    assert at(n) >= .8 > at(n - 1)
+    with pytest.raises(Exception, match="more than 1,000,000"):
+        _run("proportion_power", proportion_a=.501, proportion_b=.5, alpha=.05, target_power=.8,
+             sample_size=1000000, design="two_sample", tails="two_sided")
