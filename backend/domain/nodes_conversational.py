@@ -108,6 +108,7 @@ class ConversationalOps(SceneDocumentParts):
         version.history_fingerprint = node.state.reply_history_fingerprint
         version.knowledge_enabled = node.state.reply_knowledge_enabled
         version.model_content = node.state.model_content
+        version.artifacts = copy.deepcopy(node.state.artifacts)
 
     def update_chat_node_content(
         self, node_id: str, content: str, incomplete: bool = False
@@ -139,6 +140,7 @@ class ConversationalOps(SceneDocumentParts):
         # replaces only the stale citation ledger via apply_reply_citations.
         node.state.content_parts = None
         node.state.model_content = None
+        node.state.artifacts = None
         node.state.versions.append(ChatVersion(
             content=new_content, incomplete=bool(incomplete),
             created_at=datetime.now(timezone.utc).isoformat(),
@@ -158,6 +160,7 @@ class ConversationalOps(SceneDocumentParts):
             return
         self.sync_chat_version(node_id)
         version = node.state.versions[index]
+        self._swap_version_artifacts(node, node.state.artifacts, version.artifacts)
         node.state.version_index = index
         node.content = version.content
         node.state.provider = version.provider_name
@@ -172,8 +175,41 @@ class ConversationalOps(SceneDocumentParts):
         node.state.reply_history_fingerprint = version.history_fingerprint
         node.state.reply_knowledge_enabled = version.knowledge_enabled
         node.state.model_content = version.model_content
+        node.state.artifacts = copy.deepcopy(version.artifacts)
         # A scientific source card is only valid for its original snapshot.
         node.state.science_reference = None
+
+    def _swap_version_artifacts(self, node, outgoing, incoming) -> None:
+        """Replace one version's generated cards with another's.
+
+        Only cards this reply owns (it is their canonical parent) and that
+        still match the outgoing version exactly are removed; an edited,
+        shared or independently attached card is user work and stays. With
+        either side unrecorded, the canvas is left untouched (#1100).
+        """
+        if outgoing is None or incoming is None:
+            return
+        pending = [dict(item) for item in outgoing]
+        removable: list[str] = []
+        for child_id in dict.fromkeys(e.target for e in self.edges.values() if e.source == node.id):
+            child = self.nodes.get(child_id)
+            owner = self._branch_parent_edge(child_id)
+            if child is None or owner is None or owner.source != node.id:
+                continue
+            if any(e.target == child_id and e.source != node.id for e in self.edges.values()):
+                continue
+            descriptor = _artifact_descriptor(child)
+            if descriptor is not None and descriptor in pending:
+                pending.remove(descriptor)
+                removable.append(child_id)
+        self.remove_nodes(removable)
+        for item in incoming:
+            if item.get("type") == "code":
+                x, y = self.place_child(node.id, "code", prefer="right")
+                self.add_code_node(x, y, item.get("content", ""), item.get("language", ""), parent_id=node.id)
+            elif item.get("type") == "thinking":
+                x, y = self.place_child(node.id, "thinking", prefer="left")
+                self.add_thinking_node(x, y, item.get("content", ""), parent_id=node.id)
 
     def _require_editable_user_message(
         self, node_id: str, content: str, expected_content: str,
@@ -336,3 +372,12 @@ class ConversationalOps(SceneDocumentParts):
         domain method, the same way sendMessage/send_message already do for
         ChatNode."""
         return self.append_conversation_user_message(node_id, text)
+
+
+def _artifact_descriptor(child) -> dict[str, str] | None:
+    """The version-artifact form of a generated Code or Thinking card."""
+    if child.kind == "code":
+        return {"type": "code", "content": child.state.code, "language": child.state.language}
+    if child.kind == "thinking":
+        return {"type": "thinking", "content": child.content}
+    return None

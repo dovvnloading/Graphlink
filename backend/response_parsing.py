@@ -62,6 +62,17 @@ def model_visible_reply(response_text: str, displayed: str) -> str | None:
     return visible if visible and visible != displayed else None
 
 
+def generated_artifacts(parsed_parts: list[dict]) -> list[dict[str, str]]:
+    """The Code/Thinking card descriptors a parsed reply creates (#1100)."""
+    artifacts: list[dict[str, str]] = []
+    for part in parsed_parts:
+        if part["type"] == "code":
+            artifacts.append({"type": "code", "content": part["content"], "language": part["language"]})
+        elif part["type"] == "thinking":
+            artifacts.append({"type": "thinking", "content": part["content"]})
+    return artifacts
+
+
 def parse_response(response_text: str) -> list[dict]:
     """Split a flat LLM reply into ordered thinking/text/code parts.
 

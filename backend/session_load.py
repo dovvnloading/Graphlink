@@ -450,6 +450,25 @@ def _valid_reply_fingerprint(value: Any) -> str | None:
     return None
 
 
+def _valid_artifacts(raw) -> list[dict[str, str]] | None:
+    """Saved version artifacts, or None if absent or malformed."""
+    if not isinstance(raw, list) or len(raw) > 64:
+        return None
+    artifacts = []
+    for item in raw:
+        if not isinstance(item, dict) or item.get("type") not in ("code", "thinking"):
+            return None
+        if not isinstance(item.get("content"), str):
+            return None
+        entry = {"type": item["type"], "content": item["content"]}
+        if item["type"] == "code":
+            if not isinstance(item.get("language", ""), str):
+                return None
+            entry["language"] = item.get("language", "")
+        artifacts.append(entry)
+    return artifacts
+
+
 def _migrate_chat_versions(
     payload: dict[str, Any], current_content: str,
 ) -> tuple[list[ChatVersion], int]:
@@ -515,6 +534,7 @@ def _migrate_chat_versions(
             knowledge_enabled=(row.get("reply_knowledge_enabled")
                                      if isinstance(row.get("reply_knowledge_enabled"), bool) else None),
             model_content=row["model_content"] if isinstance(row.get("model_content"), str) else None,
+            artifacts=_valid_artifacts(row.get("artifacts")),
         )
         for row in kept
     ]
@@ -580,6 +600,7 @@ def _restore_chat_payload(payload: dict[str, Any]) -> SceneNode:
             versions=versions,
             version_index=version_index,
             model_content=selected.model_content,
+            artifacts=selected.artifacts,
             chat_scroll_value=_finite_float(payload.get("scroll_value", 0.0) or 0.0),
             provider=selected.provider_name,
             model=selected.model_name,

@@ -895,6 +895,11 @@ class ChatVersion:
     # canvas shows it differently (fenced code moved into Code cards). None
     # means `content` already is the model-visible text (#1099).
     model_content: str | None = None
+    # Code and thinking cards this version generated, as
+    # {"type", "content"[, "language"]} in creation order. None means not
+    # recorded (older saves, partial replies, re-runs), and version switches
+    # then leave the canvas cards alone (#1100).
+    artifacts: list[dict[str, str]] | None = None
 
 
 MAX_CHAT_VERSIONS = 20
@@ -981,6 +986,8 @@ class ChatState(NodeState):
     version_index: int = 0
     # Selected version's model-visible answer; see ChatVersion.model_content.
     model_content: str | None = None
+    # Selected version's generated cards; see ChatVersion.artifacts.
+    artifacts: list[dict[str, str]] | None = None
     chat_scroll_value: float = 0.0
     content_parts: list[dict[str, Any]] | None = None
     provider: str | None = None
