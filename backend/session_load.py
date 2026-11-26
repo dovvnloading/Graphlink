@@ -1966,6 +1966,7 @@ def _restore_flat_edges(
     if not isinstance(entries, list):
         return False
 
+    saved_order: list[str] = []
     for entry in entries:
         if not isinstance(entry, dict):
             continue
@@ -1981,8 +1982,17 @@ def _restore_flat_edges(
                 # branch restorer; the authoritative flat list still wins
                 # for edge semantics. Unknown roles degrade to legacy.
                 edge.role = cast(EdgeRole, role)
+            saved_order.append(edge.id)
         except Exception:
             continue
+    # Order is semantic too: the first legacy incoming edge is a node's
+    # canonical parent. The legacy child restorer pre-creates edges in node
+    # order, so put the saved list's edges first, in saved order (#1092).
+    ordered = {edge_id: document.edges[edge_id] for edge_id in saved_order if edge_id in document.edges}
+    ordered.update((edge_id, edge) for edge_id, edge in document.edges.items() if edge_id not in ordered)
+    if list(ordered) != list(document.edges):
+        document.edges.clear()
+        document.edges.update(ordered)
     return True
 
 
