@@ -186,6 +186,14 @@ def test_merge_first_finishes_before_other_input_and_uses_completion_order(tmp_p
      JsonValue({"id": 1}), True),
     ({"predicate": "json_schema", "schema": {"type": "array", "items": {"type": "number"}}},
      JsonValue(["wrong"]), False),
+    # #1093: JSON Schema compares numbers by value, not by spelling.
+    ({"predicate": "json_schema", "schema": {"type": "integer"}}, JsonValue(1.0), True),
+    ({"predicate": "json_schema", "schema": {"type": "integer"}}, JsonValue(1.5), False),
+    ({"predicate": "json_schema", "schema": {"type": "number", "enum": [1]}}, JsonValue(1.0), True),
+    ({"predicate": "json_schema", "schema": {"type": "object", "enum": [{"x": 1}]}},
+     JsonValue({"x": 1.0}), True),
+    ({"predicate": "json_schema", "schema": {"type": "boolean", "enum": [True]}}, JsonValue(True), True),
+    ({"predicate": "json_schema", "schema": {"type": "number", "enum": [1]}}, JsonValue(True), False),
 ])
 def test_assert_route_predicates(config, value, passed):
     async def scenario():

@@ -94,11 +94,12 @@ def _schema(schema):
 def check_json_result(value, schema):
     """Check actual output, never treat an invalid reply as a successful step."""
     _validate_json(value)
-    from backend.structured_output import _validate_against_schema
+    from backend.structured_output import _validate_against_schema, json_values_equal
 
     if _validate_against_schema(value, schema):
         raise ValueError("Model output does not match the configured JSON schema")
-    if "enum" in schema and not any(digest(value) == digest(item) for item in schema["enum"]):
+    # Schema equality is by JSON value, not canonical spelling (#1093).
+    if "enum" in schema and not any(json_values_equal(value, item) for item in schema["enum"]):
         raise ValueError("Value does not match JSON schema enum")
     if schema["type"] == "null" and value is not None:
         raise ValueError("Expected JSON null")
