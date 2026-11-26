@@ -63,6 +63,7 @@ path alive specifically for exactly this kind of single-shot request.
 from __future__ import annotations
 
 import json
+import math
 import re
 
 import api_provider
@@ -129,17 +130,48 @@ def _validate_against_schema(data, schema: dict, path: str = "$") -> list[str]:
         if not isinstance(data, (int, float)) or isinstance(data, bool):
             errors.append(f"{path}: expected number, got {type(data).__name__}")
     elif expected_type == "integer":
-        if not isinstance(data, int) or isinstance(data, bool):
+        # JSON Schema defines an integer by value: 1.0 is an integer (#1093).
+        if not _is_json_integer(data):
             errors.append(f"{path}: expected integer, got {type(data).__name__}")
     elif expected_type == "boolean":
         if not isinstance(data, bool):
             errors.append(f"{path}: expected boolean, got {type(data).__name__}")
 
     enum_values = schema.get("enum")
-    if enum_values is not None and data not in enum_values:
+    if enum_values is not None and not any(json_values_equal(data, item) for item in enum_values):
         errors.append(f"{path}: {data!r} is not one of {enum_values!r}")
 
     return errors
+
+
+def _is_number(value) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _is_json_integer(value) -> bool:
+    if not _is_number(value):
+        return False
+    return isinstance(value, int) or (math.isfinite(value) and float(value).is_integer())
+
+
+def json_values_equal(left, right) -> bool:
+    """JSON Schema equality: numbers by value (1 == 1.0, -0.0 == 0),
+    booleans only equal booleans, containers compared recursively.
+
+    Separate from canonical hashing, which must keep distinguishing
+    spellings for approval fingerprints and artifact identity.
+    """
+    if _is_number(left) and _is_number(right):
+        return left == right
+    if isinstance(left, bool) or isinstance(right, bool):
+        return type(left) is type(right) and left == right
+    if isinstance(left, dict) and isinstance(right, dict):
+        return left.keys() == right.keys() and all(json_values_equal(left[k], right[k]) for k in left)
+    if isinstance(left, list) and isinstance(right, list):
+        return len(left) == len(right) and all(json_values_equal(a, b) for a, b in zip(left, right))
+    if _is_number(left) or _is_number(right):
+        return False
+    return type(left) is type(right) and left == right
 
 
 # -- per-provider native-mode kwargs --------------------------------------

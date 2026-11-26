@@ -325,6 +325,8 @@ Condition predicates include equals, contains, regex, numeric_compare, empty
 and json_path_truthy. Assert supports contains, regex, json_schema,
 numeric_range and row_count. Predicates are deterministic, type-aware and
 validated; invalid configuration is an error, not a false condition.
+json_schema follows JSON Schema numeric semantics: `1.0` is an integer and
+equals `1` in `enum`, but `true` never equals `1`.
 
 For example, branch a draft through Condition, send the true branch to a
 transform, the false branch to another transform, and bind both to Merge
