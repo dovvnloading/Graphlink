@@ -3,6 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { canonicalizeChartSpec } from "../chartSpec";
 import { createLog10Scale, formatLogTick, formatScientificTick, log10Ticks, scientificDomain, scientificLinearTicks } from "./chartScales";
 import ChartRenderer from "./ChartRenderer";
+import { ScientificChartMarks } from "./ScientificChartMarks";
+import { FALLBACK_CHART_THEME } from "./chartTheme";
 
 const originalResizeObserver = globalThis.ResizeObserver;
 
@@ -215,5 +217,20 @@ describe("scientific React rendering", () => {
     const { container } = render(<ChartRenderer chartType="scatter" chartData={invalid as never} />);
     expect(container.querySelector(".chart-canvas-placeholder")).not.toBeNull();
     expect(screen.getByText(/lower error endpoint/)).toBeInTheDocument();
+  });
+});
+
+describe("zoomed error bars (#1083)", () => {
+  it("renders a whisker that enters the viewport from an off-screen center", () => {
+    const data = canonicalizeChartSpec({ type: "scatter", xValues: [0, 2],
+      series: [{ name: "A", values: [5, 5], xError: [[0, 1.5], 0] }] });
+    const { container } = render(<svg><ScientificChartMarks chartData={data} chartType="scatter"
+      theme={FALLBACK_CHART_THEME} width={640} height={440} onHover={() => {}}
+      wrapperRef={{ current: null }} viewport={{ x: [1, 2.5], y: [4, 6] }} /></svg>);
+    const points = [...container.querySelectorAll(".chart-scientific-point")];
+    expect(points.map(p => p.getAttribute("data-index"))).toEqual(["0", "1"]);
+    expect(points[0].querySelector(".chart-x-error")).not.toBeNull();
+    // The clip path trims the off-screen center and the rest of the whisker.
+    expect(container.querySelector("g[clip-path]")).not.toBeNull();
   });
 });

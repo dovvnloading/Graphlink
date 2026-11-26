@@ -37,4 +37,33 @@ describe("full-resolution scientific charts", () => {
     expect(indices).toContain(2500);
     expect(indices.length).toBeLessThanOrEqual(200);
   });
+  it("keeps observations whose error bars cross a zoomed viewport (#1083)", () => {
+    const viewport = { x: [1, 2.5] as [number, number], y: [4, 6] as [number, number] };
+    // Horizontal whisker from an off-screen center, asymmetric errors.
+    expect(scientificMarkIndices([0, 2], [5, 5], viewport, 1200, "scatter", null,
+      [[0, 1.5], [0, 0]])).toEqual([0, 1]);
+    // Wholly off-screen horizontal whisker stays excluded.
+    expect(scientificMarkIndices([0, 2], [5, 5], viewport, 1200, "scatter", null,
+      [[0, 0.9], [0, 0]])).toEqual([1]);
+    // A horizontal whisker at an off-screen Y does not cross the viewport.
+    expect(scientificMarkIndices([0, 2], [9, 5], viewport, 1200, "scatter", null,
+      [[0, 1.5], [0, 0]])).toEqual([1]);
+    // Vertical whisker: upper error reaches the viewport, lower does not.
+    expect(scientificMarkIndices([2, 2], [3, 5], viewport, 1200, "scatter",
+      [[0, 1.2], [0, 0]])).toEqual([0, 1]);
+    expect(scientificMarkIndices([2, 2], [3, 5], viewport, 1200, "scatter",
+      [[5, 0.8], [0, 0]])).toEqual([1]);
+    // Line marks also keep an X whisker that enters the range.
+    expect(scientificMarkIndices([0, 2], [5, 5], viewport, 1200, "line", null,
+      [[0, 1.5], [0, 0]])).toEqual([0, 1]);
+  });
+  it("keeps the mark budget when many whiskers cross the viewport", () => {
+    const xs = Array.from({ length: 10_000 }, (_, i) => i);
+    const ys = xs.map(() => 0);
+    const xErrors = xs.map(() => [10_000, 10_000] as [number, number]);
+    const indices = scientificMarkIndices(xs, ys, { x: [5000, 5001], y: [-1, 1] }, 100, "scatter", null, xErrors);
+    expect(indices.length).toBeLessThanOrEqual(100);
+    expect(indices).toContain(0);
+    expect(indices).toContain(9999);
+  });
 });

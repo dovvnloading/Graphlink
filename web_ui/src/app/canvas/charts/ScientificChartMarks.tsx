@@ -176,7 +176,7 @@ export function ScientificChartMarks({
         const color = palette[seriesIndex % palette.length];
         const name = row.name || data.title || "Series";
         const indices = scientificMarkIndices(xValues, row.values, viewport,
-          scientificMarkBudget(series.length), chartType === "line" ? "line" : "scatter", row.yError);
+          scientificMarkBudget(series.length), chartType === "line" ? "line" : "scatter", row.yError, row.xError);
         // Sampling limits interactive point/error glyphs, not connectivity.
         // Keep the single line path in original order (at most 10,000 total
         // source vertices). SVG clipping preserves crossings even when both
