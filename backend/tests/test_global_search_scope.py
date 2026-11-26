@@ -15,6 +15,13 @@ from backend.events import IntentValidationError, SessionBus
 from backend.knowledge_chunking import chunk_text
 
 
+@pytest.fixture(autouse=True)
+def _pinned_ollama_revision(monkeypatch):
+    """Ollama embedding caches are keyed by model revision (#1088)."""
+    from backend import knowledge_embedding_config
+    monkeypatch.setattr(knowledge_embedding_config, "ollama_model_revision", lambda _model: "r1")
+
+
 @pytest.mark.parametrize("minority_scope", ["graphs", "knowledge"])
 @pytest.mark.parametrize("mode", ["keyword", "vector", "fallback"])
 def test_global_search_scope_before_candidate_cutoff(tmp_path, monkeypatch, minority_scope, mode):

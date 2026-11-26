@@ -24,6 +24,16 @@ from backend.providers.base import ProviderCapabilities
 from backend.settings import register_settings
 from graphlink_settings_store import SettingsManager
 
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _pinned_ollama_revision(monkeypatch):
+    """Ollama embedding caches are keyed by model revision (#1088)."""
+    from backend import knowledge_embedding_config
+    monkeypatch.setattr(knowledge_embedding_config, "ollama_model_revision", lambda _model: "r1")
+
+
 # Jobs run on worker threads, so the tests poll for their outcome. The bound is
 # a deadline, not an iteration count: a slow CI runner (coverage, xdist, a busy
 # disk) only makes a passing test take longer, never fail. The chunker's
@@ -148,8 +158,8 @@ def test_background_batches_32_and_emits_progress_without_cross_workspace_leaks(
     assert finished["chunksRemaining"] == 0
     assert [len(texts) for texts, _ in provider.calls] == [32, 3]
     assert all(thread != loop_thread for _, thread in provider.calls)
-    assert len(knowledge_store.list_embeddings_for_search(db, "ollama:model-a", collection_id=collection)) == 35
-    assert knowledge_store.list_embeddings_for_search(db, "ollama:model-a", collection_id=other) == []
+    assert len(knowledge_store.list_embeddings_for_search(db, "ollama:model-a@r1", collection_id=collection)) == 35
+    assert knowledge_store.list_embeddings_for_search(db, "ollama:model-a@r1", collection_id=other) == []
     states = _published_job_states(messages)
     assert any(row["status"] == "completed" and row["chunksEmbedded"] == 35 for row in states)
     assert any(row["chunksEmbedded"] == 32 for row in states)
@@ -183,7 +193,7 @@ def test_cancellation_at_batch_boundary_and_resume_only_pending_chunks(tmp_path,
     assert finished["status"] == "completed"
     assert finished["chunksTotal"] == finished["chunksEmbedded"] == 3
     assert [len(texts) for texts, _ in provider.calls] == [32, 3, 3]
-    assert len(knowledge_store.list_embeddings_for_search(db, "ollama:model-a")) == 35
+    assert len(knowledge_store.list_embeddings_for_search(db, "ollama:model-a@r1")) == 35
 
 
 def test_model_change_cancels_old_provider_and_embeds_new_space(tmp_path, monkeypatch):
@@ -218,10 +228,10 @@ def test_model_change_cancels_old_provider_and_embeds_new_space(tmp_path, monkey
     stopped, finished = asyncio.run(scenario())
     assert stopped["status"] == "cancelled"
     assert stopped["chunksEmbedded"] == 0
-    assert finished["modelId"] == "ollama:model-b"
+    assert finished["modelId"] == "ollama:model-b@r1"
     assert finished["chunksEmbedded"] == 1
-    assert knowledge_store.list_embeddings_for_search(db, "ollama:model-a") == []
-    assert len(knowledge_store.list_embeddings_for_search(db, "ollama:model-b")) == 1
+    assert knowledge_store.list_embeddings_for_search(db, "ollama:model-a@r1") == []
+    assert len(knowledge_store.list_embeddings_for_search(db, "ollama:model-b@r1")) == 1
 
     # Turning the source Off cannot make any provider call, or reuse stale
     # cloud consent from a previous choice.
@@ -343,7 +353,7 @@ def test_settings_change_and_file_ingestion_start_real_intent_jobs(tmp_path, mon
 
     asyncio.run(scenario())
     collection = knowledge_store.get_or_create_workspace_collection(db, 22)
-    assert len(knowledge_store.list_embeddings_for_search(db, "ollama:model-a", collection_id=collection)) == 2
+    assert len(knowledge_store.list_embeddings_for_search(db, "ollama:model-a@r1", collection_id=collection)) == 2
     assert [len(texts) for texts, _ in provider.calls] == [1, 1]
 
 
@@ -409,5 +419,5 @@ def test_saved_graph_uses_persisted_default_workspace_not_global_pool(tmp_path, 
     assert finished["status"] == "completed"
     assert finished["workspaceId"] == workspace_id
     assert finished["chunksEmbedded"] == 1
-    assert len(knowledge_store.list_embeddings_for_search(db, "ollama:model-a", collection_id=collection)) == 1
-    assert len(knowledge_store.list_embeddings_for_search(db, "ollama:model-a", collection_id=0)) == 0
+    assert len(knowledge_store.list_embeddings_for_search(db, "ollama:model-a@r1", collection_id=collection)) == 1
+    assert len(knowledge_store.list_embeddings_for_search(db, "ollama:model-a@r1", collection_id=0)) == 0

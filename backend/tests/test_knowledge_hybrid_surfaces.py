@@ -23,6 +23,15 @@ from backend.tools import KNOWLEDGE_READ, RunContext, ToolRegistry
 from backend.tools_knowledge import register_knowledge_tools
 from graphlink_settings_store import SettingsManager
 
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _pinned_ollama_revision(monkeypatch):
+    """Ollama embedding caches are keyed by model revision (#1088)."""
+    from backend import knowledge_embedding_config
+    monkeypatch.setattr(knowledge_embedding_config, "ollama_model_revision", lambda _model: "r1")
+
 
 class _EmbeddingProvider:
     capabilities = ProviderCapabilities(embedding=True)
