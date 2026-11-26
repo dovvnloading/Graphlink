@@ -40,6 +40,7 @@ from api_provider import (
     openai_reasoning_kwargs,
     openai_supports_reasoning,
 )
+from backend.providers.embedding_response import decode_openai_embeddings
 from backend.providers.base import (
     CancelToken,
     ChatRequest,
@@ -439,12 +440,11 @@ class OpenAIProvider:
     def embed(self, texts: list[str]) -> list[list[float]]:
         """Batch embedding via the SDK's own `embeddings.create(input=[...])`
         - a single call for the whole batch (the OpenAI API's own designed
-        usage), returning vectors in the SAME order as `texts` (the SDK's
-        own documented `data[].index` ordering guarantee, trusted here
-        rather than re-sorted by index - matching OllamaProvider.embed()'s
-        identical trust-the-batch-order posture). Returns `[]` for an
-        empty `texts` without a network call."""
+        usage), returning vectors in the SAME order as `texts`, restored
+        from each item's `data[].index` rather than trusted from array
+        order (#1086). Returns `[]` for an empty `texts` without a network
+        call."""
         if not texts:
             return []
         response = self.client.embeddings.create(model=self.model_id, input=list(texts))
-        return [item.embedding for item in response.data]
+        return decode_openai_embeddings(response, len(texts))
