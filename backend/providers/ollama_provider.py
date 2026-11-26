@@ -369,7 +369,18 @@ class OllamaProvider:
         worth a round trip."""
         if not texts:
             return []
-        response = ollama.embed(model=self.model_id, input=list(texts))
+        # Ollama truncates oversized input by default and still returns a
+        # vector, which would be cached as if it covered the whole chunk
+        # (#1097). Ask it to refuse instead, and say so clearly.
+        try:
+            response = ollama.embed(model=self.model_id, input=list(texts), truncate=False)
+        except ollama.ResponseError as exc:
+            if "context" in str(exc).lower() or "length" in str(exc).lower():
+                raise ValueError(
+                    f"A passage is longer than the context window of Ollama model {self.model_id!r}, "
+                    "so nothing was cached. Choose an embedding model with a larger context."
+                ) from exc
+            raise
         return [list(vector) for vector in response["embeddings"]]
 
 
