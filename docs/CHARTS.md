@@ -540,7 +540,10 @@ sampler omitted them. Highlights are capped at 250 per layer group; when a
 selection exceeds that cap, the status reads "(highlights sampled for
 display)" while the count and branched rows stay exact. For keyboard access, focus a facet's brushing surface
 and press **Enter** or **Space** to select all its rows; press **Escape**
-or **Clear selection** to discard the transient selection.
+or **Clear selection** to discard the transient selection. While **Edit
+layers…** shows an unsaved preview, brushing and branching are suspended
+and any selection is cleared: branches always use the saved design, so save
+or cancel the layer edits first.
 
 With at least two but fewer than all original rows selected, choose
 **Branch selected rows**. The authenticated `scene.branchCompositeSelection`

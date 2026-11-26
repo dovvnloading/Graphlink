@@ -141,8 +141,11 @@ function ChartRenderer({ chartType, chartData, onAnalysisChange, onCompositeDesi
   }
 
   const baseComposite = canonical.data;
-  const compositeDisplay = compositePreview?.source === baseComposite
-    ? compositePreview.value : baseComposite;
+  // An unsaved layer preview may bind different columns or facets than the
+  // persisted design the server branches from, so brushing is suspended
+  // until the edit is saved or discarded (#1080).
+  const previewActive = compositePreview?.source === baseComposite;
+  const compositeDisplay = previewActive ? compositePreview.value : baseComposite;
   const marksProps = {
     chartData: chartType === "heatmap" ? heatmapData
       : chartType === "composite" ? compositeDisplay : canonical.data,
@@ -175,14 +178,17 @@ function ChartRenderer({ chartType, chartData, onAnalysisChange, onCompositeDesi
         </>}
       </div>
       {chartType === "composite" && <div className="chart-composite-selection-tools nodrag nowheel nopan">
-        <ToggleButton size="sm" icon="crosshair" label="Brush source rows" pressed={brushMode}
+        <ToggleButton size="sm" icon="crosshair" label="Brush source rows" pressed={brushMode && !previewActive}
+          disabled={previewActive}
           onPressedChange={pressed => {
             setBrushMode(pressed);
             setHover(null);
             setSelectionError("");
           }} />
         <span role="status" aria-live="polite">
-          {selectedIndices.length
+          {previewActive
+            ? "Save or cancel layer edits to brush source rows"
+            : selectedIndices.length
             ? selectedIndices.length + " of " + fullRowCount + " source rows selected"
               + (chartData.composite && compositeHighlightsSampled(chartData.composite, selectedIndices)
                 ? " (highlights sampled for display)" : "")
@@ -190,7 +196,7 @@ function ChartRenderer({ chartType, chartData, onAnalysisChange, onCompositeDesi
         </span>
         <Button size="sm" variant="ghost" disabled={!selectedIndices.length || creatingSubset}
           onClick={() => { setRowSelection(null); setSelectionError(""); }}>Clear selection</Button>
-        <Button size="sm" disabled={!canBranchSelection || !onBranchSelection || creatingSubset}
+        <Button size="sm" disabled={!canBranchSelection || previewActive || !onBranchSelection || creatingSubset}
           onClick={() => {
             if (!canBranchSelection || !baseComposite.composite || !onBranchSelection) return;
             setCreatingSubset(true);
@@ -206,7 +212,13 @@ function ChartRenderer({ chartType, chartData, onAnalysisChange, onCompositeDesi
       </div>}
       {chartType === "composite" && compositeEditorOpen && baseComposite.composite &&
         <CompositeChartEditor chartData={baseComposite}
-          onPreview={value => setCompositePreview(value ? { source: baseComposite, value } : null)}
+          onPreview={value => {
+            setCompositePreview(value ? { source: baseComposite, value } : null);
+            // A selection made under the saved design must not be branched
+            // while a different design is on screen.
+            setRowSelection(null);
+            setSelectionError("");
+          }}
           onSave={(design, expected) => onCompositeDesignChange
             ? onCompositeDesignChange(design, expected)
             : Promise.reject(new Error("Composite design editing is unavailable"))}
@@ -236,7 +248,7 @@ function ChartRenderer({ chartType, chartData, onAnalysisChange, onCompositeDesi
             {chartType === "boxplot" && <BoxplotChartMarks {...marksProps} />}
             {chartType === "heatmap" && <HeatmapChartMarks {...marksProps} />}
             {chartType === "composite" && <CompositeChartMarks {...marksProps}
-              brushEnabled={brushMode} selectedIndices={selectedIndices}
+              brushEnabled={brushMode && !previewActive} selectedIndices={selectedIndices}
               onSelectionChange={indices => {
                 setRowSelection({ source: chartData, indices });
                 setSelectionError("");

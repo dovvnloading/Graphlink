@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { render, fireEvent, screen, waitFor } from "@testing-library/react";
 import { beforeEach, afterEach, vi } from "vitest";
+import userEvent from "@testing-library/user-event";
 import ChartRenderer from "./ChartRenderer";
 import ChartOverview from "./ChartOverview";
 import { canonicalizeChartSpec } from "../chartSpec";
@@ -274,6 +275,40 @@ describe("composite source-row linked brushing", () => {
       .map(el => el.getAttribute("data-index"));
     expect(new Set(indices).size).toBe(indices.length);
     expect(container.querySelectorAll(".chart-composite-linked-highlight").length).toBeLessThanOrEqual(250);
+  });
+
+  it("cannot branch a selection under an unsaved layer preview with the saved design (#1080)", async () => {
+    const user = userEvent.setup();
+    const branch = vi.fn().mockResolvedValue(undefined);
+    const spec = canonicalizeChartSpec({ type: "composite", version: 2, composite: {
+      numbers: { x: [1, 2, 3, 4], a: [1, 2, 3, 4], b: [40, 30, 20, 10] },
+      layers: [{ mark: "point", x: "x", y: "a" }],
+    } });
+    const { container } = render(<ChartRenderer chartType="composite" chartData={spec}
+      onBranchSelection={branch} onCompositeDesignChange={vi.fn().mockResolvedValue(undefined)} />);
+    const brush = screen.getByRole("button", { name: "Brush source rows" });
+    fireEvent.click(brush);
+    fireEvent.pointerDown(container.querySelector(".chart-composite-brush-surface")!,
+      { pointerId: 1, clientX: 0, clientY: 0 });
+    fireEvent.pointerUp(container.querySelector(".chart-composite-brush-surface")!,
+      { pointerId: 1, clientX: 350, clientY: 470 });
+    expect(screen.getByRole("status")).toHaveTextContent(/of 4 source rows selected/);
+    // Previewing x/b instead of the saved x/a binding discards the selection
+    // and suspends brushing and branching until the edit is saved or cancelled.
+    fireEvent.click(screen.getByRole("button", { name: "Edit layers…" }));
+    await user.click(screen.getByRole("button", { name: "Y 1" }));
+    await user.click(screen.getByRole("option", { name: "b" }));
+    expect(screen.getByRole("status")).toHaveTextContent("Save or cancel layer edits to brush source rows");
+    expect(brush).toBeDisabled();
+    expect(container.querySelector(".chart-composite-brush-surface")).toBeNull();
+    expect(container.querySelectorAll('[data-selected="true"]')).toHaveLength(0);
+    expect(screen.getByRole("button", { name: "Branch selected rows" })).toBeDisabled();
+    // Discarding the preview does not resurrect the old selection.
+    fireEvent.click(screen.getByRole("button", { name: "Close layer editor" }));
+    expect(brush).toBeEnabled();
+    expect(screen.getByRole("status")).not.toHaveTextContent(/source rows selected/);
+    expect(screen.getByRole("button", { name: "Branch selected rows" })).toBeDisabled();
+    expect(branch).not.toHaveBeenCalled();
   });
 
   it("drops transient brushing state on a changed source snapshot", () => {
