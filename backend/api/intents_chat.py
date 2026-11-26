@@ -194,6 +194,7 @@ def _promote_document_attachments(document: SceneDocument, node, staged: list) -
 from backend.events import SessionBus
 from backend.notifications import NotificationState
 from backend.response_parsing import (
+    generated_artifacts,
     model_visible_reply,
     parse_response,
     PLACEHOLDER_ASSISTANT_REASONING,
@@ -258,6 +259,7 @@ def _regenerate_in_place(document, node_to_regenerate, reply_text):
     placeholder_text = text_content if text_content else PLACEHOLDER_GENERATED_CONTENT
     document.update_chat_node_content(node_to_regenerate.id, placeholder_text)
     node_to_regenerate.state.model_content = model_visible_reply(reply_text, placeholder_text)
+    node_to_regenerate.state.artifacts = generated_artifacts(parsed_parts)
 
     # ADR-006 stage 6.8 review fix: the old reply's token stamps describe
     # content that no longer exists - reset to None ("not reported"); fresh
@@ -542,6 +544,7 @@ def _make_send_on_reply(
         def _commit():
             ai = _build_reply_nodes(document, node, placeholder_text, parsed_parts)
             ai.state.model_content = model_visible_reply(reply_text, placeholder_text)
+            ai.state.artifacts = generated_artifacts(parsed_parts)
             # Always the real chat node's id, never a code/thinking child's -
             # add_code_node/add_thinking_node are documented (see their own
             # docstrings) as NOT branch points, and last_chat_node_id
@@ -1191,9 +1194,12 @@ def register_chat_version_intents(
         return node_to_regenerate.id
 
     async def set_chat_version(node_id, index):
+        # Version switches can swap the reply's generated cards, so watch
+        # its direct children for one undo step (#1100).
+        children = [e.target for e in document.edges.values() if e.source == node_id]
         document.record_command(
             "setChatVersion", "user", lambda: document.set_chat_version(node_id, index),
-            node_ids=[node_id],
+            node_ids=[node_id, *children],
         )
         await publish_scene()
 
