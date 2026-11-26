@@ -31,6 +31,7 @@ import { ScientificChartMarks } from "./ScientificChartMarks";
 import { BoxplotChartMarks } from "./BoxplotChartMarks";
 import { HeatmapChartMarks } from "./HeatmapChartMarks";
 import { CompositeChartMarks } from "./CompositeChartMarks";
+import { compositeHighlightsSampled } from "./compositeSelection";
 import { CompositeChartEditor } from "./CompositeChartEditor";
 import type { CompositeDesign } from "./compositeDesign";
 import { Button } from "../../ui/Button";
@@ -183,6 +184,8 @@ function ChartRenderer({ chartType, chartData, onAnalysisChange, onCompositeDesi
         <span role="status" aria-live="polite">
           {selectedIndices.length
             ? selectedIndices.length + " of " + fullRowCount + " source rows selected"
+              + (chartData.composite && compositeHighlightsSampled(chartData.composite, selectedIndices)
+                ? " (highlights sampled for display)" : "")
             : "Drag in a facet to select rows (Enter selects a whole facet)"}
         </span>
         <Button size="sm" variant="ghost" disabled={!selectedIndices.length || creatingSubset}
