@@ -94,7 +94,13 @@ def _engine(path, *, limits=None, policy=None):
     return engine, get_default_workspace_id(path), local, cloud, writes, executes
 
 
-async def _until(predicate, timeout=3):
+# Hang guards, not timing assertions: every checkpoint is a synchronous
+# SQLite write, and a loaded Windows CI runner (xdist + coverage, slow disk)
+# has exceeded 3 s on ordinary runs. A real hang still fails, just later.
+HANG_GUARD_SECONDS = 20
+
+
+async def _until(predicate, timeout=HANG_GUARD_SECONDS):
     async with asyncio.timeout(timeout):
         while not predicate():
             await asyncio.sleep(0.005)
@@ -178,7 +184,7 @@ def test_mid_step_cancel_and_preserved_results(tmp_path):
         await _until(lambda: "slow" in local.started)
         assert engine.cancel(ws + 1, run_id) is False
         assert engine.cancel(ws, run_id)
-        record = await asyncio.wait_for(engine.wait(ws, run_id), timeout=3)
+        record = await asyncio.wait_for(engine.wait(ws, run_id), timeout=HANG_GUARD_SECONDS)
         assert record["status"] == "cancelled"
         assert record["error"] == "Cancelled by user."
         assert record["steps"]["first"]["outputs"]["text"]["text"] == "ok first"
@@ -208,7 +214,7 @@ def test_run_caps(tmp_path, limit):
         token = engine.approve(ws, preview) if preview.requires_approval else None
         record = await asyncio.wait_for(engine.wait(
             ws, engine.start(ws, spec, params, approval_token=token),
-        ), timeout=3)
+        ), timeout=HANG_GUARD_SECONDS)
         assert record["status"] == "failed"
         assert ("step limit" if limit == "steps" else f"{limit} limit") in record["error"]
         assert record["steps"]["first"]["status"] == "completed"
@@ -491,10 +497,7 @@ def test_unattended_cost_cap_is_per_run_and_never_dispatches_over_cap(tmp_path):
 
 @pytest.mark.parametrize("fail_from", ["first-checkpoint", "pending-cleanup", "after-dispatch"])
 def test_checkpoint_failures_release_the_run_without_replay(tmp_path, monkeypatch, fail_from):
-    """#1081: a storage failure must not strand a dead worker as active.
-
-    The 10 s bounds are hang guards for a loaded CI runner, not timing
-    assertions."""
+    """#1081: a storage failure must not strand a dead worker as active."""
     async def scenario():
         engine, ws, local, *_ = _engine(tmp_path / "chats.db")
         spec = _spec(engine.registry, [
@@ -516,14 +519,14 @@ def test_checkpoint_failures_release_the_run_without_replay(tmp_path, monkeypatc
         if fail_from == "pending-cleanup":
             # Break storage just before the worker observes cancellation;
             # every cleanup checkpoint for pending steps then fails too.
-            await _until(lambda: "slow" in local.started, timeout=10)
+            await _until(lambda: "slow" in local.started)
             state["broken"] = True
             assert engine.cancel(ws, run_id)
         elif fail_from == "after-dispatch":
-            await _until(lambda: "slow" in local.started, timeout=10)
+            await _until(lambda: "slow" in local.started)
             state["broken"] = True
             local.gate.set()
-        record = await asyncio.wait_for(engine.wait(ws, run_id), timeout=10)
+        record = await asyncio.wait_for(engine.wait(ws, run_id), timeout=HANG_GUARD_SECONDS)
         assert record["status"] in ("failed", "cancelled")
         assert all(step["status"] not in ("pending", "running") for step in record["steps"].values())
         assert run_id not in engine._runs
@@ -532,11 +535,11 @@ def test_checkpoint_failures_release_the_run_without_replay(tmp_path, monkeypatc
         # admission and a fresh run of the same workflow is admitted.
         state["broken"] = False
         local.gate.set()
-        await _until(lambda: not engine._draining, timeout=10)
+        await _until(lambda: not engine._draining)
         started = list(local.started)
         second = engine.start(ws, spec, params)
         assert engine.store.read(ws, run_id)["status"] == record["status"]
-        assert (await asyncio.wait_for(engine.wait(ws, second), timeout=10))["status"] == "completed"
+        assert (await asyncio.wait_for(engine.wait(ws, second), timeout=HANG_GUARD_SECONDS))["status"] == "completed"
         # Nothing from the failed run was replayed: only the new run's steps ran.
         assert local.started[:len(started)] == started
         assert local.started[len(started):] == ["slow", "after"]
