@@ -1179,7 +1179,7 @@ class TestReindexGraphContent:
                 target = sql.strip() in (
                     "DELETE FROM documents WHERE id = ?",
                     "DELETE FROM documents WHERE source_uri = ?",
-                )
+                ) or sql.strip().startswith("UPDATE documents SET collection_id")  # in-place reindex (#1089)
                 if not self._waited and target:
                     self._waited = True
                     barrier.wait(timeout=5)

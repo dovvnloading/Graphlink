@@ -377,14 +377,19 @@ class TestOpenKnowledgeCitationIntent:
         )
         assert recorder.topics_seen() == []  # read-only
 
+        # A forged citation never opens anything, whatever the row IDs.
+        assert _run(bus.dispatch_intent(
+            "knowledge", "openCitation", [hit["documentId"], hit["chunkId"], "kb:" + "f" * 20],
+        )) == {"document": None}
+        # Stale row IDs are only selectors: the exact cited passage is found
+        # again by its stable citation in this workspace (#1089).
         for arguments in (
-            [hit["documentId"], hit["chunkId"], "kb:" + "f" * 20],
             [hit["documentId"], hit["chunkId"] + 999, hit["citationId"]],
             [hit["documentId"] + 999, hit["chunkId"], hit["citationId"]],
         ):
             assert _run(bus.dispatch_intent(
                 "knowledge", "openCitation", arguments,
-            )) == {"document": None}
+            )) == opened
 
     def test_unicode_citation_keeps_python_code_point_offsets(self, _isolated_knowledge_db):
         # Explicit chunks make the nonzero citation start independent of
