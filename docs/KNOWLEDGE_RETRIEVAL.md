@@ -363,8 +363,14 @@ remain cached. Search falls back to keywords if the configured semantic
 search encounters an invalid cached vector. Check the application log for the
 exact model ID and diagnostic.
 
-For a cache written before validation was added, or an intentional change
-of a model's dimensions under the same ID, first verify that the provider is
+OpenAI-compatible responses are paired with chunks by each item's `index`,
+not by array order. A batch with a missing, duplicate or out-of-range index
+is rejected and left pending. Before this check, an endpoint or proxy that
+reordered items could cache vectors against the wrong chunks.
+
+For a cache written before validation was added, a cloud cache filled
+through an endpoint suspected of reordering batch items, or an intentional
+change of a model's dimensions under the same ID, first verify that the provider is
 healthy and that you really intend to replace the cached vector space. Stop
 Graphlink completely (including its background embedding jobs) and back up
 the knowledge database. From the repository root or an installed Graphlink

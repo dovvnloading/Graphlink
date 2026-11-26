@@ -545,3 +545,68 @@ def test_finite_extreme_vectors_have_correct_cosine_scores(tmp_path, magnitude):
     hits = vector_search(db_path, provider, "query", model_id="fake-model")
     assert [hit["source_uri"] for hit in hits] == ["first.txt", "second.txt"]
     assert [hit["score"] for hit in hits] == pytest.approx([1.0, 0.0])
+
+
+# -- #1086: response item indices, not array order, identify inputs ----------
+
+
+def _indexed_client(items):
+    """A fake SDK client whose response carries explicit `index` fields."""
+    def create(**kwargs):
+        return types.SimpleNamespace(data=[
+            types.SimpleNamespace(index=index, embedding=vector) for index, vector in items(kwargs["input"])
+        ])
+    return types.SimpleNamespace(embeddings=types.SimpleNamespace(create=create))
+
+
+def _adapters(client):
+    from backend.knowledge_embedding_config import _OpenAICompatibleEmbedder
+    from backend.providers import OpenAIProvider
+    return [OpenAIProvider(client=client, model="m"), _OpenAICompatibleEmbedder(client, "m")]
+
+
+def test_both_adapters_restore_request_order_from_reversed_indices():
+    client = _indexed_client(lambda texts: [(1, [0.0, 1.0]), (0, [1.0, 0.0])])
+    for adapter in _adapters(client):
+        assert adapter.embed(["alpha", "beta"]) == [[1.0, 0.0], [0.0, 1.0]]
+
+
+@pytest.mark.parametrize("items", [
+    [(0, [1.0, 0.0]), (0, [0.0, 1.0])],          # duplicate
+    [(0, [1.0, 0.0]), (None, [0.0, 1.0])],       # one missing
+    [(0, [1.0, 0.0]), (2, [0.0, 1.0])],          # out of range
+    [(0, [1.0, 0.0]), (-1, [0.0, 1.0])],         # negative
+    [(0, [1.0, 0.0]), (True, [0.0, 1.0])],       # not an integer
+    [(0, [1.0, 0.0])],                           # too few items
+])
+def test_both_adapters_reject_inconsistent_indices(items):
+    client = _indexed_client(lambda texts: items)
+    for adapter in _adapters(client):
+        with pytest.raises(ValueError, match="nothing was cached"):
+            adapter.embed(["alpha", "beta"])
+
+
+def test_reordered_response_persists_each_vector_against_its_own_chunk(tmp_path):
+    from backend.knowledge_embedding_config import _OpenAICompatibleEmbedder
+    db_path = tmp_path / "knowledge.db"
+    alpha = _ingest(db_path, text="alpha", source_uri="alpha.txt")
+    _ingest(db_path, text="beta", source_uri="beta.txt")
+    vectors = {"alpha": [1.0, 0.0], "beta": [0.0, 1.0], "query": [1.0, 0.0]}
+    # The endpoint reverses the batch but labels each item correctly.
+    client = _indexed_client(lambda texts: reversed(list(enumerate(vectors[t] for t in texts))))
+    provider = _OpenAICompatibleEmbedder(client, "m")
+    assert embed_pending_chunks(db_path, provider, "m") == 2
+    results = vector_search(db_path, provider, "query", model_id="m")
+    assert results[0]["document_id"] == alpha.document_id
+
+
+def test_a_rejected_batch_leaves_every_chunk_pending(tmp_path):
+    from backend.knowledge_embedding_config import _OpenAICompatibleEmbedder
+    from backend.knowledge_store import chunks_pending_embedding
+    db_path = tmp_path / "knowledge.db"
+    _ingest(db_path, text="alpha", source_uri="alpha.txt")
+    _ingest(db_path, text="beta", source_uri="beta.txt")
+    client = _indexed_client(lambda texts: [(0, [1.0, 0.0]), (0, [0.0, 1.0])])
+    with pytest.raises(ValueError, match="nothing was cached"):
+        embed_pending_chunks(db_path, _OpenAICompatibleEmbedder(client, "m"), "m")
+    assert len(chunks_pending_embedding(db_path, "m")) == 2

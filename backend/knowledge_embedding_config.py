@@ -24,6 +24,7 @@ from backend.knowledge_embeddings import DEFAULT_BATCH_SIZE, embed_pending_chunk
 from backend.knowledge_retrieval import hybrid_search
 from backend.knowledge_store import cold_collection_embedding_batch
 from backend.providers.base import ProviderCapabilities
+from backend.providers.embedding_response import decode_openai_embeddings
 from backend.providers.ollama_provider import OllamaProvider
 
 logger = logging.getLogger(__name__)
@@ -42,7 +43,7 @@ class _OpenAICompatibleEmbedder:
         if not texts:
             return []
         response = self.client.embeddings.create(model=self.model_id, input=list(texts))
-        return [item.embedding for item in response.data]
+        return decode_openai_embeddings(response, len(texts))
 
 
 @contextmanager
