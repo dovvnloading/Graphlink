@@ -245,11 +245,22 @@ def parse_table(source: bytes, *, fmt: str = "csv", missing: list[str] | None = 
             not h or len(h) > 256 or "\n" in h or "\r" in h for h in labels
         ) or len(set(labels)) != len(labels):
             raise ValueError("Use 1–256 distinct, nonempty headers (at most 256 characters each).")
-        unused_hints = set(options["columnTypes"])
         col_names = [split_column_header(h)[0] for h in labels]
-        for key in unused_hints:
-            if key not in labels and col_names.count(key) != 1:
+        # Resolve each hint to one column index once. An exact label wins;
+        # a base-name alias must match exactly one column. Looking hints up
+        # per column also applied "Temperature" to "Temperature (degC)"
+        # (#1096).
+        overrides: dict[int, str] = {}
+        for key, hinted_kind in options["columnTypes"].items():
+            if key in labels:
+                target = labels.index(key)
+            elif col_names.count(key) == 1:
+                target = col_names.index(key)
+            else:
                 raise ValueError(f"Type override {key!r} does not identify one column.")
+            if target in overrides:
+                raise ValueError(f"Two type overrides target the column {labels[target]!r}.")
+            overrides[target] = hinted_kind
         raw_rows: list[list[str]] = []
         for row in reader:
             if not row:
@@ -275,7 +286,7 @@ def parse_table(source: bytes, *, fmt: str = "csv", missing: list[str] | None = 
     for index, label in enumerate(labels):
         name, unit = split_column_header(label)
         present = [row[index] for row in raw_rows if not missing_cell(row[index])]
-        kind = options["columnTypes"].get(label, options["columnTypes"].get(name, _kind(present)))
+        kind = overrides.get(index) or _kind(present)
         missing_count = 0
         for row_index, row in enumerate(raw_rows):
             raw = row[index]
