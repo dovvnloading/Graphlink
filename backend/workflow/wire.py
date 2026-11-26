@@ -5,10 +5,10 @@ from typing import Any
 
 from .contracts import (
     AdapterDescriptor, AssetRef, FileValue, ImageValue, InputBinding, JsonValue,
-    PortSet, PortSpec, StepOutputSource, TableValue, TextValue, WorkflowInputSource,
+    PortSet, PortSpec, StepOutputSource, TextValue, WorkflowInputSource,
     WorkflowOutput, WorkflowSpec, WorkflowStepSpec,
 )
-from .ports import PORT_KINDS
+from .ports import PORT_KINDS, table_from_json
 
 
 def _object(value: Any, *fields: str) -> dict:
@@ -91,8 +91,7 @@ def decode_value(value: Any):
         return JsonValue(value["value"])
     if kind == "table":
         _object(value, "kind", "columns", "rows")
-        return TableValue(tuple(map(_string, _array(value["columns"]))),
-                          tuple(tuple(_array(row)) for row in _array(value["rows"])))
+        return table_from_json(value["columns"], value["rows"])
     if kind in ("file", "image"):
         _object(value, "kind", "asset")
         asset = _object(value["asset"], "asset_id", "sha256", "media_type", "filename", "size_bytes")
