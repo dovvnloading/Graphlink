@@ -280,6 +280,7 @@ def _chunk_and_store(
     last_saved: dict[str, Any] | None,
     target_tokens: int | None,
     overlap_tokens: int | None,
+    retained_source: bool = False,
 ) -> IngestOutcome:
     """The shared tail of both ingest_file() and ingest_text() (stage
     17.5): chunk -> store, idempotent by content hash (see
@@ -307,6 +308,7 @@ def _chunk_and_store(
         collection_id=collection_id,
         notifications=notifications,
         last_saved=last_saved,
+        retained_source=retained_source,
     )
 
 
@@ -362,4 +364,7 @@ def ingest_text(
         text=text, source_uri=source_uri, title=title, mime=mime,
         collection_id=collection_id, db_path=db_path, notifications=notifications,
         last_saved=last_saved, target_tokens=target_tokens, overlap_tokens=overlap_tokens,
+        # Each retained text source independently owns its deduplicated
+        # content (#1085), whatever was indexed first.
+        retained_source=True,
     )
