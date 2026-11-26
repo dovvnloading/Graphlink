@@ -160,3 +160,44 @@ def test_hybrid_rejects_invalid_ranking_and_k(tmp_path):
         hybrid_search(tmp_path / "knowledge.db", "anything", ranking="guess")
     with pytest.raises(ValueError, match="k must"):
         hybrid_search(tmp_path / "knowledge.db", "anything", k=0)
+
+
+_CALIBRATION = (
+    "During the weekly bench calibration the technician measured the reference channel offset "
+    "with the shielded probe and recorded a steady reading of {value} volts after warm up."
+)
+
+
+@pytest.mark.parametrize(("left", "right"), [
+    ("Calibration offset: +5 volts.", "Calibration offset: -5 volts."),
+    (_CALIBRATION.format(value="5"), _CALIBRATION.format(value="9")),
+    (_CALIBRATION.format(value="5"), _CALIBRATION.format(value="5").replace("5 volts", "5 millivolts")),
+    (_CALIBRATION.format(value="< 5"), _CALIBRATION.format(value="> 5")),
+    (_CALIBRATION.format(value="5"), _CALIBRATION.format(value="5").replace("recorded", "never recorded")),
+])
+def test_conflicting_measurements_are_not_merged_as_near_duplicates(left, right):
+    """#1084: different signed values, quantities, units, operators or
+    negations are distinct evidence even when the wording matches."""
+    rows = [_hit(1, left, source="a.md"), _hit(2, right, source="b.md")]
+    assert [row["chunk_id"] for row in remove_near_duplicates(rows, k=5)] == [1, 2]
+
+
+def test_ordinary_overlapping_duplicate_is_still_suppressed_with_measurements():
+    text = _CALIBRATION.format(value="+5")
+    rows = [
+        _hit(1, text, source="a.md"),
+        _hit(2, text.replace("weekly", "regular"), source="mirror.md"),
+        _hit(3, "Unrelated maintenance notes about the cooling fan schedule.", source="c.md"),
+    ]
+    assert [row["chunk_id"] for row in remove_near_duplicates(rows, k=2)] == [1, 3]
+
+
+def test_hybrid_search_keeps_both_contradictory_sources_with_citations(tmp_path):
+    db = tmp_path / "knowledge.db"
+    for name, body in (("plus.txt", "Calibration offset: +5 volts."),
+                       ("minus.txt", "Calibration offset: -5 volts.")):
+        add_document_with_chunks(db, source_uri=name, title=name, mime="text/plain", text=body,
+                                 chunks=[TextChunk(body, 0, 6, 0, len(body))])
+    hits = hybrid_search(db, "calibration offset", k=5)
+    assert sorted(hit["source_file"] for hit in hits) == ["minus.txt", "plus.txt"]
+    assert len({hit["citation_id"] for hit in hits}) == 2
