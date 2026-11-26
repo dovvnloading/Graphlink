@@ -891,6 +891,10 @@ class ChatVersion:
     # Provenance belongs to each alternative, not to the entire node.
     history_fingerprint: str | None = None
     knowledge_enabled: bool | None = None
+    # The answer the model actually gave, minus private reasoning, when the
+    # canvas shows it differently (fenced code moved into Code cards). None
+    # means `content` already is the model-visible text (#1099).
+    model_content: str | None = None
 
 
 MAX_CHAT_VERSIONS = 20
@@ -975,6 +979,8 @@ class ChatState(NodeState):
     # index so scene snapshots do not duplicate up to 20 full message bodies.
     versions: list[ChatVersion] = field(default_factory=list)
     version_index: int = 0
+    # Selected version's model-visible answer; see ChatVersion.model_content.
+    model_content: str | None = None
     chat_scroll_value: float = 0.0
     content_parts: list[dict[str, Any]] | None = None
     provider: str | None = None

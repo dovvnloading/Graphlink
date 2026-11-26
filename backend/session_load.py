@@ -514,6 +514,7 @@ def _migrate_chat_versions(
             history_fingerprint=_valid_reply_fingerprint(row.get("reply_history_fingerprint")),
             knowledge_enabled=(row.get("reply_knowledge_enabled")
                                      if isinstance(row.get("reply_knowledge_enabled"), bool) else None),
+            model_content=row["model_content"] if isinstance(row.get("model_content"), str) else None,
         )
         for row in kept
     ]
@@ -543,6 +544,9 @@ def _restore_chat_payload(payload: dict[str, Any]) -> SceneNode:
     # raw_content is the live projection in both save formats. Honor it even
     # if a legacy import has updated it but retained an older versions array.
     if "raw_content" in payload or "text" in payload:
+        if selected.content != content_text:
+            # An edited live mirror no longer matches the saved answer.
+            selected.model_content = None
         selected.content = content_text
         # When the legacy live mirror exists, it remains authoritative for
         # media too. Without it, retain the selected version's saved parts.
@@ -575,6 +579,7 @@ def _restore_chat_payload(payload: dict[str, Any]) -> SceneNode:
             is_user=bool(payload.get("is_user", True)),
             versions=versions,
             version_index=version_index,
+            model_content=selected.model_content,
             chat_scroll_value=_finite_float(payload.get("scroll_value", 0.0) or 0.0),
             provider=selected.provider_name,
             model=selected.model_name,

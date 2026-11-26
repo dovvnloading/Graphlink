@@ -107,6 +107,7 @@ class ConversationalOps(SceneDocumentParts):
         version.parts = copy.deepcopy(node.state.content_parts)
         version.history_fingerprint = node.state.reply_history_fingerprint
         version.knowledge_enabled = node.state.reply_knowledge_enabled
+        version.model_content = node.state.model_content
 
     def update_chat_node_content(
         self, node_id: str, content: str, incomplete: bool = False
@@ -137,6 +138,7 @@ class ConversationalOps(SceneDocumentParts):
         # A new version must not discard real tool calls. Regeneration
         # replaces only the stale citation ledger via apply_reply_citations.
         node.state.content_parts = None
+        node.state.model_content = None
         node.state.versions.append(ChatVersion(
             content=new_content, incomplete=bool(incomplete),
             created_at=datetime.now(timezone.utc).isoformat(),
@@ -169,6 +171,7 @@ class ConversationalOps(SceneDocumentParts):
         node.state.content_parts = copy.deepcopy(version.parts)
         node.state.reply_history_fingerprint = version.history_fingerprint
         node.state.reply_knowledge_enabled = version.knowledge_enabled
+        node.state.model_content = version.model_content
         # A scientific source card is only valid for its original snapshot.
         node.state.science_reference = None
 

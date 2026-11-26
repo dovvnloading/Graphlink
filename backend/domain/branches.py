@@ -433,9 +433,13 @@ class BranchOps(SceneDocumentParts):
             # promises to stop quietly on a stray non-chat node/edge shape,
             # never raise. Same duck-typed posture as remove_nodes's own
             # image_asset_id read (backend/domain/graph.py).
+            is_user = getattr(node.state, "is_user", False)
+            # An assistant reply whose code moved into Code cards replays
+            # the full answer the model gave, code included (#1099).
+            model_content = None if is_user else getattr(node.state, "model_content", None)
             history.append({
-                "role": "user" if getattr(node.state, "is_user", False) else "assistant",
-                "content": getattr(node.state, "content_parts", None) or node.content,
+                "role": "user" if is_user else "assistant",
+                "content": getattr(node.state, "content_parts", None) or model_content or node.content,
             })
             parent_edge = self._branch_parent_edge(current_id)
             current_id = parent_edge.source if parent_edge is not None else None

@@ -45,6 +45,18 @@ def _fence_language(match: re.Match[str]) -> str:
     return tokens[0] if tokens else ""
 
 
+def model_visible_reply(response_text: str, displayed: str) -> str | None:
+    """The reply as the model wrote it, minus private reasoning.
+
+    Returned only when it differs from what the chat bubble displays (code
+    moved to cards, or a placeholder), so ordinary replies store nothing
+    extra. Fences keep their original order and language (#1099).
+    """
+    _reasoning, visible = api_provider.split_reasoning_and_content(response_text)
+    visible = visible.strip()
+    return visible if visible and visible != displayed else None
+
+
 def parse_response(response_text: str) -> list[dict]:
     """Split a flat LLM reply into ordered thinking/text/code parts.
 
