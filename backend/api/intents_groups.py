@@ -56,9 +56,10 @@ def register_groups_intents(bus: SessionBus, document: SceneDocument) -> None:
         await publish_scene()
         return node.id
 
-    async def set_note_content(node_id, content):
+    async def set_note_content(node_id, content, expected_content=None):
         document.record_command(
-            "setNoteContent", "user", lambda: document.set_note_content(node_id, content),
+            "setNoteContent", "user",
+            lambda: document.set_note_content(node_id, content, expected_content),
             node_ids=[node_id],
         )
         await publish_scene()

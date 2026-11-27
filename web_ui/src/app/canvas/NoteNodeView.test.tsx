@@ -166,7 +166,7 @@ describe("NoteNodeView", () => {
     fireEvent.change(textarea, { target: { value: "edited text" } });
     fireEvent.blur(textarea);
 
-    expect(onSetContent).toHaveBeenCalledWith("edited text");
+    expect(onSetContent).toHaveBeenCalledWith("edited text", "original", expect.any(Function));
     expect(screen.queryByRole("textbox")).toBeNull();
   });
 
@@ -197,7 +197,7 @@ describe("NoteNodeView", () => {
     }
 
     expect(onSetContent).toHaveBeenCalledTimes(1);
-    expect(onSetContent).toHaveBeenCalledWith("saved edit");
+    expect(onSetContent).toHaveBeenCalledWith("saved edit", "original", expect.any(Function));
     expect(order).toEqual(["commit", "document keydown"]);
     expect(screen.getByRole("textbox")).toBeTruthy();
   });

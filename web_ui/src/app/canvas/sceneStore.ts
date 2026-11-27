@@ -2402,8 +2402,20 @@ export class SceneStore {
     return this.transport.request("scene", "restoreTableOutput", [targetId, revisionToken]);
   }
 
-  setNoteContent(nodeId: string, content: string): void {
-    this.transport.fireIntent("scene", "setNoteContent", [nodeId, content], undefined, true);
+  setNoteContent(
+    nodeId: string, content: string, expectedContent?: string,
+    onSettled?: (success: boolean) => void,
+  ): void {
+    if (expectedContent === undefined) {
+      this.transport.fireIntent("scene", "setNoteContent", [nodeId, content], undefined, true);
+      return;
+    }
+    // A guarded editor write (#1144): never queued while offline - the
+    // editor keeps the draft on any refusal, like setArtifactContent.
+    this.transport.fireIntent(
+      "scene", "setNoteContent", [nodeId, content, expectedContent],
+      undefined, false, undefined, onSettled,
+    );
   }
 
   bindNoteTextInput(sourceId: string, targetId: string, operation: SceneNodeRow["textInputOperation"] = "copy"): void {

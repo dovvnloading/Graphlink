@@ -81,4 +81,23 @@
   outline: none;
   border-color: var(--gl-surface-text-muted);
 }
+
+.note-node-editor-hint {
+  display: block;
+  margin-top: var(--gl-space-1);
+  font-size: var(--gl-text-2xs);
+  color: var(--gl-surface-text-muted);
+}
+
+.note-node-conflict {
+  display: grid;
+  gap: var(--gl-space-1-5);
+  margin-bottom: var(--gl-space-2);
+}
+
+.note-node-conflict-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gl-space-1);
+}
 }

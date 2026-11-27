@@ -274,12 +274,18 @@ class ContentOps(SceneDocumentParts):
         self.nodes[node_id] = node
         return node
 
-    def set_note_content(self, node_id: str, content: str) -> None:
+    def set_note_content(self, node_id: str, content: str, expected_content: str | None = None) -> None:
+        """Set a note's text. A user edit passes the text it started from as
+        expected_content, so a stale editor cannot overwrite a newer run
+        result, remote edit or undo; internal writers omit it (#1144)."""
         node = self.nodes.get(node_id)
         if node is None:
             raise SceneError(f"unknown node: {node_id}")
         if isinstance(node.state, NoteState) and node.state.is_table_source:
             raise SceneError("Use the table editor to change CSV data.")
+        if expected_content is not None and node.content != expected_content:
+            raise SceneError("This note changed while you were editing. Your draft is kept; "
+                             "review the latest text, then keep your edit or use the saved version.")
         node.content = str(content)
 
     def _plain_note(self, node_id: str) -> _NodeWith[NoteState]:
