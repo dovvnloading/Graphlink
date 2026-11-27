@@ -29,6 +29,8 @@ import { InlineAlert } from "../ui/InlineAlert";
 import { Disclosure } from "../ui/Disclosure";
 import { Spinner } from "../ui/Spinner";
 import { formatDuration, formatTokens } from "../ui/format";
+import { FullInstruction } from "./FullInstruction";
+import { useTailFollow } from "./useTailFollow";
 
 /**
  * PLAN-2026-08-24 H1: the workspace agent node. Everything rendered here
@@ -696,13 +698,9 @@ function HarnessNodeViewInner({ data, selected, id }: NodeProps<HarnessFlowNode>
   // A new run opens its activity naturally through the derived open state.
   // A manual collapse remains closed until the run ID changes.
 
-  // Same follow-the-log behavior as PlanNodeView's activity list: pinned
-  // to the newest row only while running and only while open.
-  useEffect(() => {
-    if (running && activityOpen) {
-      activityListRef.current?.scrollTo({ top: activityListRef.current.scrollHeight });
-    }
-  }, [data.harnessActivity, running, activityOpen]);
+  // Same follow-the-log policy as PlanNodeView: follow new rows only while
+  // the reader is at the bottom of an open, live log (#1152).
+  const tail = useTailFollow(activityListRef, data.harnessActivity.length, running && activityOpen);
 
   async function sendDraft(): Promise<void> {
     const text = draft.trim();
@@ -844,6 +842,10 @@ function HarnessNodeViewInner({ data, selected, id }: NodeProps<HarnessFlowNode>
       {data.harnessRunId && (
         <p className="plan-node-detail">Task permission: {data.harnessTaskPermissionMode === "auto_edit" ? "Auto-edit" : data.harnessTaskPermissionMode === "autonomous" ? "Autonomous" : "Ask"}</p>
       )}
+      {/* The header clips the task to one line; the whole task is readable
+          and selectable here, newlines intact (#1158). */}
+      {data.harnessGoal && <FullInstruction label="Task" text={data.harnessGoal} />}
+
       {data.harnessStatusDetail && (
         <p className="plan-node-detail" role={data.harnessStatus === "failed" ? "alert" : undefined}>
           {data.harnessStatusDetail}
@@ -933,6 +935,10 @@ function HarnessNodeViewInner({ data, selected, id }: NodeProps<HarnessFlowNode>
               <span className="harness-node-plan-marker" aria-hidden="true">
                 {step.status === "active" ? <Spinner size={12} decorative /> : <Icon size="sm" name={step.status === "done" ? "status-success" : "status-pending"} />}
               </span>
+              {/* The state in words, not only the icon (#1160). */}
+              <span className="visually-hidden">
+                {step.status === "active" ? "In progress" : step.status === "done" ? "Done" : "Pending"}:{" "}
+              </span>
               <span className="harness-node-plan-text">{step.text}</span>
             </div>
           ))}
@@ -943,7 +949,8 @@ function HarnessNodeViewInner({ data, selected, id }: NodeProps<HarnessFlowNode>
         <Disclosure className="chat-node-tool-invocations plan-node-activity"
           open={activityOpen} onOpenChange={setActivityOpen}
           title={`${data.harnessActivity.length} activity ${data.harnessActivity.length === 1 ? "entry" : "entries"}${activityErrorCount ? ` · ${activityErrorCount} ${activityErrorCount === 1 ? "error" : "errors"}` : ""}`}>
-          <div className="plan-node-activity-list nowheel nodrag" ref={activityListRef}>
+          <div className="plan-node-activity-list nowheel nodrag" ref={activityListRef} onScroll={tail.onScroll}
+            role="log" aria-label="Agent activity">
             {data.harnessActivity.map((row, index) => (
               <div key={index} className={`chat-node-tool-invocation${row.outcome === "error" ? " error" : ""}`}>
                 <div className="chat-node-tool-invocation-name">
@@ -957,6 +964,12 @@ function HarnessNodeViewInner({ data, selected, id }: NodeProps<HarnessFlowNode>
               </div>
             ))}
           </div>
+          {!tail.following && running && (
+            <Button size="sm" variant="ghost" className="nodrag plan-node-jump-latest" iconStart="arrow-down"
+              onClick={tail.jumpToLatest}>
+              {tail.unread > 0 ? `Jump to latest (${tail.unread} new)` : "Jump to latest"}
+            </Button>
+          )}
         </Disclosure>
       )}
 

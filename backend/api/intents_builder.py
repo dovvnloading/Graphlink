@@ -236,6 +236,9 @@ def register_builder_intents(
         agent_dispatcher.deny_code_execution(request_id)
 
     async def set_plan_steps(node_id, steps):
+        """Replace a plan's steps. Answers True only when the edit was
+        applied; a refusal answers False after its notification, so the
+        editor can keep the user's draft (#1149)."""
         node = document.nodes.get(node_id)
         # REVIEW-FIX: a live run_build holds `step = _current_step(node)`
         # (backend/builder.py) as a direct reference into the OLD dict
@@ -258,7 +261,7 @@ def register_builder_intents(
                 "info",
             )
             await bus.publish("notification")
-            return
+            return False
         try:
             document.record_command(
                 "setPlanSteps", "user",
@@ -268,8 +271,9 @@ def register_builder_intents(
         except SceneError as exc:
             notifications.show(str(exc), "warning")
             await bus.publish("notification")
-            return
+            return False
         await publish_scene()
+        return True
 
     bus.register_intent("builder", "start", start)
     bus.register_intent("builder", "startExecution", start_execution)

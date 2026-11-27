@@ -17,6 +17,8 @@ import { InlineAlert } from "../ui/InlineAlert";
 import { Tooltip } from "../ui/Tooltip";
 import { TextField } from "../ui/TextField";
 import { formatCount, formatDuration, formatTokens } from "../ui/format";
+import { FullInstruction } from "./FullInstruction";
+import { useTailFollow } from "./useTailFollow";
 
 /**
  * ADR-008 stage 8.3: the Builder's plan node - the checklist the user
@@ -77,7 +79,8 @@ export interface PlanNodeData extends Record<string, unknown> {
   onDenyTool: () => void;
   onUndoBuild: () => void;
   onSaveRecipe: () => void;
-  onSetPlanSteps: (steps: PlanStepData[]) => void;
+  /** Resolves true only when the backend applied the edit (#1149). */
+  onSetPlanSteps: (steps: PlanStepData[]) => Promise<boolean>;
 }
 
 export type PlanFlowNode = Node<PlanNodeData, "plan">;
@@ -105,6 +108,17 @@ function PlanNodeMenu({
       <MenuItem label="Delete node" destructive onSelect={onDelete} />
     </NodeMenu>
   );}
+
+/** Step state in words, so it is not carried by the icon alone (#1160). */
+const STEP_STATE_LABELS: Record<string, string> = {
+  pending: "Pending", running: "Running", done: "Done", failed: "Failed", skipped: "Skipped",
+};
+
+function stepSummary(steps: readonly PlanStepData[]): string {
+  const done = steps.filter((step) => step.status === "done").length;
+  const current = steps.find((step) => step.status === "running");
+  return `${done} of ${steps.length} steps done` + (current ? `. Running: ${current.title}` : "");
+}
 
 function StepMarker({ status }: { status: string }) {
   if (status === "running") return <Spinner size={16} decorative />;
@@ -163,18 +177,9 @@ function PlanNodeViewInner({ data, selected }: NodeProps<PlanFlowNode>) {
   const activityListRef = useRef<HTMLDivElement>(null);
   const activityErrorCount = data.builderActivity.filter((row) => row.outcome !== "ok").length;
   const [menuPosition, setMenuPosition] = useState<MenuPosition | null>(null);
-
-  // Keeps the log pinned to its newest row while the build is actively
-  // producing more of them - only while the disclosure is actually open
-  // (a native <details>'s own `open` attribute IS the expand/collapse
-  // state here, so no separate React state exists to gate this on) and
-  // only while running, so a landed build's log stops moving under the
-  // user once there is nothing left to follow.
-  useEffect(() => {
-    if (running && activityOpen) {
-      activityListRef.current?.scrollTo({ top: activityListRef.current.scrollHeight });
-    }
-  }, [data.builderActivity, running, activityOpen]);
+  // Follows the newest row only while the reader is at the bottom of an
+  // open log of a live build (#1152).
+  const tail = useTailFollow(activityListRef, data.builderActivity.length, running && activityOpen);
 
   // ADR-021 stage 21.3: plan editing is local-draft-then-commit, not
   // per-keystroke intent firing - a checklist edit is a single undoable
@@ -204,7 +209,12 @@ function PlanNodeViewInner({ data, selected }: NodeProps<PlanFlowNode>) {
   // whenever you can start it" is one rule, not two.
   const canEditPlan = resumable && data.planSteps.length > 0;
   const editing = draft !== null && canEditPlan && draft.seededFrom === planSignature;
-  const draftSteps = editing ? draft.steps : null;
+  // The plan moved (or stopped being editable) under an open editor: the
+  // draft is kept on screen as a conflict, never silently dropped (#1149).
+  const staleDraft = draft !== null && !editing;
+  const draftSteps = draft !== null ? draft.steps : null;
+  const [savingPlan, setSavingPlan] = useState(false);
+  const [planSaveError, setPlanSaveError] = useState("");
 
   const draftIsValid =
     draftSteps !== null && draftSteps.every((step) => step.title.trim().length > 0);
@@ -218,6 +228,7 @@ function PlanNodeViewInner({ data, selected }: NodeProps<PlanFlowNode>) {
 
   function cancelEditing(): void {
     setDraft(null);
+    setPlanSaveError("");
   }
 
   function updateDraft(update: (steps: PlanStepData[]) => PlanStepData[]): void {
@@ -267,10 +278,19 @@ function PlanNodeViewInner({ data, selected }: NodeProps<PlanFlowNode>) {
     });
   }
 
-  function saveSteps(): void {
-    if (draftSteps === null || !draftIsValid) return;
-    data.onSetPlanSteps(draftSteps.map((step) => ({ ...step, title: step.title.trim() })));
-    setDraft(null);
+  async function saveSteps(): Promise<void> {
+    if (draftSteps === null || !draftIsValid || staleDraft || savingPlan) return;
+    setSavingPlan(true);
+    setPlanSaveError("");
+    try {
+      const applied = await data.onSetPlanSteps(draftSteps.map((step) => ({ ...step, title: step.title.trim() })));
+      if (applied) setDraft(null);
+      else setPlanSaveError("The plan wasn't saved. See the notification for why; your edits are still here.");
+    } catch {
+      setPlanSaveError("Couldn't confirm the plan was saved. Check the connection, then save again; your edits are still here.");
+    } finally {
+      setSavingPlan(false);
+    }
   }
 
   // The tool-approval panel mounts fresh each time the Builder pauses for
@@ -335,13 +355,19 @@ function PlanNodeViewInner({ data, selected }: NodeProps<PlanFlowNode>) {
         <p className="plan-node-detail">{TERMINAL_NOTES[data.builderStatus]}</p>
       )}
 
+      {/* The header shows one clipped line; the whole goal is readable and
+          selectable here, newlines intact (#1158). */}
+      {data.planGoal && <FullInstruction label="Goal" text={data.planGoal} />}
+
+      {data.planSteps.length > 0 && <p className="visually-hidden" role="status">{stepSummary(data.planSteps)}</p>}
       {data.planSteps.length > 0 && draftSteps === null && (
-        <ul className="plan-node-steps">
+        <ul className="plan-node-steps" aria-label="Plan steps">
           {data.planSteps.map((step) => (
             <li key={step.id} className={`plan-node-step plan-node-step-${step.status}`}>
               <span className="plan-node-step-marker" aria-hidden="true">
                 <StepMarker status={step.status} />
               </span>
+              <span className="visually-hidden">{STEP_STATE_LABELS[step.status] ?? step.status}: </span>
               <span className="plan-node-step-title">{step.title}</span>
               {step.detail && <span className="plan-node-step-detail">{step.detail}</span>}
             </li>
@@ -359,16 +385,23 @@ function PlanNodeViewInner({ data, selected }: NodeProps<PlanFlowNode>) {
           rather than being trusted to enforce it. */}
       {draftSteps !== null && (
         <div className="plan-node-step-editor" role="group" aria-label="Edit plan steps">
-          <ul className="plan-node-steps">
+          {staleDraft && (
+            <InlineAlert variant="warning" title="The plan changed"
+              body="The plan changed while you were editing, so these edits can't be saved. Your text is kept below for reference; discard it to see the latest plan." />
+          )}
+          <ul className="plan-node-steps" aria-label="Plan steps being edited">
             {draftSteps.map((step, index) => {
               const frozen = step.status !== "pending";
               return (
-                <li key={step.id} className={`plan-node-step plan-node-step-${step.status}`}>
+                <li key={step.id || `new-${index}`} className={`plan-node-step plan-node-step-${step.status}`}>
                   <span className="plan-node-step-marker" aria-hidden="true">
                     <StepMarker status={step.status} />
                   </span>
                   {frozen ? (
-                    <span className="plan-node-step-title">{step.title}</span>
+                    <span className="plan-node-step-title">
+                      <span className="visually-hidden">{STEP_STATE_LABELS[step.status] ?? step.status}, can't be edited: </span>
+                      {step.title}
+                    </span>
                   ) : (
                     <>
                       <TextField size="sm" className="plan-node-step-input nodrag"
@@ -389,23 +422,28 @@ function PlanNodeViewInner({ data, selected }: NodeProps<PlanFlowNode>) {
             })}
           </ul>
           <div className="plan-node-step-editor-actions">
-            <Button size="sm" className="nodrag" iconStart="plus" onClick={addStep}>Add step</Button>
-            <Button size="sm" variant="primary" className="nodrag"
-              disabled={!draftIsValid} onClick={saveSteps}>Save plan</Button>
-            <Button size="sm" variant="ghost" className="nodrag" onClick={cancelEditing}>Cancel</Button>
+            <Button size="sm" className="nodrag" iconStart="plus" onClick={addStep}
+              disabled={staleDraft || savingPlan}>Add step</Button>
+            <Button size="sm" variant="primary" className="nodrag" loading={savingPlan}
+              disabled={!draftIsValid || staleDraft || savingPlan} onClick={() => { void saveSteps(); }}>Save plan</Button>
+            <Button size="sm" variant="ghost" className="nodrag" onClick={cancelEditing} disabled={savingPlan}>
+              {staleDraft ? "Discard edits" : "Cancel"}
+            </Button>
           </div>
           {!draftIsValid && (
             <p className="plan-node-detail" role="alert">
               Every step needs a title.
             </p>
           )}
+          {planSaveError && <p className="plan-node-detail" role="alert">{planSaveError}</p>}
         </div>
       )}
 
-      <div className="plan-node-budgets">
-        {formatCount(data.builderSpentSteps)} of {formatCount(data.builderMaxSteps)} steps ·{" "}
-        {formatTokens(data.builderSpentTokens)} / {formatTokens(data.builderMaxTokens)} tokens ·{" "}
-        {formatDuration(data.builderSpentWallSeconds)} / {formatDuration(data.builderMaxWallSeconds)}
+      {/* The shared metric-chip layout the Agent card uses (#1159). */}
+      <div className="plan-node-budgets" role="group" aria-label="Build budget">
+        <span>Steps {formatCount(data.builderSpentSteps)} of {formatCount(data.builderMaxSteps)}</span>
+        <span>Tokens {formatTokens(data.builderSpentTokens)} of {formatTokens(data.builderMaxTokens)}</span>
+        <span>Time {formatDuration(data.builderSpentWallSeconds)} of {formatDuration(data.builderMaxWallSeconds)}</span>
       </div>
       {data.builderStatus === "done" && data.planSteps.length > data.builderSpentSteps && (
         <Tooltip label={data.builderStatusDetail || "The Builder finished before all planned steps were executed."}>
@@ -420,7 +458,8 @@ function PlanNodeViewInner({ data, selected }: NodeProps<PlanFlowNode>) {
         <Disclosure className="chat-node-tool-invocations plan-node-activity"
           open={activityOpen} onOpenChange={setActivityOpen}
           title={`${data.builderActivity.length} activity ${data.builderActivity.length === 1 ? "entry" : "entries"}${activityErrorCount ? ` · ${activityErrorCount} ${activityErrorCount === 1 ? "error" : "errors"}` : ""}`}>
-          <div className="plan-node-activity-list nowheel nodrag" ref={activityListRef}>
+          <div className="plan-node-activity-list nowheel nodrag" ref={activityListRef} onScroll={tail.onScroll}
+            role="log" aria-label="Build activity">
             {data.builderActivity.map((row, index) => (
               <div key={index}
                 className={`chat-node-tool-invocation${row.outcome !== "ok" ? " error" : ""}`}>
@@ -431,6 +470,12 @@ function PlanNodeViewInner({ data, selected }: NodeProps<PlanFlowNode>) {
               </div>
             ))}
           </div>
+          {!tail.following && running && (
+            <Button size="sm" variant="ghost" className="nodrag plan-node-jump-latest" iconStart="arrow-down"
+              onClick={tail.jumpToLatest}>
+              {tail.unread > 0 ? `Jump to latest (${formatCount(tail.unread)} new)` : "Jump to latest"}
+            </Button>
+          )}
         </Disclosure>
       )}
 
@@ -446,8 +491,12 @@ function PlanNodeViewInner({ data, selected }: NodeProps<PlanFlowNode>) {
       )}
 
       <div className="plan-node-actions">
+        {/* Never start a plan that has unsaved or unconfirmed edits (#1149). */}
         {resumable && <Button size="sm" variant="primary" className="nodrag"
-          onClick={data.onStartExecution}>{startLabel}</Button>}
+          disabled={draft !== null || savingPlan} onClick={data.onStartExecution}>{startLabel}</Button>}
+        {resumable && (draft !== null || savingPlan) && (
+          <span className="plan-node-detail">Save or cancel your plan edits before you {startLabel.toLowerCase()}.</span>
+        )}
         {running && (
           <Tooltip label="Stop this build. A stopped build cannot be resumed.">
             <Button size="sm" variant="secondary" className="nodrag" onClick={data.onCancel}>Stop</Button>
@@ -457,7 +506,7 @@ function PlanNodeViewInner({ data, selected }: NodeProps<PlanFlowNode>) {
           <Button size="sm" variant="secondary" className="nodrag" onClick={data.onUndoBuild}
             iconStart="undo">Undo build</Button>
         )}
-        {canEditPlan && !editing && <Button size="sm" className="nodrag" onClick={startEditing}>Edit plan</Button>}
+        {canEditPlan && draft === null && <Button size="sm" className="nodrag" onClick={startEditing}>Edit plan</Button>}
         {data.builderStatus === "done" && data.planSteps.length > 0 && (
           <Button size="sm" variant="ghost" iconStart="bookmark" className="nodrag"
             onClick={data.onSaveRecipe}>Save as recipe</Button>
