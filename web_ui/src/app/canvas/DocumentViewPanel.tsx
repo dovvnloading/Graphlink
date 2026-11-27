@@ -5,6 +5,7 @@ import type { DocumentHeading } from "./documentViewHeadings";
 import type { DocumentCitationTarget } from "./DocumentViewMarkdown";
 import { IconButton } from "../ui/IconButton";
 import "./DocumentViewPanel.css";
+import { copyText as copyToClipboard } from "../clipboard";
 
 // Everything that parses or renders markdown loads on first open, not at
 // module scope. Between them, DocumentViewMarkdown (react-markdown plus six
@@ -296,17 +297,11 @@ export function DocumentViewPanel({
   const [copied, setCopied] = useState(false);
   const onCopy = useCallback(() => {
     if (!content) return;
-    navigator.clipboard
-      ?.writeText(content)
-      .then(() => {
-        setCopied(true);
-        setTimeout(() => setCopied(false), 1500);
-      })
-      // See NodeMarkdown.tsx's identical handler for why this .catch exists
-      // (ADR-011 stage 11.6's clipboard sweep missed four sites; this is one).
-      .catch((error: unknown) => {
-        console.error("Failed to copy document to clipboard", error);
-      });
+    void copyToClipboard(content, "the document").then((copied) => {
+      if (!copied) return;
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    });
   }, [content]);
 
   // Latches true the first time the panel opens and never resets, so the two

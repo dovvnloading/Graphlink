@@ -7,6 +7,7 @@ import { NodeHeading } from "./NodeHeading";
 import { NodeShell } from "./NodeShell";
 import { useLodVisibility } from "./useLodVisibility";
 import { MenuGroup, MenuItem } from "../ui/Menu";
+import { copyText as copyToClipboard } from "../clipboard";
 
 /**
  * The thinking node (Qt-removal plan R3.13/R3.14) - graphlink_node_thinking.py's
@@ -69,9 +70,7 @@ function ThinkingNodeMenu({
     <NodeMenu position={position} onClose={onClose} className="chat-node-menu">
       <MenuGroup label="Edit">
         <MenuItem icon="copy" label="Copy content" onSelect={() => {
-          navigator.clipboard.writeText(thinkingText).catch((error: unknown) => {
-            console.error("[thinking-node] Copy content failed:", error);
-          });
+          void copyToClipboard(thinkingText, "the thinking", { announce: true });
         }} />
       </MenuGroup>
       <MenuGroup label="Branch">

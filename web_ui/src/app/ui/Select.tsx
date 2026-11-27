@@ -58,7 +58,9 @@ function SelectControl({
   const panelRef = useRef<HTMLDivElement | null>(null);
   const listboxRef = useRef<HTMLDivElement | null>(null);
   const searchRef = useRef<HTMLInputElement | null>(null);
-  const [placement, setPlacement] = useState<{ top: number; left: number; minWidth: number } | null>(null);
+  const [placement, setPlacement] = useState<{
+    top: number; left: number; minWidth: number; maxHeight: number;
+  } | null>(null);
   const [query, setQuery] = useState("");
   const [activeValue, setActiveValue] = useState(value);
   const typeAhead = useRef({ text: "", time: 0 });
@@ -77,23 +79,48 @@ function SelectControl({
     if (isOpen && activeId) document.getElementById(activeId)?.scrollIntoView?.({ block: "nearest" });
   }, [isOpen, activeId]);
 
+  // Anchored to the trigger while open (#1146): re-placed on window resize,
+  // any ancestor scroll, and trigger/panel size changes (options arriving,
+  // query filtering). Listeners exist only while the panel is open.
   useLayoutEffect(() => {
     if (!isOpen) return;
     const trigger = triggerRef.current;
     const panel = panelRef.current;
     if (!trigger || !panel) return;
-    const triggerRect = trigger.getBoundingClientRect();
-    const panelRect = panel.getBoundingClientRect();
-    const top = triggerRect.bottom + panelRect.height + ANCHOR_GAP > window.innerHeight
-      ? Math.max(ANCHOR_MARGIN, triggerRect.top - panelRect.height - ANCHOR_GAP)
-      : triggerRect.bottom + ANCHOR_GAP;
-    const left = Math.min(
-      Math.max(ANCHOR_MARGIN, triggerRect.left),
-      Math.max(ANCHOR_MARGIN, window.innerWidth - panelRect.width - ANCHOR_MARGIN),
-    );
-    setPlacement((previous) => previous?.top === top && previous.left === left && previous.minWidth === triggerRect.width
-      ? previous : { top, left, minWidth: triggerRect.width });
-  }, [isOpen, query]);
+    const place = () => {
+      const triggerRect = trigger.getBoundingClientRect();
+      const panelRect = panel.getBoundingClientRect();
+      const below = window.innerHeight - triggerRect.bottom - ANCHOR_GAP - ANCHOR_MARGIN;
+      const above = triggerRect.top - ANCHOR_GAP - ANCHOR_MARGIN;
+      // Open on the side with room; cap the height to that side's space so
+      // every option stays reachable by scrolling inside the panel.
+      const openAbove = panelRect.height > below && above > below;
+      const maxHeight = Math.max(0, Math.floor(openAbove ? above : below));
+      const height = Math.min(panelRect.height, maxHeight);
+      const top = openAbove
+        ? Math.max(ANCHOR_MARGIN, triggerRect.top - height - ANCHOR_GAP)
+        : triggerRect.bottom + ANCHOR_GAP;
+      const left = Math.min(
+        Math.max(ANCHOR_MARGIN, triggerRect.left),
+        Math.max(ANCHOR_MARGIN, window.innerWidth - panelRect.width - ANCHOR_MARGIN),
+      );
+      setPlacement((previous) => previous?.top === top && previous.left === left
+        && previous.minWidth === triggerRect.width && previous.maxHeight === maxHeight
+        ? previous : { top, left, minWidth: triggerRect.width, maxHeight });
+    };
+    place();
+    window.addEventListener("resize", place);
+    // Capture: scrolls of any ancestor container, not just the window.
+    document.addEventListener("scroll", place, { capture: true, passive: true });
+    const resize = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(place);
+    resize?.observe(trigger);
+    resize?.observe(panel);
+    return () => {
+      window.removeEventListener("resize", place);
+      document.removeEventListener("scroll", place, { capture: true });
+      resize?.disconnect();
+    };
+  }, [isOpen, query, options.length]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -158,6 +185,9 @@ function SelectControl({
   };
 
   const onKeyDown = (event: ReactKeyboardEvent<HTMLElement>) => {
+    const inSearch = event.target === searchRef.current;
+    // An IME's confirmation key commits composed text, not an option (#1145).
+    if (event.nativeEvent.isComposing || event.keyCode === 229) return;
     if (event.key === "Escape" && isOpen) {
       event.preventDefault();
       event.stopPropagation();
@@ -180,6 +210,9 @@ function SelectControl({
       return;
     }
     if (event.key === "Home" || event.key === "End") {
+      // Editing search text: Home/End (and their Shift/Ctrl variants) move
+      // the caret natively. Non-searchable listboxes keep option navigation.
+      if (inSearch) return;
       event.preventDefault();
       const candidates = isOpen ? enabled : options.filter((option) => !option.disabled);
       const next = event.key === "Home" ? candidates[0] : candidates[candidates.length - 1];
@@ -187,14 +220,13 @@ function SelectControl({
       else if (next) setActiveValue(next.value);
       return;
     }
-    if (event.key === "Enter" || (event.key === " " && event.target !== searchRef.current)) {
+    if (event.key === "Enter" || (event.key === " " && !inSearch)) {
       event.preventDefault();
       if (!isOpen) openList();
       else if (active) choose(active);
       return;
     }
-    if (!event.altKey && !event.ctrlKey && !event.metaKey && event.key.length === 1 &&
-        event.target !== searchRef.current) {
+    if (!event.altKey && !event.ctrlKey && !event.metaKey && event.key.length === 1 && !inSearch) {
       const now = event.timeStamp;
       const found = matchTypeAhead(event.key, now);
       if (!isOpen && found) {
@@ -228,7 +260,10 @@ function SelectControl({
           data-state={closing ? "closing" : "open"}
           data-nested={overlays.isNested(name) ? "" : undefined}
           aria-hidden={closing ? true : undefined}
-          style={placement ? { top: placement.top, left: placement.left, minWidth: placement.minWidth } : undefined}
+          style={placement ? {
+            top: placement.top, left: placement.left, minWidth: placement.minWidth,
+            ["--gl-select-available-height" as string]: `${placement.maxHeight}px`,
+          } : undefined}
           onKeyDown={onKeyDown}
         >
           {isOpen && <>

@@ -16,6 +16,7 @@ import { NodeHeading } from "./NodeHeading";
 import { NodeShell } from "./NodeShell";
 import { reviewDiffContext } from "./reviewDiffFocus";
 import { useLodVisibility } from "./useLodVisibility";
+import { copyText as copyToClipboard } from "../clipboard";
 
 /**
  * The Review Lens node - the guided PR reviewer's React card.
@@ -272,12 +273,9 @@ function findingLocation(path: string, line: number): string {
 }
 
 function copyText(text: string): void {
-  // Best-effort clipboard write - a failure (missing Clipboard API,
-  // denied permission) must never break the card; same .catch()
-  // discipline every sibling view applies to its own copy actions.
-  navigator.clipboard?.writeText(text)?.catch((error: unknown) => {
-    console.error("Failed to copy finding to clipboard", error);
-  });
+  // A failure (missing Clipboard API, denied permission) never breaks the
+  // card and is always explained (#1147).
+  void copyToClipboard(text, "the finding", { announce: true });
 }
 
 type TabKey = "setup" | "walkthrough" | "findings";

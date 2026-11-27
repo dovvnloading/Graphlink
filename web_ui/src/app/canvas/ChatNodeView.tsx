@@ -21,6 +21,7 @@ import { Badge } from "../ui/Badge";
 import { Tooltip } from "../ui/Tooltip";
 import { Disclosure } from "../ui/Disclosure";
 import { formatTokens } from "../ui/format";
+import { copyText as copyToClipboard } from "../clipboard";
 
 /**
  * The chat node (Qt-removal plan R3.1/R3.2) - ChatNode's React successor:
@@ -318,11 +319,7 @@ function ChatNodeMenu({
   onClearModelOverride: () => void;
   onClose: () => void;
 }) {
-  const copyText = () => {
-    navigator.clipboard.writeText(content).catch((error: unknown) => {
-      console.error("[chat-node] Copy text failed:", error);
-    });
-  };
+  const copyText = () => { void copyToClipboard(content, "the message", { announce: true }); };
   return (
     <NodeMenu position={position} onClose={onClose} className="chat-node-menu" ariaLabel="Chat message actions">
       <MenuGroup label="Edit">
@@ -684,18 +681,13 @@ export const ChatNodeView = memo(function ChatNodeView({
   // (matching the established pattern DocumentViewPanel.tsx/NodeMarkdown.tsx's
   // own CodeBlock already use) independent of the menu's lifecycle.
   function onQuickCopy() {
-    navigator.clipboard
-      .writeText(data.content)
-      .then(() => {
-        setCopied(true);
-        setTimeout(() => setCopied(false), 1500);
-      })
-      .catch((error) => {
-        // Best-effort - see ChatNodeMenu's own Copy Text handler above for
-        // the same reasoning. No "copied" flash on failure, since nothing
-        // was actually copied.
-        console.error("[chat-node] Copy failed:", error);
-      });
+    // No "copied" flash on failure, since nothing was actually copied; the
+    // shared helper explains the failure (#1147).
+    void copyToClipboard(data.content, "the message").then((copied) => {
+      if (!copied) return;
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    });
   }
   const [menuPosition, setMenuPosition] = useState<MenuPosition | null>(null);
 

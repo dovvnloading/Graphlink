@@ -119,6 +119,64 @@ describe("kit Select", () => {
     expect(onChange).toHaveBeenCalledWith("9");
   });
 
+  it("search text keeps native caret keys: Home/End move the caret, not the option (#1145)", async () => {
+    const options = Array.from({ length: 10 }, (_, index) => ({ value: String(index), label: `Option ${index}` }));
+    const { user, trigger } = setup(options, "0");
+    await user.click(trigger);
+    const search = screen.getByRole("combobox", { name: "Search Delivery option" }) as HTMLInputElement;
+    await user.type(search, "tion 1");
+    const activeBefore = search.getAttribute("aria-activedescendant");
+    await user.keyboard("{Home}Op");
+    expect(search).toHaveValue("Option 1");
+    expect(search).toHaveFocus();
+    expect(search.getAttribute("aria-activedescendant")).toBe(activeBefore);
+    await user.keyboard("{End}");
+    expect(search.selectionStart).toBe("Option 1".length);
+  });
+
+  it("a composing Enter does not choose an option; the next Enter does (#1145)", async () => {
+    const options = Array.from({ length: 10 }, (_, index) => ({ value: String(index), label: `Option ${index}` }));
+    const { onChange, trigger, user } = setup(options, "0");
+    await user.click(trigger);
+    const search = screen.getByRole("combobox", { name: "Search Delivery option" });
+    fireEvent.keyDown(search, { key: "Enter", isComposing: true });
+    fireEvent.keyDown(search, { key: "Enter", keyCode: 229 });
+    expect(onChange).not.toHaveBeenCalled();
+    expect(screen.getByRole("listbox")).toBeInTheDocument();
+    fireEvent.keyDown(search, { key: "Enter" });
+    expect(onChange).toHaveBeenCalledWith("0");
+  });
+
+  it("an open panel follows its trigger on ancestor scroll and window resize (#1146)", async () => {
+    const { user, trigger } = setup();
+    let rect = { top: 100, bottom: 130, left: 40, right: 240, width: 200, height: 30, x: 40, y: 100 };
+    trigger.getBoundingClientRect = () => ({ ...rect, toJSON: () => rect }) as DOMRect;
+    await user.click(trigger);
+    const panel = screen.getByRole("listbox").parentElement as HTMLElement;
+    expect(panel.style.top).toBe("136px");
+    expect(panel.style.left).toBe("40px");
+
+    rect = { ...rect, top: 300, bottom: 330, left: 90, x: 90, y: 300 };
+    fireEvent.scroll(document.body);
+    expect(panel.style.top).toBe("336px");
+    expect(panel.style.left).toBe("90px");
+
+    rect = { ...rect, top: 50, bottom: 80, y: 50 };
+    fireEvent(window, new Event("resize"));
+    expect(panel.style.top).toBe("86px");
+    expect(screen.getByRole("listbox")).toBeInTheDocument();
+  });
+
+  it("caps the panel height to the space available so every option stays reachable (#1146)", async () => {
+    const { user, trigger } = setup();
+    const rect = { top: 600, bottom: 630, left: 40, right: 240, width: 200, height: 30, x: 40, y: 600 };
+    trigger.getBoundingClientRect = () => ({ ...rect, toJSON: () => rect }) as DOMRect;
+    await user.click(trigger);
+    const panel = screen.getByRole("listbox").parentElement as HTMLElement;
+    // jsdom's 768px window leaves 124px below this trigger.
+    expect(panel.style.getPropertyValue("--gl-select-available-height")).toBe(`${window.innerHeight - 630 - 6 - 8}px`);
+  });
+
   it("does not render a search field for eight or fewer options", async () => {
     const { user, trigger } = setup();
     await user.click(trigger);

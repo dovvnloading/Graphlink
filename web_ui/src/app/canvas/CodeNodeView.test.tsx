@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CodeNodeView, codeNodePropsAreEqual, type CodeFlowNode } from "./CodeNodeView";
+import { toast } from "../ui/Toast";
 
 // R7.5a: jsdom implements neither URL.createObjectURL nor
 // URL.revokeObjectURL - same hand-installed-fakes pattern
@@ -94,6 +95,22 @@ describe("CodeNodeView", () => {
     fireEvent.contextMenu(label);
     await user.click(screen.getByRole("menuitem", { name: "Delete code block" }));
     expect(onDelete).toHaveBeenCalledOnce();
+  });
+
+  it("menu Copy code confirms a successful copy and explains an absent clipboard (#1147)", async () => {
+    const user = userEvent.setup();
+    const show = vi.spyOn(toast, "show");
+    const { container } = renderCodeNode();
+    Object.defineProperty(navigator, "clipboard", { value: { writeText: vi.fn().mockResolvedValue(undefined) }, configurable: true });
+    fireEvent.contextMenu(titleLabel(container));
+    await user.click(screen.getByRole("menuitem", { name: "Copy code" }));
+    await waitFor(() => expect(show).toHaveBeenCalledWith({ title: "Copied the code.", variant: "success" }));
+
+    Object.defineProperty(navigator, "clipboard", { value: undefined, configurable: true });
+    fireEvent.contextMenu(titleLabel(container));
+    await user.click(screen.getByRole("menuitem", { name: "Copy code" }));
+    await waitFor(() => expect(show).toHaveBeenLastCalledWith(expect.objectContaining({ variant: "error" })));
+    show.mockRestore();
   });
 
   it("clicking Export… downloads the raw code as a language-appropriate file, then closes the menu (R7.5a)", async () => {

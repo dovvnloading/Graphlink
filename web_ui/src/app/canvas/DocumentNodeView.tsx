@@ -8,6 +8,7 @@ import { MenuItem, MenuSeparator } from "../ui/Menu";
 import { NodeHeading } from "./NodeHeading";
 import { NodeShell } from "./NodeShell";
 import { useLodVisibility } from "./useLodVisibility";
+import { copyText as copyToClipboard } from "../clipboard";
 
 /**
  * The document node (Qt-removal plan R3.9/R3.10) - graphlink_node_document.py's
@@ -208,9 +209,7 @@ function DocumentNodeMenu({
   return (
     <NodeMenu position={position} onClose={onClose} className="chat-node-menu">
       <MenuItem icon="copy" label="Copy Details" onSelect={() => {
-        navigator.clipboard.writeText(content).catch((error: unknown) => {
-          console.error("[document-node] Copy Details failed:", error);
-        });
+        void copyToClipboard(content, "the details", { announce: true });
         onClose();
       }} />
       <MenuItem icon={isCollapsed ? "maximize" : "minimize"}

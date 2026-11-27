@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { useEffect } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { CanvasSearchProvider, useSetCanvasSearchQuery } from "./CanvasSearchContext";
+import { toast } from "../ui/Toast";
 import { NodeMarkdown } from "./NodeMarkdown";
 
 // Node redesign, stage 1 ("shared node markdown renderer"): a code-block
@@ -144,6 +145,21 @@ describe("NodeMarkdown", () => {
 
       expect(writeText).toHaveBeenCalledWith("print('hi')\n");
       expect(await screen.findByRole("button", { name: "Copied" })).toBeInTheDocument();
+    });
+
+    it("a denied copy never flashes Copied and is explained (#1147)", async () => {
+      const user = userEvent.setup();
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      const show = vi.spyOn(toast, "show");
+      Object.defineProperty(navigator, "clipboard", {
+        value: { writeText: vi.fn().mockRejectedValue(new Error("denied")) }, configurable: true, writable: true,
+      });
+      render(<NodeMarkdown content={"```python\nprint('hi')\n```"} />);
+      await user.click(screen.getByRole("button", { name: "Copy code" }));
+      await vi.waitFor(() => expect(show).toHaveBeenCalledTimes(1));
+      expect(show.mock.calls[0][0]).toMatchObject({ variant: "error" });
+      expect(screen.queryByRole("button", { name: "Copied" })).toBeNull();
+      expect(screen.getByRole("button", { name: "Copy code" })).toHaveFocus();
     });
 
     it("marks the copy button nodrag, so clicking it inside a React Flow node doesn't start a canvas drag", () => {

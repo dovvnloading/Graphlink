@@ -31,7 +31,7 @@
   box-sizing: border-box;
   position: fixed;
   z-index: var(--gl-z-popover);
-  max-height: min(60vh, 400px);
+  max-height: min(60vh, 400px, var(--gl-select-available-height, 100vh));
   width: max-content;
   min-width: 180px;
   max-width: min(420px, calc(100vw - 16px));
