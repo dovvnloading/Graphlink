@@ -176,4 +176,31 @@ describe("DocumentViewToc", () => {
     await user.click(screen.getByRole("button", { name: "Table of contents" }));
     expect(observer.disconnected).toBe(true);
   });
+
+  it("Escape returns focus to the outline trigger; choosing a heading focuses that heading (#1163)", async () => {
+    const user = userEvent.setup();
+    renderToc();
+    const trigger = screen.getByRole("button", { name: "Table of contents" });
+    await user.click(trigger);
+    screen.getByRole("button", { name: "Section One" }).focus();
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(trigger).toHaveFocus();
+
+    await user.click(trigger);
+    await user.click(screen.getByRole("button", { name: "Subsection" }));
+    const heading = document.getElementById("subsection")!;
+    expect(heading).toHaveFocus();
+    expect(heading).toHaveAttribute("tabindex", "-1");
+  });
+
+  it("a pointer dismissal leaves focus where the user clicked (#1163)", async () => {
+    const user = userEvent.setup();
+    render(<><button type="button">elsewhere</button></>);
+    renderToc();
+    await user.click(screen.getByRole("button", { name: "Table of contents" }));
+    const elsewhere = screen.getByRole("button", { name: "elsewhere" });
+    await user.click(elsewhere);
+    expect(screen.queryByRole("navigation")).toBeNull();
+    expect(elsewhere).toHaveFocus();
+  });
 });

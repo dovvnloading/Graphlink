@@ -8,15 +8,15 @@
  * the rendered DOM out from under React.
  *
  * Runs LAST in DocumentViewMarkdown.tsx's rehypePlugins array, after
- * rehype-highlight - code blocks are already tokenized into many small
- * per-token `<span>` elements by that point. This plugin only ever matches
- * within a SINGLE text node, so a query that spans two adjacent syntax-
- * highlighted tokens (or two adjacent bits of inline formatting, e.g. a
- * query straddling **bold** and plain text) will not be found. This is a
- * deliberate, documented scope boundary, not an oversight: highlighting a
- * match that spans multiple hast elements would require rewriting sibling
- * structure, not just splitting one text node, and is out of scope for a
- * document viewer's find feature.
+ * rehype-highlight. Matching runs over the contiguous visible text of each
+ * block (paragraph, list item, heading, table cell, code block...), not one
+ * text node at a time, so a phrase that straddles inline formatting
+ * ("**bold** and plain") or adjacent syntax-highlight tokens is ONE logical
+ * match (#1167). Each fragment of that match is wrapped in its own `<mark>`
+ * carrying the same `data-search-match-index`, so the markup keeps its
+ * structure and Document View counts and navigates logical matches. Text
+ * never joins across blocks, and anything inside an aria-hidden element
+ * (heading permalinks) is excluded.
  *
  * The query is escaped before use (`escapeSearchRegExp`) so a user typing
  * regex metacharacters (`.`, `*`, `(`, etc.) searches for that literal text,
@@ -76,6 +76,18 @@ interface Tree {
   children?: unknown[];
 }
 
+/** Elements whose text forms one searchable run. A nested block starts its
+ * own run, so text never joins across paragraphs, items or cells. */
+const BLOCK_TAGS = new Set([
+  "p", "li", "h1", "h2", "h3", "h4", "h5", "h6", "td", "th", "pre", "blockquote",
+  "dt", "dd", "figcaption", "caption", "summary", "div", "section", "article",
+  "ul", "ol", "table", "thead", "tbody", "tr", "dl", "details", "hr",
+]);
+
+function isElement(node: unknown): node is ElementNode {
+  return (node as Tree).type === "element";
+}
+
 export function rehypeHighlightSearchMatches(query: string) {
   const trimmed = query.trim();
 
@@ -83,63 +95,100 @@ export function rehypeHighlightSearchMatches(query: string) {
     if (!trimmed) return;
     const pattern = buildSearchPattern(trimmed);
     let matchIndex = 0;
+    // Each matched text node's replacement fragments, applied once at the end.
+    const replacements = new Map<TextNode, unknown[]>();
 
-    // Rebuild each changed sibling array once, in document order, instead
-    // of passing an unbounded replacement array as splice arguments. Never
-    // visit newly-created marks. Stop looking for matches at the shared
-    // limit, keeping the unhighlighted remainder of the document intact.
-    function highlightChildren(parent: Tree) {
-      const children = parent.children;
+    /** Text leaves of one block in document order, skipping nested blocks
+     * (searched on their own) and aria-hidden subtrees. */
+    function collectLeaves(node: Tree, leaves: TextNode[], nested: Tree[]) {
+      for (const child of node.children ?? []) {
+        if ((child as Tree).type === "text") {
+          leaves.push(child as TextNode);
+        } else if (isElement(child)) {
+          if (child.properties?.ariaHidden) continue;
+          if (BLOCK_TAGS.has(child.tagName)) nested.push(child);
+          else collectLeaves(child, leaves, nested);
+        } else if ((child as Tree).children) {
+          collectLeaves(child as Tree, leaves, nested);
+        }
+      }
+    }
+
+    function searchBlock(block: Tree) {
+      if (matchIndex >= MAX_DOCUMENT_SEARCH_MATCHES) return;
+      const leaves: TextNode[] = [];
+      const nested: Tree[] = [];
+      collectLeaves(block, leaves, nested);
+      if (leaves.length) {
+        const starts: number[] = [];
+        let text = "";
+        for (const leaf of leaves) {
+          starts.push(text.length);
+          text += leaf.value;
+        }
+        // Per-leaf list of [start, end, matchIndex] ranges in leaf offsets.
+        const ranges = new Map<number, [number, number, number][]>();
+        pattern.lastIndex = 0;
+        let match: RegExpExecArray | null;
+        let leafCursor = 0;
+        while (matchIndex < MAX_DOCUMENT_SEARCH_MATCHES && (match = pattern.exec(text)) !== null) {
+          if (match[0].length === 0) { pattern.lastIndex += 1; continue; }
+          const matchStart = match.index;
+          const matchEnd = matchStart + match[0].length;
+          while (leafCursor < leaves.length - 1 && starts[leafCursor + 1] <= matchStart) leafCursor += 1;
+          for (let leaf = leafCursor; leaf < leaves.length && starts[leaf] < matchEnd; leaf++) {
+            const leafStart = starts[leaf];
+            const from = Math.max(matchStart, leafStart) - leafStart;
+            const to = Math.min(matchEnd, leafStart + leaves[leaf].value.length) - leafStart;
+            if (to > from) {
+              const list = ranges.get(leaf) ?? [];
+              list.push([from, to, matchIndex]);
+              ranges.set(leaf, list);
+            }
+          }
+          matchIndex += 1;
+        }
+        for (const [leaf, list] of ranges) {
+          const value = leaves[leaf].value;
+          const fragments: unknown[] = [];
+          let last = 0;
+          for (const [from, to, index] of list) {
+            if (from > last) fragments.push({ type: "text", value: value.slice(last, from) });
+            fragments.push({
+              type: "element",
+              tagName: "mark",
+              properties: { className: ["document-view-search-match"], dataSearchMatchIndex: index },
+              children: [{ type: "text", value: value.slice(from, to) }],
+            });
+            last = to;
+          }
+          if (last < value.length) fragments.push({ type: "text", value: value.slice(last) });
+          replacements.set(leaves[leaf], fragments);
+        }
+      }
+      for (const child of nested) searchBlock(child);
+    }
+
+    /** Replace matched text nodes in place, rebuilding each changed array once. */
+    function applyReplacements(node: Tree) {
+      const children = node.children;
       if (!children) return;
       let rewritten: unknown[] | undefined;
       for (let index = 0; index < children.length; index++) {
-        if (matchIndex >= MAX_DOCUMENT_SEARCH_MATCHES) {
-          if (rewritten) parent.children = rewritten.concat(children.slice(index));
-          return;
-        }
-        const child = children[index] as Tree;
-        if (child.type !== "text") {
-          highlightChildren(child);
-          rewritten?.push(child);
+        const child = children[index];
+        const fragments = replacements.get(child as TextNode);
+        if (fragments) {
+          rewritten ??= children.slice(0, index);
+          rewritten.push(...fragments);
           continue;
         }
-        // The heading permalink is decorative, not searchable. As before,
-        // check the immediate parent (where rehype-autolink sets ariaHidden).
-        if ((parent as ElementNode).properties?.ariaHidden) {
-          rewritten?.push(child);
-          continue;
-        }
-        const node = child as TextNode;
-        pattern.lastIndex = 0;
-        let match = pattern.exec(node.value);
-        if (!match) {
-          rewritten?.push(child);
-          continue;
-        }
-        rewritten ??= children.slice(0, index);
-        let lastEnd = 0;
-        do {
-          const start = match.index;
-          const end = start + match[0].length;
-          if (start > lastEnd) {
-            rewritten.push({ type: "text", value: node.value.slice(lastEnd, start) });
-          }
-          rewritten.push({
-            type: "element",
-            tagName: "mark",
-            properties: { className: ["document-view-search-match"], dataSearchMatchIndex: matchIndex },
-            children: [{ type: "text", value: match[0] }],
-          });
-          matchIndex += 1;
-          lastEnd = end;
-        } while (matchIndex < MAX_DOCUMENT_SEARCH_MATCHES && (match = pattern.exec(node.value)) !== null);
-        if (lastEnd < node.value.length) {
-          rewritten.push({ type: "text", value: node.value.slice(lastEnd) });
-        }
+        if ((child as Tree).children) applyReplacements(child as Tree);
+        rewritten?.push(child);
       }
-      if (rewritten) parent.children = rewritten;
+      if (rewritten) node.children = rewritten;
     }
 
-    highlightChildren(tree);
+    searchBlock(tree);
+    if (replacements.size) applyReplacements(tree);
   };
 }
