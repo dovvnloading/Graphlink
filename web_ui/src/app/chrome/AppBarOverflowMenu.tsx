@@ -5,6 +5,7 @@ import type { SceneStore } from "../canvas/sceneStore";
 import type { MenuPosition } from "../canvas/menuPosition";
 import { useOverlays } from "../overlays/overlays";
 import { Menu, MenuGroup, MenuItem } from "../ui/Menu";
+import { openHelp } from "./helpNavigation";
 
 export function AppBarOverflowMenu({
   store, exportPng, exportMethods, position, onClose, ignoreRef,
@@ -48,7 +49,7 @@ export function AppBarOverflowMenu({
           onSelect={() => overlays.toggle("plugins", "popover")} />
       </MenuGroup>
       <MenuGroup label="Workspace">
-        <MenuItem label="Global Search" icon="search" shortcut="Ctrl+F"
+        <MenuItem label="Global Search" icon="search"
           onSelect={() => overlays.toggle("global-search", "dialog")} />
         <MenuItem label="Knowledge" icon="knowledge"
           onSelect={() => overlays.toggle("knowledge", "dialog")} />
@@ -57,9 +58,9 @@ export function AppBarOverflowMenu({
         <MenuItem label="Agent" icon="agent"
           onSelect={() => overlays.toggle("harness-launch", "dialog")} />
         <MenuItem label="Help" icon="help"
-          onSelect={() => overlays.open("help", "dialog")} />
+          onSelect={() => openHelp(overlays, "")} />
         <MenuItem label="Keyboard shortcuts" icon="keyboard"
-          onSelect={() => overlays.open("help", "dialog")} />
+          onSelect={() => openHelp(overlays, "Keyboard")} />
         <MenuItem label="Diagnostics" icon="diagnostics"
           onSelect={() => overlays.open("diagnostics", "dialog")} />
         <MenuItem label="About" icon="info"

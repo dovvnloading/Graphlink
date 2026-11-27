@@ -1,5 +1,5 @@
 import { useReactFlow } from "@xyflow/react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "react";
 import type { WsTransport } from "../../lib/ws/transport";
 import { motionDuration } from "../reducedMotion";
 import { Dialog, useOverlays } from "../overlays/overlays";
@@ -85,8 +85,9 @@ function isGraphHit(
   return result.sourceNodeId != null && result.graphId != null;
 }
 
-function GlobalSearchResultCard({ transport, result, selected }: {
-  transport: WsTransport; result: GlobalSearchResult; selected: boolean;
+function GlobalSearchResultCard({ transport, result, onHeaderKeyDown }: {
+  transport: WsTransport; result: GlobalSearchResult;
+  onHeaderKeyDown: (event: KeyboardEvent<HTMLButtonElement>) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [jumping, setJumping] = useState(false);
@@ -119,13 +120,14 @@ function GlobalSearchResultCard({ transport, result, selected }: {
   }
 
   return (
-    <li className="global-search-result-item" role="option" aria-selected={selected}
-      id={`global-search-result-${result.chunkId}`}>
+    <li className="global-search-result-item">
       <Button
         variant="ghost"
         iconStart={graphHit ? "workspace" : "knowledge"}
         className="global-search-result-header"
         aria-expanded={expanded}
+        data-global-search-result=""
+        onKeyDown={onHeaderKeyDown}
         onClick={() => setExpanded((value) => !value)}
       >
         <span className="global-search-result-title">{result.documentTitle}</span>
@@ -197,7 +199,6 @@ function saveRecents(next: string[]): void {
 
 export function GlobalSearchDialog({ transport }: { transport: WsTransport }) {
   const overlays = useOverlays();
-  const { setCenter } = useReactFlow();
   const isOpen = overlays.isOpen("global-search");
   const [query, setQuery] = useState("");
   const [scope, setScope] = useState<SearchScope>("all");
@@ -205,9 +206,10 @@ export function GlobalSearchDialog({ transport }: { transport: WsTransport }) {
   const [searching, setSearching] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [recents, setRecents] = useState<string[]>(loadRecents);
-  const [selectedIndex, setSelectedIndex] = useState(0);
   const latestRequestId = useRef(0);
   const lastRequested = useRef("");
+  const inputRef = useRef<HTMLInputElement>(null);
+  const resultsRef = useRef<HTMLDivElement>(null);
 
   const runSearch = useCallback((searchText: string, searchScope: SearchScope) => {
     const trimmed = searchText.trim();
@@ -222,7 +224,6 @@ export function GlobalSearchDialog({ transport }: { transport: WsTransport }) {
         if (requestId !== latestRequestId.current) return;
         const payload = value as { results: GlobalSearchResult[] };
         setResults(Array.isArray(payload.results) ? payload.results : []);
-        setSelectedIndex(0);
         setRecents((previous) => {
           const next = [trimmed, ...previous.filter((item) => item !== trimmed)].slice(0, RECENT_LIMIT);
           saveRecents(next);
@@ -231,6 +232,9 @@ export function GlobalSearchDialog({ transport }: { transport: WsTransport }) {
       })
       .catch(() => {
         if (requestId !== latestRequestId.current) return;
+        // Forget the failed key so Search and Enter retry the same query
+        // and scope (#1127); in-flight duplicates are still suppressed.
+        lastRequested.current = "";
         setError("Search failed. Check the connection and try again.");
       })
       .finally(() => {
@@ -247,8 +251,30 @@ export function GlobalSearchDialog({ transport }: { transport: WsTransport }) {
   const visible = results ?? [];
   const graphs = visible.filter(isGraphHit);
   const knowledge = visible.filter((result) => !isGraphHit(result));
-  const activeIndex = Math.min(selectedIndex, Math.max(visible.length - 1, 0));
-  const selected = visible[activeIndex];
+
+  /** Result headers in rendered order: Graphs, then Knowledge (#1128). */
+  function resultHeaders(): HTMLButtonElement[] {
+    return Array.from(resultsRef.current?.querySelectorAll<HTMLButtonElement>(
+      "[data-global-search-result]") ?? []);
+  }
+
+  function focusResult(index: number) {
+    const headers = resultHeaders();
+    if (index < 0) inputRef.current?.focus();
+    else headers[Math.min(index, headers.length - 1)]?.focus();
+  }
+
+  function moveFromResult(event: KeyboardEvent<HTMLButtonElement>) {
+    const headers = resultHeaders();
+    const index = headers.indexOf(event.currentTarget);
+    const target = event.key === "ArrowDown" ? Math.min(index + 1, headers.length - 1)
+      : event.key === "ArrowUp" ? index - 1
+        : event.key === "Home" ? 0
+          : event.key === "End" ? headers.length - 1 : null;
+    if (target === null) return;
+    event.preventDefault();
+    focusResult(target);
+  }
 
   function resetSearch() {
     ++latestRequestId.current; // Invalidates replies for earlier text or scope immediately.
@@ -256,7 +282,6 @@ export function GlobalSearchDialog({ transport }: { transport: WsTransport }) {
     setResults(null);
     setError(null);
     setSearching(false);
-    setSelectedIndex(0);
   }
 
   function changeQuery(value: string) {
@@ -272,48 +297,30 @@ export function GlobalSearchDialog({ transport }: { transport: WsTransport }) {
     runSearch(query, next);
   }
 
-  async function activateResult(result: GlobalSearchResult) {
-    if (!isGraphHit(result)) {
-      if (isHttpUrl(result.sourceUri)) window.open(result.sourceUri, "_blank", "noopener,noreferrer");
-      return;
-    }
-    try {
-      const position = await transport.request("app-chat-library", "loadGraphAndFocusNode",
-        [result.graphId, result.sourceNodeId]) as { x: number; y: number } | null;
-      if (!position) {
-        setError("This node no longer exists in that graph.");
-        return;
-      }
-      setCenter(position.x, position.y, { zoom: 1, duration: motionDuration(300) });
-      overlays.close();
-    } catch {
-      setError("Couldn't open that graph. Check the connection and try again.");
-    }
-  }
-
   return (
     <Dialog name="global-search" title="Global search" size="md" className="global-search-dialog">
       <div className="global-search-row">
-        <input type="search" className="global-search-input"
+        <input type="search" className="global-search-input" ref={inputRef}
           aria-label="Search every workspace"
           aria-controls="global-search-results"
-          aria-activedescendant={selected ? `global-search-result-${selected.chunkId}` : undefined}
+          aria-describedby="global-search-keyboard-hint"
           placeholder="Search every workspace's graphs and knowledge base…"
           value={query} onChange={(event) => changeQuery(event.target.value)}
           onKeyDown={(event) => {
-            if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+            if (event.key === "ArrowDown" && visible.length) {
               event.preventDefault();
-              if (visible.length) setSelectedIndex((index) =>
-                (index + (event.key === "ArrowDown" ? 1 : -1) + visible.length) % visible.length);
+              focusResult(0);
             } else if (event.key === "Enter") {
               event.preventDefault();
-              if (results && selected) void activateResult(selected);
-              else runSearch(query, scope);
+              runSearch(query, scope);
             }
           }} />
         <Button variant="primary" iconStart="search" onClick={() => runSearch(query, scope)}
           disabled={!query.trim() || searching} loading={searching}>Search</Button>
       </div>
+      <p id="global-search-keyboard-hint" className="global-search-keyboard-hint">
+        Press Down to move through results, then Enter to show a result's excerpt and actions.
+      </p>
       <SegmentedControl label="Search scope" size="sm" value={scope}
         options={[
           { value: "all", label: "All" },
@@ -331,7 +338,8 @@ export function GlobalSearchDialog({ transport }: { transport: WsTransport }) {
         ))}</div>
       </section>}
       {error && <InlineAlert variant="error" title="Search unavailable" body={error} />}
-      {results && !error && <div id="global-search-results" role="region" aria-label="Search results">
+      {results && !error && <div id="global-search-results" role="region" aria-label="Search results"
+        ref={resultsRef}>
         <p className="global-search-section-title" role="status">
           {visible.length === 0 ? "No results found" : `${visible.length} result${visible.length === 1 ? "" : "s"} found`}
         </p>
@@ -343,10 +351,10 @@ export function GlobalSearchDialog({ transport }: { transport: WsTransport }) {
             <Icon name={group.label === "Graphs" ? "workspace" : "knowledge"} size="sm" />
             {group.label}
           </h3>
-          <ul className="global-search-result-list" role="listbox" aria-label={group.label + " results"}>
+          <ul className="global-search-result-list" aria-label={group.label + " results"}>
             {group.items.map((result) => (
               <GlobalSearchResultCard key={result.chunkId} transport={transport} result={result}
-                selected={selected?.chunkId === result.chunkId} />
+                onHeaderKeyDown={moveFromResult} />
             ))}
           </ul>
         </section>)}

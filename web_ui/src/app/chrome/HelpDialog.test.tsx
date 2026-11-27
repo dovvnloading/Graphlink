@@ -5,6 +5,7 @@ import { HelpDialog } from "./HelpDialog";
 import { HELP_SECTIONS } from "./help-data/sections";
 import { resolveShortcut, type ShortcutId, type ShortcutKeyEvent } from "./shortcuts";
 import { OverlayProvider, useOverlays } from "../overlays/overlays";
+import { openHelp, requestHelpSection } from "./helpNavigation";
 
 /**
  * The Help panel had no tests at all, which is how it drifted: an audit
@@ -27,7 +28,10 @@ beforeEach(() => {
     json: async () => HELP_SECTIONS,
   }));
 });
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.unstubAllGlobals();
+  requestHelpSection("");
+});
 
 function OpenHelpOnMount({ children }: { children: React.ReactNode }) {
   const overlays = useOverlays();
@@ -150,6 +154,32 @@ describe("HelpDialog", () => {
     await renderOpen();
     await user.click(screen.getByRole("button", { name: "Keyboard" }));
     expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Keyboard");
+  });
+
+  it("Keyboard shortcuts lands on Keyboard; Help keeps its default landing (#1133)", async () => {
+    const user = userEvent.setup();
+    function Entry() {
+      const overlays = useOverlays();
+      return <>
+        <button type="button" onClick={() => openHelp(overlays, "Keyboard")}>shortcuts entry</button>
+        <button type="button" onClick={() => openHelp(overlays, "")}>help entry</button>
+      </>;
+    }
+    render(<OverlayProvider><Entry /><HelpDialog /></OverlayProvider>);
+    await user.click(screen.getByRole("button", { name: "shortcuts entry" }));
+    await screen.findByRole("navigation", { name: "Help sections" });
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Keyboard");
+    expect(screen.getByRole("button", { name: "Keyboard" })).toHaveAttribute("aria-current", "page");
+
+    // Already open and moved elsewhere: the same request navigates again.
+    await user.click(screen.getByRole("button", { name: HELP_SECTIONS[0].name }));
+    await user.type(screen.getByRole("searchbox", { name: "Search help" }), "zoom");
+    await user.click(screen.getByRole("button", { name: "shortcuts entry" }));
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Keyboard");
+    expect(screen.getByRole("searchbox", { name: "Search help" })).toHaveValue("");
+
+    await user.click(screen.getByRole("button", { name: "help entry" }));
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(HELP_SECTIONS[0].name);
   });
 
   it("renders documented chords as <kbd>, not as prose in the title", async () => {

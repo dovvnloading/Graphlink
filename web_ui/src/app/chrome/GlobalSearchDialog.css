@@ -9,6 +9,8 @@
 .global-search-result-item { border: 1px solid var(--gl-surface-border); background: var(--gl-surface-inset); border-radius: var(--gl-radius-md); overflow: hidden; }
 .global-search-result-header { display: flex; flex-direction: column; align-items: flex-start; width: 100%; padding: var(--gl-space-3); gap: var(--gl-space-1); background: transparent; color: var(--gl-surface-text-primary); border: 0; cursor: pointer; text-align: left; font: inherit; }
 .global-search-result-header:hover, .global-search-result-header:focus-visible { background: var(--gl-state-hover); }
+.global-search-result-item:focus-within { border-color: var(--gl-focus-ring); }
+.global-search-keyboard-hint { margin: 0; font-size: var(--gl-text-xs); color: var(--gl-surface-text-muted); }
 .global-search-result-title { font-size: var(--gl-text-sm); font-weight: var(--gl-weight-semibold); }
 .global-search-result-kind, .global-search-result-source { font-size: var(--gl-text-2xs); color: var(--gl-surface-text-muted); }
 .global-search-result-source { word-break: break-all; }

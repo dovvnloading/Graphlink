@@ -9,6 +9,8 @@ import "./AppBarOverflowMenu";
 import { OverlayProvider, useOverlays } from "../overlays/overlays";
 import { SceneStore } from "../canvas/sceneStore";
 import type { WsTransport } from "../../lib/ws/transport";
+import { getHelpSectionRequest } from "./helpNavigation";
+import { resolveShortcut } from "./shortcuts";
 
 function makeStore(): SceneStore {
   const transport = { subscribe: vi.fn(), intent: vi.fn(), fireIntent: vi.fn() } as unknown as WsTransport;
@@ -187,5 +189,34 @@ describe("AppBar (UI-14 kit migration)", () => {
     }
     await user.click(within(menu).getByRole("menuitem", { name: "About" }));
     expect(screen.getByTestId("active-overlay")).toHaveTextContent("about");
+  });
+
+  it("Keyboard shortcuts asks Help for its Keyboard section in both layouts (#1133)", async () => {
+    const user = userEvent.setup();
+    renderAppBar();
+    await user.click(screen.getByRole("button", { name: "Help and diagnostics" }));
+    await user.click(within(screen.getByRole("menu", { name: "Help and diagnostics" }))
+      .getByRole("menuitem", { name: "Keyboard shortcuts" }));
+    expect(getHelpSectionRequest().section).toBe("Keyboard");
+    expect(screen.getByTestId("active-overlay")).toHaveTextContent("help");
+
+    const overflow = await openOverflowMenu(user);
+    await user.click(within(overflow).getByRole("menuitem", { name: "Help" }));
+    expect(getHelpSectionRequest().section).toBe("");
+    const again = await openOverflowMenu(user);
+    await user.click(within(again).getByRole("menuitem", { name: "Keyboard shortcuts" }));
+    expect(getHelpSectionRequest().section).toBe("Keyboard");
+  });
+
+  it("Global Search advertises no shortcut, since Ctrl+F searches this graph (#1132)", async () => {
+    const user = userEvent.setup();
+    renderAppBar();
+    const ctrlF = { key: "f", ctrlKey: true, metaKey: false, shiftKey: false, altKey: false };
+    expect(resolveShortcut(ctrlF)).toBe("toggle-search");
+    expect(screen.getByRole("button", { name: "Global Search" })).not.toHaveAttribute("aria-keyshortcuts");
+    const menu = await openOverflowMenu(user);
+    const item = within(menu).getByRole("menuitem", { name: "Global Search" });
+    expect(item).not.toHaveAttribute("aria-keyshortcuts");
+    expect(item).not.toHaveTextContent(/Ctrl/);
   });
 });
