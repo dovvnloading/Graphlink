@@ -19,6 +19,7 @@ import { useModelCapabilityPreview } from "../context/ModelCapabilityContext";
 import {
   HarnessExecutionProfileSelect, MAX_HARNESS_TASK_LENGTH, exceedsHarnessTaskLimit, type HarnessExecutionProfile,
 } from "./HarnessLaunchOptions";
+import { routeHasUsableModel } from "./composerRouteReady";
 
 /**
  * The composer dock (Qt-removal plan R2.3/R3.3/R4.3) - ComposerApp's SPA
@@ -266,7 +267,7 @@ export function Composer({
     && modelCapabilities.modelId === composer.route.modelId ? modelCapabilities : null;
   const isSynthesizing = !!synthesizeTargetNodeIds && synthesizeTargetNodeIds.length > 0;
   const hasUsableModel = comparisonMode && !agentMode && !isSynthesizing
-    ? comparisonReady : composer.route.available && !!composer.route.modelId;
+    ? comparisonReady : routeHasUsableModel(composer.route);
   const sendDisabled = !composer.draft.text.trim() || !composer.request.canSend ||
     !hasUsableModel || knowledgeUpdating || agentSending;
   const sendDisabledReason = !composer.draft.text.trim()

@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { OnboardingDialog } from "./OnboardingDialog";
 import { initialComposerState } from "./composerStore";
-import { OverlayProvider } from "../overlays/overlays";
+import { OverlayProvider, useOverlays } from "../overlays/overlays";
 import { SceneStore } from "../canvas/sceneStore";
 import type { WsTransport } from "../../lib/ws/transport";
 import type { AppSettingsState } from "../../lib/bridge-core/generated/app-settings-state";
@@ -135,13 +135,24 @@ function makeFixture() {
   };
 }
 
+/** Stands in for the Settings dialog's own close button. */
+function CloseSettingsProbe() {
+  const overlays = useOverlays();
+  return overlays.isOpen("settings")
+    ? <button type="button" onClick={() => overlays.close()}>close settings</button> : null;
+}
+
 function renderDialog(fixture: ReturnType<typeof makeFixture>) {
   return render(
     <OverlayProvider>
       <OnboardingDialog transport={fixture.transport} store={fixture.store} />
+      <CloseSettingsProbe />
     </OverlayProvider>,
   );
 }
+
+const completed = (fixture: ReturnType<typeof makeFixture>) =>
+  fixture.intents.some((entry) => entry.intent === "setHasCompletedOnboarding");
 
 describe("OnboardingDialog (ADR-012 stage 12.6)", () => {
   it("auto-opens on a fresh machine (hasCompletedOnboarding false)", () => {
@@ -221,12 +232,94 @@ describe("OnboardingDialog (ADR-012 stage 12.6)", () => {
     const fixture = makeFixture();
     renderDialog(fixture);
     act(() => fixture.pushSettings({ hasCompletedOnboarding: false }));
-    act(() => fixture.pushComposer({ available: true, label: "Ollama (Local)" }));
+    act(() => fixture.pushComposer({ available: true, label: "Ollama (Local)", modelId: "llama3" }));
 
     await user.click(await screen.findByRole("button", { name: "Next" }));
 
     expect(screen.getByText(/is ready/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Open settings" })).toBeInTheDocument();
+  });
+
+  it("an available route with no chat model is not ready, on both steps (#1131)", async () => {
+    const user = userEvent.setup();
+    const fixture = makeFixture();
+    renderDialog(fixture);
+    act(() => fixture.pushSettings({ hasCompletedOnboarding: false, providerMode: "API Endpoint" }));
+    act(() => fixture.pushComposer({ available: true, label: "OpenAI-Compatible", modelId: "" }));
+
+    await user.click(await screen.findByRole("button", { name: "Next" }));
+    expect(screen.getByText(/No chat model is selected for OpenAI-Compatible/)).toBeInTheDocument();
+    expect(screen.queryByText(/is ready/)).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Next" }));
+    await user.click(screen.getByRole("button", { name: "Next" }));
+    expect(screen.getByText(/Choose a chat model before you send/)).toBeInTheDocument();
+    expect(screen.queryByText("You're set.")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Set up a model" }));
+    expect(fixture.intents).toContainEqual({ topic: "app-settings", intent: "setActiveSection", args: ["api endpoint"] });
+  });
+
+  it("an unavailable local route is still reported as not ready (#1131)", async () => {
+    const user = userEvent.setup();
+    const fixture = makeFixture();
+    renderDialog(fixture);
+    act(() => fixture.pushSettings({ hasCompletedOnboarding: false }));
+    act(() => fixture.pushComposer({ available: false, label: "Ollama (Local)", modelId: "llama3" }));
+    await user.click(await screen.findByRole("button", { name: "Next" }));
+    expect(screen.getByText(/isn't ready yet/)).toBeInTheDocument();
+  });
+
+  it("provider setup pauses the wizard and resumes it at the Model step (#1129)", async () => {
+    const user = userEvent.setup();
+    const fixture = makeFixture();
+    renderDialog(fixture);
+    act(() => fixture.pushSettings({ hasCompletedOnboarding: false }));
+    act(() => fixture.pushComposer({ available: false, label: "Ollama (Local)" }));
+    await user.click(await screen.findByRole("button", { name: "Next" }));
+    await user.click(screen.getByRole("button", { name: "Open settings" }));
+    expect(screen.queryByRole("dialog", { name: "Welcome to Graphlink" })).toBeNull();
+    expect(completed(fixture)).toBe(false);
+
+    // The model gets configured while Settings is open, then Settings closes.
+    act(() => fixture.pushComposer({ available: true, label: "Ollama (Local)", modelId: "llama3" }));
+    await user.click(screen.getByRole("button", { name: "close settings" }));
+    expect(await screen.findByRole("dialog", { name: "Welcome to Graphlink" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Model" })).toBeInTheDocument();
+    expect(screen.getByText(/is ready/)).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Next" }));
+    await user.click(screen.getByRole("button", { name: "Next" }));
+    expect(screen.getByText("You're set.")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Finish" }));
+    expect(completed(fixture)).toBe(true);
+  });
+
+  it("cancelling provider setup returns to the wizard once, and Skip still completes it (#1129)", async () => {
+    const user = userEvent.setup();
+    const fixture = makeFixture();
+    renderDialog(fixture);
+    act(() => fixture.pushSettings({ hasCompletedOnboarding: false }));
+    act(() => fixture.pushComposer({ available: false }));
+    await user.click(await screen.findByRole("button", { name: "Next" }));
+    await user.click(screen.getByRole("button", { name: "Connect a cloud provider" }));
+    await user.click(screen.getByRole("button", { name: "close settings" }));
+
+    expect(await screen.findByRole("dialog", { name: "Welcome to Graphlink" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Model" })).toBeInTheDocument();
+    expect(completed(fixture)).toBe(false);
+    await user.click(screen.getByRole("button", { name: "Skip setup" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(completed(fixture)).toBe(true);
+  });
+
+  it("Escape is a dismissal that completes onboarding, not a pause (#1129)", async () => {
+    const user = userEvent.setup();
+    const fixture = makeFixture();
+    renderDialog(fixture);
+    act(() => fixture.pushSettings({ hasCompletedOnboarding: false }));
+    await screen.findByRole("button", { name: "Next" });
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(completed(fixture)).toBe(true);
   });
 
   it("the sample-workspace step's button fires the scene-topic loadSampleWorkspace intent", async () => {

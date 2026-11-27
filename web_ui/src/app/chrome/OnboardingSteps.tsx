@@ -6,6 +6,7 @@ import { Dialog, useOverlays } from "../overlays/overlays";
 import { Button } from "../ui/Button";
 import { Card } from "../ui/Card";
 import { Icon } from "../ui/icons/Icon";
+import { routeHasUsableModel } from "./composerRouteReady";
 
 const STEPS = ["Welcome", "Model", "Sample", "Ready"] as const;
 
@@ -20,7 +21,9 @@ export function OnboardingSteps({ step, setStep, providerMode, route, store, ope
   ollamaServerStatus: string;
 }) {
   const overlays = useOverlays();
-  const modelReady = route?.available === true;
+  const modelReady = routeHasUsableModel(route);
+  // Reachable provider, but no chat model chosen yet (#1131).
+  const needsModelChoice = route !== null && route.available && !modelReady;
 
   return (
     <Dialog name="onboarding" title="Welcome to Graphlink" size="md" className="onboarding-dialog"
@@ -54,9 +57,13 @@ export function OnboardingSteps({ step, setStep, providerMode, route, store, ope
               ? "Checking your configured provider…"
               : modelReady
                 ? `${route.label} is ready. Your first message can get a response.`
-                : `${route.label} isn't ready yet. Configure a model or API key before sending.`}</p>
+                : needsModelChoice
+                  ? `No chat model is selected for ${route.label}. Choose one in settings before sending.`
+                  : `${route.label} isn't ready yet. Configure a model or API key before sending.`}</p>
             <div className="onboarding-model-actions">
-              {!modelReady && <>
+              {needsModelChoice && <Button variant="secondary" size="sm" iconStart="settings"
+                onClick={() => openProviderSettings(providerMode)}>Choose a chat model</Button>}
+              {!modelReady && !needsModelChoice && <>
                 <Button variant="secondary" size="sm" iconStart="play" onClick={startOllama}
                   disabled={ollamaServerStatus !== "installed"}>
                   Start Ollama
@@ -67,7 +74,7 @@ export function OnboardingSteps({ step, setStep, providerMode, route, store, ope
               <Button variant="ghost" size="sm" iconStart="settings"
                 onClick={() => openProviderSettings(providerMode)}>Open settings</Button>
             </div>
-            {!modelReady && ollamaServerStatus !== "installed" && <p>
+            {!modelReady && !needsModelChoice && ollamaServerStatus !== "installed" && <p>
               To start Ollama from Graphlink, install it first and check its status in settings.
             </p>}
           </Card>
@@ -81,7 +88,9 @@ export function OnboardingSteps({ step, setStep, providerMode, route, store, ope
         </>}
         {step === 3 && <>
           <h3>You're ready to explore</h3>
-          <p>{modelReady ? "You're set." : "You can explore now. Add a model before you send your first message."}</p>
+          <p>{modelReady ? "You're set."
+            : needsModelChoice ? "You can explore now. Choose a chat model before you send your first message."
+              : "You can explore now. Add a model before you send your first message."}</p>
           {!modelReady && <Button variant="secondary" iconStart="settings" onClick={() => openProviderSettings(providerMode)}>
             Set up a model
           </Button>}

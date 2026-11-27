@@ -34,10 +34,10 @@ const LazyOnboardingSteps = lazy(() =>
  *
  * Persistence: hasCompletedOnboarding (app-settings) defaults false on a
  * fresh machine, which is what auto-opens this dialog exactly once per page
- * load (autoOpenedRef below). Closing it - by ANY means (Escape, scrim
- * click, the close button, or a "Done" click - overlays.close() is the one
- * thing all four funnel through) sets it true, so it never auto-shows
- * again; SettingsDialog.tsx's General page has a "Show Onboarding" button
+ * load (autoOpenedRef below). Closing it - Escape, scrim click, the close
+ * button, Skip setup or Finish - sets it true, so it never auto-shows
+ * again. Opening provider settings from a step is NOT a close: the wizard
+ * pauses at its step and resumes when Settings closes (#1129); SettingsDialog.tsx's General page has a "Show Onboarding" button
  * that reopens it manually afterward, matching how Help's own AppBar chip
  * is a standing way back into that dialog.
  */
@@ -60,6 +60,12 @@ export function OnboardingDialog({ transport, store }: { transport: WsTransport;
   // "isOpen was already false" (ordinary re-renders, including the very
   // first one) - see that effect's own comment.
   const wasOpenRef = useRef(false);
+  // Set while the user is configuring a provider from inside the wizard
+  // (#1129): that trip to Settings is a pause, not a dismissal, so the
+  // wizard keeps its step and reopens once Settings closes.
+  const resumeAfterSettingsRef = useRef(false);
+  const settingsWasOpenRef = useRef(false);
+  const settingsOpen = overlays.isOpen("settings");
 
   useEffect(() => {
     const offSettings = transport.subscribe("app-settings", (payload) => {
@@ -98,9 +104,25 @@ export function OnboardingDialog({ transport, store }: { transport: WsTransport;
     }
     if (!wasOpenRef.current) return; // was already closed - nothing dismissed
     wasOpenRef.current = false;
+    if (resumeAfterSettingsRef.current) return; // paused for provider setup
     setStep(0); // fresh start if reopened later from Settings
     transport.fireIntent("app-settings", "setHasCompletedOnboarding", [true], undefined, true);
   }, [isOpen, transport]);
+
+  useEffect(() => {
+    if (settingsOpen) {
+      settingsWasOpenRef.current = true;
+      return;
+    }
+    if (!settingsWasOpenRef.current) return;
+    settingsWasOpenRef.current = false;
+    if (!resumeAfterSettingsRef.current) return;
+    resumeAfterSettingsRef.current = false;
+    // Resume exactly once, and only when nothing else took the screen; if
+    // another surface replaced Settings, onboarding stays incomplete and
+    // auto-opens again next launch instead of stacking over that surface.
+    if (overlays.openSurface === null) overlays.open("onboarding", "dialog");
+  }, [settingsOpen, overlays]);
 
   const openProviderSettings = (mode: string) => {
     // providerMode is one of "Ollama (Local)" / "Llama.cpp (Local)" /
@@ -109,7 +131,8 @@ export function OnboardingDialog({ transport, store }: { transport: WsTransport;
     // whichever page the ACTIVE mode already needs, without duplicating
     // that mapping here.
     transport.fireIntent("app-settings", "setActiveSection", [mode.toLowerCase()], undefined, true);
-    overlays.open("settings", "dialog"); // single-open: this also closes onboarding
+    resumeAfterSettingsRef.current = true;
+    overlays.open("settings", "dialog"); // single-open: this pauses onboarding
   };
 
   return (
