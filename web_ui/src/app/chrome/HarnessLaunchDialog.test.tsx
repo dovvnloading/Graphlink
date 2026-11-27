@@ -105,6 +105,42 @@ describe("HarnessLaunchDialog", () => {
     ]);
   });
 
+  it.each([
+    { composition: "active", isComposing: true, keyCode: 13, submit: "Enter" },
+    { composition: "active", isComposing: true, keyCode: 13, submit: "button" },
+    { composition: "IME-processed", isComposing: false, keyCode: 229, submit: "Enter" },
+    { composition: "IME-processed", isComposing: false, keyCode: 229, submit: "button" },
+  ])("preserves the draft on $composition Enter, then submits by $submit", async ({
+    isComposing, keyCode, submit,
+  }) => {
+    const { user, intents } = await setup();
+    const task = screen.getByLabelText(/what should the agent work on/i);
+    const draft = "資料を調べ";
+    const completed = "資料を調べてください";
+
+    await user.click(task);
+    fireEvent.change(task, { target: { value: draft } });
+
+    // The IME must be allowed to confirm its candidate, without launching
+    // a task or losing the user's current text or focus.
+    expect(fireEvent.keyDown(task, { key: "Enter", isComposing, keyCode })).toBe(true);
+    expect(intents.filter(([, intent]) => intent === "start")).toHaveLength(0);
+    expect(screen.getByLabelText(/what should the agent work on/i)).toBe(task);
+    expect(task).toHaveValue(draft);
+    expect(task).toHaveFocus();
+    expect(screen.getByRole("button", { name: "Start agent" })).toBeEnabled();
+
+    // Simulate the committed candidate, then a separate deliberate submit.
+    fireEvent.change(task, { target: { value: completed } });
+    if (submit === "Enter") {
+      await user.keyboard("{Enter}");
+    } else {
+      await user.click(screen.getByRole("button", { name: "Start agent" }));
+    }
+    expect(intents.filter(([, intent]) => intent === "start")).toEqual([
+      ["harness", "start", [completed, 16, "", "host"]],
+    ]);
+  });
 
   it("launches the first task as Isolated when Podman is detected", async () => {
     const { user, intents } = await setup(undefined, "podman");

@@ -111,6 +111,9 @@ export function HarnessLaunchDialog({ transport, store }: { transport: WsTranspo
         placeholder="Read the files in the workspace and summarize what they contain"
         onKeyDown={(event) => {
           if (event.key === "Enter" && !event.shiftKey) {
+            // Leave IME confirmation to the input method. Some browsers end
+            // composition before this keydown, but still report keyCode 229.
+            if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
             event.preventDefault();
             startAgent();
           }
