@@ -8,7 +8,7 @@
  * <select>.
  */
 import { ReactFlowProvider, type useReactFlow as UseReactFlowType } from "@xyflow/react";
-import { render, screen } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SceneStore } from "../canvas/sceneStore";
@@ -35,6 +35,7 @@ vi.mock("@xyflow/react", async (importOriginal) => {
 
 import { BuilderLaunchDialog } from "./BuilderLaunchDialog";
 import { OverlayProvider, useOverlays } from "../overlays/overlays";
+import { ConfirmDialog } from "../ui/ConfirmDialog";
 import { makeRequestOnlyTransport as makeTransport } from "../../lib/ws/transport.testUtils";
 
 // Only getScene() is exercised (reading the newly-created node's position
@@ -75,11 +76,18 @@ async function setup(startResult: unknown = "n42", recipes: unknown[] = [], node
       <ReactFlowProvider>
         <OpenBuilderButton />
         <BuilderLaunchDialog transport={fake.transport} store={store} />
+        <ConfirmDialog />
       </ReactFlowProvider>
     </OverlayProvider>,
   );
   await user.click(screen.getByRole("button", { name: "open builder" }));
   return { user, ...fake };
+}
+
+/** Delete now asks first (#1151): press Delete, then confirm by name. */
+async function deleteRecipeConfirmed(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(screen.getByRole("button", { name: "Delete this recipe" }));
+  await user.click(within(await screen.findByRole("dialog", { name: /^Delete the/ })).getByRole("button", { name: "Delete recipe" }));
 }
 
 async function pickRecipe(user: ReturnType<typeof userEvent.setup>, name: string) {
@@ -176,7 +184,7 @@ describe("BuilderLaunchDialog", () => {
     request.mockImplementation((topic: string, intent: string) =>
       intent === "listRecipes" ? Promise.resolve({ recipes: [] }) : Promise.resolve(true),
     );
-    await user.click(screen.getByRole("button", { name: "Delete this recipe" }));
+    await deleteRecipeConfirmed(user);
 
     expect(intents).toContainEqual(["builder", "deleteRecipe", ["My recipe"]]);
     // The list is re-fetched and the selection clears back to from-scratch.
@@ -188,6 +196,19 @@ describe("BuilderLaunchDialog", () => {
     await screen.findByText("Start from scratch");
     expect(screen.getByRole("button", { name: "Recipe" })).toHaveTextContent("Start from scratch");
     expect(screen.queryByRole("button", { name: "Delete this recipe" })).not.toBeInTheDocument();
+  });
+
+  it("asks before deleting, by name, and cancelling deletes nothing (#1151)", async () => {
+    const { user, intents } = await setup("n9", [
+      { name: "My recipe", description: "d", steps: ["one"], mode: "copilot", builtIn: false },
+    ]);
+    await pickRecipe(user, "My recipe");
+    await user.click(screen.getByRole("button", { name: "Delete this recipe" }));
+    const confirm = await screen.findByRole("dialog", { name: /^Delete the/ });
+    expect(confirm).toHaveAccessibleName('Delete the "My recipe" recipe?');
+    await user.click(within(confirm).getByRole("button", { name: "Cancel" }));
+    expect(intents.some(([, intent]) => intent === "deleteRecipe")).toBe(false);
+    expect(screen.getByRole("button", { name: "Recipe" })).toHaveTextContent("My recipe");
   });
 
   it("hides the delete affordance for a built-in recipe", async () => {
@@ -212,7 +233,7 @@ describe("BuilderLaunchDialog", () => {
       return Promise.resolve({ recipes: [] });
     });
 
-    await user.click(screen.getByRole("button", { name: "Delete this recipe" }));
+    await deleteRecipeConfirmed(user);
 
     const deletingButton = await screen.findByRole("button", { name: "Delete this recipe" });
     expect(deletingButton).toBeDisabled();
@@ -230,9 +251,10 @@ describe("BuilderLaunchDialog", () => {
     request.mockImplementation((topic: string, intent: string) =>
       intent === "deleteRecipe" ? Promise.resolve(false) : Promise.resolve({ recipes: [] }),
     );
-    await user.click(screen.getByRole("button", { name: "Delete this recipe" }));
+    await deleteRecipeConfirmed(user);
 
     // Give the (rejected-by-backend) promise chain a tick to settle.
+    expect(await screen.findByRole("alert")).toHaveTextContent(/was not deleted/);
     await screen.findByRole("button", { name: "Delete this recipe" });
     expect(screen.getByRole("button", { name: "Recipe" })).toHaveTextContent("My recipe");
     expect(intents.filter(([, intent]) => intent === "listRecipes")).toHaveLength(1); // only the on-open fetch
@@ -247,7 +269,7 @@ describe("BuilderLaunchDialog", () => {
     request.mockImplementation((topic: string, intent: string) =>
       intent === "deleteRecipe" ? Promise.reject(new Error("network down")) : Promise.resolve({ recipes: [] }),
     );
-    await user.click(screen.getByRole("button", { name: "Delete this recipe" }));
+    await deleteRecipeConfirmed(user);
 
     expect(await screen.findByRole("alert")).toHaveTextContent(/could not be deleted/i);
     expect(screen.getByRole("button", { name: "Delete this recipe" })).toBeInTheDocument();
@@ -389,5 +411,43 @@ describe("BuilderLaunchDialog", () => {
       expect(screen.getByRole("button", { name: "Plan the build" })).toBeEnabled();
       expect(screen.queryByText("Describe a goal, or pick a recipe.")).toBeNull();
     });
+  });
+});
+
+describe("BuilderLaunchDialog pending launch (#1157)", () => {
+  it("locks the form while planning, and a late reply never closes a newer surface", async () => {
+    const user = userEvent.setup();
+    const fake = makeTransport();
+    let finish: (value: unknown) => void = () => {};
+    fake.request.mockImplementation((_topic: string, intent: string) =>
+      intent === "listRecipes" ? Promise.resolve({ recipes: [] })
+        : intent === "start" ? new Promise((resolve) => { finish = resolve; }) : Promise.resolve(null));
+    function Probe() {
+      const overlays = useOverlays();
+      return <>
+        <button type="button" onClick={() => overlays.open("knowledge", "dialog")}>open other</button>
+        <output data-testid="surface">{overlays.openSurface ?? ""}</output>
+      </>;
+    }
+    render(
+      <OverlayProvider>
+        <ReactFlowProvider>
+          <OpenBuilderButton />
+          <Probe />
+          <BuilderLaunchDialog transport={fake.transport} store={makeStore([])} />
+          <ConfirmDialog />
+        </ReactFlowProvider>
+      </OverlayProvider>,
+    );
+    await user.click(screen.getByRole("button", { name: "open builder" }));
+    const goal = screen.getByRole("textbox", { name: "Goal" });
+    await user.type(goal, "chart solar output");
+    await user.click(screen.getByRole("button", { name: "Plan the build" }));
+    expect(goal).toBeDisabled();
+    expect(screen.getByText("Planning the build…")).toBeInTheDocument();
+
+    await user.click(screen.getByText("open other"));
+    await act(async () => { finish("n42"); });
+    expect(screen.getByTestId("surface")).toHaveTextContent("knowledge");
   });
 });

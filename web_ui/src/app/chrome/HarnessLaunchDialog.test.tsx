@@ -10,7 +10,7 @@
  * every real piece of work was spent in scratch and then repeated.
  */
 import { ReactFlowProvider } from "@xyflow/react";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { SceneStore } from "../canvas/sceneStore";
@@ -210,5 +210,70 @@ describe("HarnessLaunchDialog", () => {
     const hint = screen.getByText(/reads and writes files/i);
     expect(hint).toHaveTextContent(/shell and Python/i);
     expect(hint).toHaveTextContent(/asks before changing your machine/i);
+  });
+});
+
+describe("HarnessLaunchDialog launch safety (#1156, #1157)", () => {
+  it("a composing Enter does not start the agent; a deliberate Enter does (#1156)", async () => {
+    const { user, intents } = await setup();
+    const field = screen.getByLabelText(/what should the agent work on/i);
+    await user.type(field, "整理する");
+    fireEvent.keyDown(field, { key: "Enter", isComposing: true });
+    fireEvent.keyDown(field, { key: "Enter", keyCode: 229 });
+    expect(intents.some(([, intent]) => intent === "start")).toBe(false);
+    expect(field).toHaveValue("整理する");
+    fireEvent.keyDown(field, { key: "Enter" });
+    expect(intents).toContainEqual(["harness", "start", ["整理する", 16, "", "host"]]);
+  });
+
+  it("cannot launch while the folder picker is open (#1157)", async () => {
+    const { user, intents, request } = await setup();
+    let pick: (value: unknown) => void = () => {};
+    request.mockImplementation((_topic: string, intent: string) =>
+      intent === "pickLaunchWorkspace" ? new Promise((resolve) => { pick = resolve; }) : Promise.resolve("n7"));
+    await user.type(screen.getByLabelText(/what should the agent work on/i), "fix it");
+    await user.click(screen.getByRole("button", { name: "Choose folder…" }));
+    expect(screen.getByRole("button", { name: "Start agent" })).toBeDisabled();
+    fireEvent.keyDown(screen.getByLabelText(/what should the agent work on/i), { key: "Enter" });
+    expect(intents.some(([, intent]) => intent === "start")).toBe(false);
+    pick("D:\\work");
+    expect(await screen.findByText("D:\\work")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Start agent" }));
+    expect(intents).toContainEqual(["harness", "start", ["fix it", 16, "D:\\work", "host"]]);
+  });
+
+  it("locks the form while starting, and a late start never closes a newer surface (#1157)", async () => {
+    const user = userEvent.setup();
+    const fake = makeTransport();
+    let finish: (value: unknown) => void = () => {};
+    fake.request.mockImplementation((_topic: string, intent: string) =>
+      intent === "start" ? new Promise((resolve) => { finish = resolve; }) : Promise.resolve(null));
+    function Probe() {
+      const overlays = useOverlays();
+      return <>
+        <button type="button" onClick={() => overlays.open("knowledge", "dialog")}>open other</button>
+        <output data-testid="surface">{overlays.openSurface ?? ""}</output>
+      </>;
+    }
+    render(
+      <OverlayProvider>
+        <ReactFlowProvider>
+          <OpenAgentButton />
+          <Probe />
+          <HarnessLaunchDialog transport={fake.transport} store={makeStore("docker")} />
+        </ReactFlowProvider>
+      </OverlayProvider>,
+    );
+    await user.click(screen.getByRole("button", { name: "open agent" }));
+    const field = screen.getByLabelText(/what should the agent work on/i);
+    await user.type(field, "long task");
+    await user.click(screen.getByRole("button", { name: "Start agent" }));
+    expect(field).toBeDisabled();
+    expect(screen.getByText("Starting the agent…")).toBeInTheDocument();
+
+    await user.click(screen.getByText("open other"));
+    expect(screen.getByTestId("surface")).toHaveTextContent("knowledge");
+    await act(async () => { finish("n7"); });
+    expect(screen.getByTestId("surface")).toHaveTextContent("knowledge");
   });
 });

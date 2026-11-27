@@ -119,11 +119,13 @@ export interface HarnessNodeData extends Record<string, unknown> {
   onSend: (text: string) => Promise<boolean>;
   onCancel: () => void;
   onUndoRun: () => void;
-  onApproveTool: (approvalId?: string) => void;
-  onApproveNetwork: (approvalId: string, scope: "once" | "task") => void;
-  onApproveToolForSession: (approvalId?: string) => void;
-  onDenyTool: (approvalId?: string) => void;
-  onAnswerQuestion: (answer: string) => void;
+  /** Each decision reports whether it was delivered (#1155). */
+  onApproveTool: (approvalId?: string, onSettled?: (delivered: boolean) => void) => void;
+  onApproveNetwork: (approvalId: string, scope: "once" | "task", onSettled?: (delivered: boolean) => void) => void;
+  onApproveToolForSession: (approvalId?: string, onSettled?: (delivered: boolean) => void) => void;
+  onDenyTool: (approvalId?: string, onSettled?: (delivered: boolean) => void) => void;
+  /** A blank answer is a deliberate dismissal; delivery is reported (#1150). */
+  onAnswerQuestion: (answer: string, onSettled?: (delivered: boolean) => void) => void;
   onPickWorkspace: () => void;
   onUseScratch: () => void;
   onListWorkspaceFiles: (path: string, cursor?: string) => Promise<HarnessWorkspaceListing>;
@@ -573,8 +575,22 @@ function HarnessNodeViewInner({ data, selected, id }: NodeProps<HarnessFlowNode>
   const [draftError, setDraftError] = useState("");
   const [sending, setSending] = useState(false);
   const [answerDraft, setAnswerDraft] = useState("");
+  // The question an answer is being written for: a different question
+  // never inherits an answer typed for an earlier one (#1150).
+  const questionKey = data.harnessAwaitingQuestion ? `${data.pendingRequestId}\u0000${data.harnessQuestion}` : "";
+  const [answeredQuestionKey, setAnsweredQuestionKey] = useState(questionKey);
+  const [answering, setAnswering] = useState(false);
+  const [answerError, setAnswerError] = useState("");
+  if (questionKey !== answeredQuestionKey) {
+    setAnsweredQuestionKey(questionKey);
+    setAnswerDraft("");
+    setAnswerError("");
+    setAnswering(false);
+  }
   const [submittedApprovalId, setSubmittedApprovalId] = useState("");
   const submittedApprovalRef = useRef("");
+  // Bound to the review it describes, so it never shows on a newer one.
+  const [decisionError, setDecisionError] = useState<{ approvalId: string; text: string } | null>(null);
   const approvalActionsRef = useRef<HTMLDivElement>(null);
   const flow = useReactFlow();
   // Derive the default open state during render; streaming events must not cause an extra commit.
@@ -606,22 +622,33 @@ function HarnessNodeViewInner({ data, selected, id }: NodeProps<HarnessFlowNode>
       .startsWith("Preview unavailable:");
   const decisionPending = !data.harnessApprovalId || submittedApprovalId === data.harnessApprovalId;
 
-  function decideTool(approved: boolean, alwaysAllow = false): void {
-    const decide = alwaysAllow ? data.onApproveToolForSession : approved ? data.onApproveTool : data.onDenyTool;
+  /** A decision for this exact review. Single-use: while it is in flight
+   * the controls stay disabled. Only a report that it was NOT delivered,
+   * for a review that is still the current one, re-enables them for a fresh
+   * explicit choice. Nothing is ever resent automatically (#1155). */
+  function submitDecision(send: (approvalId: string, settled: (delivered: boolean) => void) => void): void {
     const approvalId = data.harnessApprovalId;
     if (!approvalId || submittedApprovalRef.current === approvalId) return;
     submittedApprovalRef.current = approvalId;
     setSubmittedApprovalId(approvalId);
-    decide(approvalId);
+    setDecisionError(null);
+    send(approvalId, (delivered) => {
+      if (delivered || submittedApprovalRef.current !== approvalId) return;
+      submittedApprovalRef.current = "";
+      setSubmittedApprovalId("");
+      setDecisionError({ approvalId,
+        text: "Your decision may not have reached the agent. If this request is still shown, choose again." });
+    });
+  }
+
+  function decideTool(approved: boolean, alwaysAllow = false): void {
+    const decide = alwaysAllow ? data.onApproveToolForSession : approved ? data.onApproveTool : data.onDenyTool;
+    submitDecision((approvalId, settled) => decide(approvalId, settled));
   }
 
   function approveNetwork(scope: "once" | "task"): void {
     if (!data.harnessApprovalNetworkOffered) return;
-    const approvalId = data.harnessApprovalId;
-    if (!approvalId || submittedApprovalRef.current === approvalId) return;
-    submittedApprovalRef.current = approvalId;
-    setSubmittedApprovalId(approvalId);
-    data.onApproveNetwork(approvalId, scope);
+    submitDecision((approvalId, settled) => data.onApproveNetwork(approvalId, scope, settled));
   }
 
   // The panel may grow below the React Flow stage, which ends ABOVE the
@@ -701,11 +728,30 @@ function HarnessNodeViewInner({ data, selected, id }: NodeProps<HarnessFlowNode>
     }
   }
 
+  /** Answer (or, with "", dismiss) the current question. The draft clears
+   * only once the parked run acknowledges it, and only if unchanged. */
+  function resolveQuestion(answer: string): void {
+    if (answering) return;
+    const key = questionKey;
+    const submitted = answerDraft;
+    setAnswering(true);
+    setAnswerError("");
+    data.onAnswerQuestion(answer, (delivered) => {
+      if (key !== questionKeyRef.current) return; // a newer question took over
+      setAnswering(false);
+      if (delivered) setAnswerDraft((current) => (current === submitted ? "" : current));
+      else setAnswerError(answer
+        ? "Your answer wasn't delivered. It is still here; send it again if the question is still open."
+        : "The dismissal wasn't delivered. Try again if the question is still open.");
+    });
+  }
+  const questionKeyRef = useRef(questionKey);
+  useEffect(() => { questionKeyRef.current = questionKey; }, [questionKey]);
+
   function sendAnswer(): void {
     const text = answerDraft.trim();
     if (!text) return;
-    data.onAnswerQuestion(text);
-    setAnswerDraft("");
+    resolveQuestion(text);
   }
 
   return (
@@ -975,6 +1021,10 @@ function HarnessNodeViewInner({ data, selected, id }: NodeProps<HarnessFlowNode>
             <Button size="sm" id="harness-node-deny-approval" variant="secondary"
               onClick={() => decideTool(false)} disabled={decisionPending}>Deny</Button>
           </div>
+          {submittedApprovalId && submittedApprovalId === data.harnessApprovalId &&
+            <p className="harness-node-decision-status" role="status">Sending your decision…</p>}
+          {decisionError && !submittedApprovalId && decisionError.approvalId === data.harnessApprovalId &&
+            <p className="composer-agent-error" role="alert">{decisionError.text}</p>}
         </div>
       )}
 
@@ -999,7 +1049,7 @@ function HarnessNodeViewInner({ data, selected, id }: NodeProps<HarnessFlowNode>
               <button
                 type="button"
                 className="plan-node-button plan-node-button-start nodrag"
-                disabled={!answerDraft.trim()}
+                disabled={!answerDraft.trim() || answering}
                 onClick={sendAnswer}
               >
                 Answer
@@ -1007,14 +1057,14 @@ function HarnessNodeViewInner({ data, selected, id }: NodeProps<HarnessFlowNode>
               <button
                 type="button"
                 className="plan-node-button plan-node-button-deny nodrag"
-                onClick={() => {
-                  setAnswerDraft("");
-                  data.onAnswerQuestion("");
-                }}
+                disabled={answering}
+                onClick={() => resolveQuestion("")}
               >
                 Dismiss
               </button>
             </div>
+            {answering && <p className="harness-node-decision-status" role="status">Sending to the agent…</p>}
+            {answerError && <p className="composer-agent-error" role="alert">{answerError}</p>}
           </div>
         </div>
       )}
