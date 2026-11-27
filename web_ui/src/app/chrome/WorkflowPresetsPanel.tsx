@@ -13,6 +13,7 @@ import { SegmentedControl } from "../ui/SegmentedControl";
 import { Select } from "../ui/Select";
 import { TextField } from "../ui/TextField";
 import { initialDrafts, WorkflowInputsForm } from "./WorkflowRunLauncher";
+import { clearWorkflowDraft, hasWorkflowDraft, readWorkflowDraft, writeWorkflowDraft } from "./workflowDrafts";
 import { stepName, WorkflowPreviewSummary } from "./WorkflowPreviewSummary";
 import {
   effectDetail, effectLabel, errorText, money, plainInputs, plural, triggerSummary, typedInputs, workflowRequest,
@@ -36,24 +37,45 @@ function entryPin(entry: WorkflowEntry): PresetStart {
   return { workflowId: entry.workflow_id, revision: entry.revision, version: entry.version };
 }
 function pinKey(pin: PresetStart) { return JSON.stringify([pin.workflowId, pin.revision]); }
+type PresetDraft = {
+  pin: PresetStart; name: string; drafts: InputDrafts; params: Record<string, string | number>; allowed: string[];
+  cap: number | ""; trigger: TriggerKind; seconds: number | ""; time: string; folder: string;
+};
+const presetDraftKey = (workspace: number) => "preset:" + workspace;
 
 function PresetForm({ store, rows, workspace, initialWorkflow, onCancel, onSaved }: {
   store: SceneStore; rows: WorkflowEntry[]; workspace: number; initialWorkflow: PresetStart | null;
   onCancel: () => void; onSaved: () => void;
 }) {
+  // Unsaved preset values survive tab, workspace and notification
+  // navigation for this workspace (#1153). Never the preview or approval.
+  const draftKey = presetDraftKey(workspace);
+  // A request for a specific workflow ("Save as a preset…") only resumes a
+  // draft of that same workflow version.
+  const [restored] = useState(() => {
+    const draft = readWorkflowDraft<PresetDraft>(draftKey);
+    return draft && (!initialWorkflow || pinKey(draft.pin) === pinKey(initialWorkflow)) ? draft : undefined;
+  });
   // Even the default latest choice is frozen when the form opens. A later
   // library refresh must not silently change the document under review.
-  const [pin, setPin] = useState(() => initialWorkflow ?? entryPin(rows[0]));
+  const [pin, setPin] = useState(() => restored?.pin ?? initialWorkflow ?? entryPin(rows[0]));
   const [loaded, setLoaded] = useState<WorkflowDocument | null>(null);
-  const [name, setName] = useState("");
-  const [drafts, setDrafts] = useState<InputDrafts>({});
-  const [params, setParams] = useState<Record<string, string | number>>({});
-  const [allowed, setAllowed] = useState<string[]>(["pure"]);
-  const [cap, setCap] = useState<number | "">(0);
-  const [trigger, setTrigger] = useState<TriggerKind>("manual");
-  const [seconds, setSeconds] = useState<number | "">(3600);
-  const [time, setTime] = useState("09:00");
-  const [folder, setFolder] = useState("");
+  const [name, setName] = useState(restored?.name ?? "");
+  const [drafts, setDrafts] = useState<InputDrafts>(restored?.drafts ?? {});
+  const [params, setParams] = useState<Record<string, string | number>>(restored?.params ?? {});
+  const [allowed, setAllowed] = useState<string[]>(restored?.allowed ?? ["pure"]);
+  const [cap, setCap] = useState<number | "">(restored?.cap ?? 0);
+  const [trigger, setTrigger] = useState<TriggerKind>(restored?.trigger ?? "manual");
+  const [seconds, setSeconds] = useState<number | "">(restored?.seconds ?? 3600);
+  const [time, setTime] = useState(restored?.time ?? "09:00");
+  const [folder, setFolder] = useState(restored?.folder ?? "");
+  const [touched, setTouched] = useState(restored !== undefined);
+  // The restored inputs belong to the restored pin; the first document load
+  // for it must not reset them.
+  const keepRestoredInputs = useRef(restored !== undefined);
+  useEffect(() => {
+    if (touched) writeWorkflowDraft(draftKey, { pin, name, drafts, params, allowed, cap, trigger, seconds, time, folder });
+  }, [draftKey, touched, pin, name, drafts, params, allowed, cap, trigger, seconds, time, folder]);
   const [review, setReview] = useState<{ body: Record<string, unknown>; preview: WorkflowPreview } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -74,8 +96,12 @@ function PresetForm({ store, rows, workspace, initialWorkflow, onCancel, onSaved
         throw new Error("The library returned a different workflow version. Choose the version again.");
       }
       setLoaded(next);
-      setDrafts(initialDrafts(next.spec.inputs, next.format === "graphlink-starter-workflow" ? next.example_inputs : undefined));
-      setParams({});
+      if (keepRestoredInputs.current) {
+        keepRestoredInputs.current = false;
+      } else {
+        setDrafts(initialDrafts(next.spec.inputs, next.format === "graphlink-starter-workflow" ? next.example_inputs : undefined));
+        setParams({});
+      }
       setName(current => current || next.spec.name);
     }).catch(err => { if (live) setError(errorText(err)); });
     return () => { live = false; };
@@ -95,7 +121,7 @@ function PresetForm({ store, rows, workspace, initialWorkflow, onCancel, onSaved
       : trigger === "daily" ? { kind: "daily", time } : trigger === "folder" ? { kind: "folder", path: folder.trim() } : null;
     return { request, name: name.trim(), allowed_effects: allowed, cost_usd: Number(cap), trigger: when };
   }
-  const changed = (fn: () => void) => { fn(); setReview(null); };
+  const changed = (fn: () => void) => { fn(); setTouched(true); setReview(null); };
   async function preview() {
     setBusy(true); setError(""); setReview(null);
     try {
@@ -110,6 +136,7 @@ function PresetForm({ store, rows, workspace, initialWorkflow, onCancel, onSaved
     try {
       await workflowRequest(workspacePath(workspace) + "/presets", { method: "POST",
         body: { ...review.body, fingerprint: review.preview.fingerprint, approved: true } });
+      clearWorkflowDraft(draftKey);
       onSaved();
     } catch (err) { setError(errorText(err)); setReview(null); }
     finally { setBusy(false); }
@@ -179,7 +206,8 @@ function PresetForm({ store, rows, workspace, initialWorkflow, onCancel, onSaved
       {review
         ? <Button variant="primary" loading={busy} onClick={() => void save()}>Approve and save preset</Button>
         : <Button variant="primary" loading={busy} disabled={!doc} onClick={() => void preview()}>Preview preset</Button>}
-      <Button variant="ghost" disabled={busy} onClick={onCancel}>Cancel</Button>
+      {/* Cancel is the explicit discard; "All presets" keeps the draft. */}
+      <Button variant="ghost" disabled={busy} onClick={() => { clearWorkflowDraft(draftKey); onCancel(); }}>Cancel</Button>
     </div>
   </div>;
 }
@@ -232,7 +260,9 @@ export function WorkflowPresetsPanel({ store, workspace, presets, loaded, rows, 
       <span className="workflow-muted">{loaded ? plural(presets.length, "preset") : "Loading presets…"}</span>
       <span className="workflow-toolbar-end">
         {toolbar}
-        <Button variant="primary" iconStart="plus" disabled={workspace === null} onClick={() => openForm({ start: null })}>New preset</Button>
+        <Button variant="primary" iconStart="plus" disabled={workspace === null} onClick={() => openForm({ start: null })}>
+          {workspace !== null && hasWorkflowDraft(presetDraftKey(workspace)) ? "Resume preset draft" : "New preset"}
+        </Button>
       </span>
     </div>
     {error && <InlineAlert variant="error" title="That didn't go through" body={error} />}

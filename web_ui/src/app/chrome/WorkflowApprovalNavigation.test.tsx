@@ -111,13 +111,17 @@ it.each(["JSON launcher", "preset form", "another run"] as const)("opens the wai
   expect(dialog.queryByRole("textbox", { name: "Workflow request JSON (spec and parameters)" })).toBeNull();
   expect(dialog.queryByRole("textbox", { name: "Preset name" })).toBeNull();
   expect(fetchMock.mock.calls.every(([, init]) => !init?.method || init.method === "GET")).toBe(true);
+  // The unsaved form was suspended, not erased (#1153): it can be resumed.
   if (source === "preset form") {
     await user.click(dialog.getByRole("tab", { name: /^Presets/ }));
-    expect(dialog.getByRole("button", { name: "New preset" })).toBeVisible();
     expect(dialog.queryByRole("textbox", { name: "Preset name" })).toBeNull();
+    await user.click(dialog.getByRole("button", { name: "Resume preset draft" }));
+    expect(await dialog.findByRole("textbox", { name: "Preset name" })).toHaveValue("unsaved preset");
   } else if (source === "JSON launcher") {
     await user.click(dialog.getByRole("button", { name: "All runs" }));
     await user.click(dialog.getByRole("button", { name: "Run from JSON" }));
+    expect(dialog.getByRole("textbox", { name: "Workflow request JSON (spec and parameters)" })).toHaveValue("unsaved draft");
+    await user.click(dialog.getByRole("button", { name: "Discard draft" }));
     expect(dialog.getByRole("textbox", { name: "Workflow request JSON (spec and parameters)" })).toHaveValue("");
   }
 });

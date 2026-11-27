@@ -380,7 +380,8 @@ function Library({ store }: { store: SceneStore }) {
             disabled={!workspaces.length}
             onChange={value => navigate(Number(value), "")} />
           <p className="workflow-muted">Runs are stored in the selected library workspace, which may differ from the current canvas.</p>
-          <WorkflowRunLauncher key={doc.spec.revision + ":" + workspace} title="Run it" spec={doc.spec} workspace={workspace}
+          <WorkflowRunLauncher key={doc.spec.revision} draftKey={"run:" + doc.spec.revision} title="Run it"
+            spec={doc.spec} workspace={workspace}
             note={starter ? <p className="workflow-muted">Filled with a sample. Model steps use the local Ollama model named in each step.</p>
               : doc.parameters.length > 0 ? <p className="workflow-muted">Runs use the saved settings of this version. Change them in a preset.</p> : null}
             examples={starter ? doc.example_inputs : undefined} onStarted={showRun} />

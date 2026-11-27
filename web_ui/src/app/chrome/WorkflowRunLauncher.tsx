@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import type { PortSpec, PortValue, WorkflowSpec } from "../../lib/workflow-contract/generated/workflow";
 import { Button } from "../ui/Button";
 import { InlineAlert } from "../ui/InlineAlert";
@@ -10,6 +10,7 @@ import {
   type DetachedRequest, type InputDrafts, type WorkflowPreview,
 } from "./workflowApi";
 import { draftsForRequest, parseDetachedRequest, requestFromDrafts } from "./workflowRunDrafts";
+import { clearWorkflowDraft, readWorkflowDraft, writeWorkflowDraft } from "./workflowDrafts";
 
 export function initialDrafts(ports: readonly PortSpec[], examples?: Record<string, PortValue>): InputDrafts {
   return Object.fromEntries(ports.map(port => [port.name, draftFor(port, examples?.[port.name])]));
@@ -41,20 +42,44 @@ export function WorkflowInputsForm({ ports, drafts, onChange, disabled }: {
 }
 
 /** Preview and start a detached run of one workflow version. */
-export function WorkflowRunLauncher({ spec, examples, workspace, onStarted, jsonOnly = false, previewLabel, title, note }: {
+type LauncherDraft = { drafts: InputDrafts; asJson: boolean; json: string };
+
+export function WorkflowRunLauncher({ spec, examples, workspace, onStarted, jsonOnly = false, previewLabel, title, note, draftKey }: {
   spec?: WorkflowSpec; examples?: Record<string, PortValue>; workspace: number | null;
   onStarted: (runId: string) => void; jsonOnly?: boolean; previewLabel?: string; title?: string; note?: ReactNode;
+  /** Keeps unsaved inputs across tab, workspace and notification navigation (#1153). */
+  draftKey?: string;
 }) {
-  const [drafts, setDrafts] = useState<InputDrafts>(() => initialDrafts(spec?.inputs ?? [], examples));
-  const [asJson, setAsJson] = useState(() => {
-    if (jsonOnly) return true;
-    if (!spec || !examples) return false;
-    // Do not start in a form that would silently drop a typed example (e.g. an asset).
-    try { draftsForRequest(spec, { spec, parameters: examples }); return false; }
-    catch { return true; }
-  });
-  const [json, setJson] = useState(() => spec ? JSON.stringify({ spec, parameters: examples ?? {} }, null, 2) : "");
-  const [review, setReview] = useState<{ request: DetachedRequest; preview: WorkflowPreview } | null>(null);
+  const fresh = (): LauncherDraft => {
+    let asJsonDefault = jsonOnly;
+    if (!jsonOnly && spec && examples) {
+      // Do not start in a form that would silently drop a typed example (e.g. an asset).
+      try { draftsForRequest(spec, { spec, parameters: examples }); }
+      catch { asJsonDefault = true; }
+    }
+    return {
+      drafts: initialDrafts(spec?.inputs ?? [], examples), asJson: asJsonDefault,
+      json: spec ? JSON.stringify({ spec, parameters: examples ?? {} }, null, 2) : "",
+    };
+  };
+  const [restored] = useState(() => (draftKey ? readWorkflowDraft<LauncherDraft>(draftKey) : undefined));
+  const [drafts, setDrafts] = useState<InputDrafts>(() => (restored ?? fresh()).drafts);
+  const [asJson, setAsJson] = useState(() => (restored ?? fresh()).asJson);
+  const [json, setJson] = useState(() => (restored ?? fresh()).json);
+  const [hasDraft, setHasDraft] = useState(restored !== undefined);
+  // A review belongs to the workspace it was previewed for: a target
+  // change keeps the inputs but always needs a fresh preview.
+  const [reviewState, setReview] = useState<{ request: DetachedRequest; preview: WorkflowPreview; workspace: number | null } | null>(null);
+  const review = reviewState && reviewState.workspace === workspace ? reviewState : null;
+  useEffect(() => {
+    if (draftKey && hasDraft) writeWorkflowDraft(draftKey, { drafts, asJson, json });
+  }, [draftKey, hasDraft, drafts, asJson, json]);
+  function discardDraft() {
+    if (draftKey) clearWorkflowDraft(draftKey);
+    const reset = fresh();
+    setDrafts(reset.drafts); setAsJson(reset.asJson); setJson(reset.json);
+    setHasDraft(false); setReview(null); setError(""); setModeError("");
+  }
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [modeError, setModeError] = useState("");
@@ -68,7 +93,8 @@ export function WorkflowRunLauncher({ spec, examples, workspace, onStarted, json
     setBusy(true); setError(""); setReview(null);
     try {
       const body = request();
-      setReview({ request: body, preview: await workflowRequest<WorkflowPreview>(workspacePath(workspace) + "/preview", { method: "POST", body }) });
+      setReview({ request: body, workspace,
+        preview: await workflowRequest<WorkflowPreview>(workspacePath(workspace) + "/preview", { method: "POST", body }) });
     } catch (err) { setError(errorText(err)); }
     finally { setBusy(false); }
   }
@@ -81,11 +107,13 @@ export function WorkflowRunLauncher({ spec, examples, workspace, onStarted, json
       const { run_id } = await workflowRequest<{ run_id: string }>(workspacePath(workspace) + "/runs",
         { method: "POST", body: { ...review.request, approval_token } });
       setReview(null);
+      if (draftKey) clearWorkflowDraft(draftKey);
+      setHasDraft(false);
       onStarted(run_id);
     } catch (err) { setError(errorText(err)); setReview(null); }
     finally { setBusy(false); }
   }
-  const edit = (fn: () => void) => { fn(); setReview(null); setModeError(""); setError(""); };
+  const edit = (fn: () => void) => { fn(); setHasDraft(true); setReview(null); setModeError(""); setError(""); };
 
   function switchEditor(next: boolean) {
     if (!spec || next === asJson) return;
@@ -110,6 +138,10 @@ export function WorkflowRunLauncher({ spec, examples, workspace, onStarted, json
       onCheckedChange={switchEditor} />}
     </div>
     {note}
+    {hasDraft && draftKey && <div className="workflow-actions">
+      <span className="workflow-muted">{restored ? "Your unsaved inputs were kept." : "Unsaved inputs."}</span>
+      <Button size="sm" variant="ghost" disabled={busy} onClick={discardDraft}>Discard draft</Button>
+    </div>}
     {asJson || !spec
       ? <TextArea label="Workflow request JSON (spec and parameters)" disabled={busy} minRows={8} maxRows={20}
           description="A frozen spec and one typed value per input. Only run a spec you trust."

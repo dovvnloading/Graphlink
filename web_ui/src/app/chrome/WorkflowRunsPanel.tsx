@@ -226,7 +226,7 @@ export function WorkflowRunsPanel({ workspace, runs, loaded, presets, detail, de
       <Button variant="ghost" iconStart="chevron-left" className="workflow-back" onClick={back}>All runs</Button>
       <h3 ref={heading} tabIndex={-1}>Run from a JSON request</h3>
       <p className="workflow-muted">For a spec you wrote or exported. Library workflows are easier to run from their page in the Workflows tab.</p>
-      <WorkflowRunLauncher jsonOnly workspace={workspace} previewLabel="Workflow preview"
+      <WorkflowRunLauncher jsonOnly draftKey="run:json" workspace={workspace} previewLabel="Workflow preview"
         onStarted={runId => { focusHeading.current = true; setCustom(false); onSelect(runId); onChanged(); }} />
     </div>;
   }
@@ -234,7 +234,7 @@ export function WorkflowRunsPanel({ workspace, runs, loaded, presets, detail, de
     return <div className="workflow-panel">
       <Button variant="ghost" iconStart="chevron-left" className="workflow-back" onClick={back}>All runs</Button>
       <h3 ref={heading} tabIndex={-1} className="visually-hidden">Selected run</h3>
-      {fromNotification && <p className="workflow-muted">Reviewing a notification closes any unsaved run or preset form without saving its draft.</p>}
+      {fromNotification && <p className="workflow-muted">Your unsaved run and preset inputs are kept. Reopen the form to continue where you left off.</p>}
       {run && workspace !== null
         ? <RunDetail key={workspace + ":" + run.run_id} run={run} workspace={workspace} presetName={presetName(run.preset_id)} onChanged={onChanged} />
         : <p className="workflow-muted" role="status">{detailLoaded
