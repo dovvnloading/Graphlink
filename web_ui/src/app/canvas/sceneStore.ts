@@ -1458,33 +1458,38 @@ export class SceneStore {
     this.transport.fireIntent("harness", "cancel", [requestId]);
   }
 
-  approveHarnessNetwork(requestId: string, approvalId: string, scope: "once" | "task"): void {
+  // Decisions report delivery (#1155) so a definitely undelivered choice
+  // can be made again; they are never resent automatically.
+  approveHarnessNetwork(requestId: string, approvalId: string, scope: "once" | "task", onSettled?: (delivered: boolean) => void): void {
     this.transport.fireIntent(
       "harness", scope === "task" ? "approveNetworkForTask" : "approveNetworkOnce",
-      [requestId, approvalId],
+      [requestId, approvalId], undefined, false, undefined, onSettled,
     );
   }
 
-  approveHarnessTool(requestId: string, approvalId?: string): void {
-    this.transport.fireIntent("harness", "approveTool", approvalId ? [requestId, approvalId] : [requestId]);
+  approveHarnessTool(requestId: string, approvalId?: string, onSettled?: (delivered: boolean) => void): void {
+    this.transport.fireIntent("harness", "approveTool", approvalId ? [requestId, approvalId] : [requestId],
+      undefined, false, undefined, onSettled);
   }
 
-  denyHarnessTool(requestId: string, approvalId?: string): void {
-    this.transport.fireIntent("harness", "denyTool", approvalId ? [requestId, approvalId] : [requestId]);
+  denyHarnessTool(requestId: string, approvalId?: string, onSettled?: (delivered: boolean) => void): void {
+    this.transport.fireIntent("harness", "denyTool", approvalId ? [requestId, approvalId] : [requestId],
+      undefined, false, undefined, onSettled);
   }
 
   // PLAN §2.4 graded consent: approve AND stop asking for this tool for the
   // rest of the agent's session. A separate intent from approveHarnessTool
   // by design - two decisions with different blast radii should not share
   // one call shape a UI could send by accident.
-  approveHarnessToolForSession(requestId: string, approvalId?: string): void {
-    this.transport.fireIntent("harness", "approveToolForSession", approvalId ? [requestId, approvalId] : [requestId]);
+  approveHarnessToolForSession(requestId: string, approvalId?: string, onSettled?: (delivered: boolean) => void): void {
+    this.transport.fireIntent("harness", "approveToolForSession", approvalId ? [requestId, approvalId] : [requestId],
+      undefined, false, undefined, onSettled);
   }
 
   // §2.3's user.ask resolution. A blank answer is a deliberate dismissal,
   // which the tool reports to the model as "declined to answer".
-  answerHarnessQuestion(requestId: string, answer: string): void {
-    this.transport.fireIntent("harness", "answer", [requestId, answer]);
+  answerHarnessQuestion(requestId: string, answer: string, onSettled?: (delivered: boolean) => void): void {
+    this.transport.fireIntent("harness", "answer", [requestId, answer], undefined, false, undefined, onSettled);
   }
 
   pickHarnessWorkspace(nodeId: string): void {

@@ -1,5 +1,6 @@
 @layer surfaces {
 .builder-launch-dialog .overlay-dialog-body { display: flex; flex-direction: column; gap: var(--gl-space-5); }
+.builder-launch-form { display: flex; flex-direction: column; gap: var(--gl-space-5); min-width: 0; margin: 0; padding: 0; border: 0; }
 .builder-launch-intro { margin: 0; font-size: var(--gl-text-sm); color: var(--gl-surface-text-secondary); line-height: var(--gl-leading-sm); }
 .builder-launch-recipe-preview ol { margin: var(--gl-space-2) 0; padding-left: var(--gl-space-5); font-size: var(--gl-text-sm); }
 .builder-launch-recipe-preview p { margin: 0; font-size: var(--gl-text-sm); }

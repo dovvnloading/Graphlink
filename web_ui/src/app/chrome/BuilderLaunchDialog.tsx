@@ -14,6 +14,8 @@ import { SegmentedControl } from "../ui/SegmentedControl";
 import { Select } from "../ui/Select";
 import { TextArea } from "../ui/TextArea";
 import { formatCount, formatTokens } from "../ui/format";
+import { useConfirm } from "../ui/ConfirmDialog";
+import { toast } from "../ui/Toast";
 import "./BuilderLaunchDialog.css";
 
 /**
@@ -110,6 +112,11 @@ export function BuilderLaunchDialog({ transport, store }: { transport: WsTranspo
   const [error, setError] = useState<string | null>(null);
   const latestRequestId = useRef(0);
   const open = overlays.isOpen("builder-launch");
+  const askConfirm = useConfirm();
+  // Read after a launch settles: a late reply must not close a surface the
+  // user opened since dismissing this launcher (#1157).
+  const openRef = useRef(open);
+  useEffect(() => { openRef.current = open; }, [open]);
 
   useEffect(() => {
     if (!open) return;
@@ -143,7 +150,11 @@ export function BuilderLaunchDialog({ transport, store }: { transport: WsTranspo
         if (requestId !== latestRequestId.current) return;
         if (nodeId != null) {
           setGoal("");
-          overlays.close();
+          const launcherOpen = openRef.current;
+          if (launcherOpen) overlays.close();
+          else toast.show({ title: "The Builder plan is ready on the canvas.", variant: "success" });
+          // Only pan when nothing else has the screen.
+          if (!launcherOpen && overlays.openSurface !== null) return;
           // The launcher has no canvas anchor of its own, so the plan node
           // can land anywhere the scene's own extent happens to place it -
           // often off the current viewport entirely. intents_builder.start()
@@ -169,28 +180,36 @@ export function BuilderLaunchDialog({ transport, store }: { transport: WsTranspo
       });
   }
 
-  function deleteSelectedRecipe() {
-    if (!recipe || deletingRecipe) return;
+  async function deleteSelectedRecipe() {
+    // The identity is captured now, so a selection changed while the
+    // confirmation is open can never redirect the deletion (#1151).
+    const target = recipes.find((row) => row.name === recipe);
+    if (!target || target.builtIn || deletingRecipe) return;
+    const confirmed = await askConfirm({
+      title: `Delete the "${target.name}" recipe?`,
+      body: "This removes the saved recipe for every future build. Builds already planned from it are not affected.",
+      confirmLabel: "Delete recipe",
+      destructive: true,
+    });
+    if (!confirmed) return;
     setDeletingRecipe(true);
-    transport
-      .request("builder", "deleteRecipe", [recipe])
-      .then((deleted) => {
-        // A resolved `false` (unknown name, or a refused built-in) is NOT a
-        // rejected promise - deleteRecipe's own backend already surfaced
-        // why via its own notification (backend/api/intents_builder.py).
-        // Refreshing the list and clearing the selection here regardless
-        // would silently claim success on a call that changed nothing.
-        if (!deleted) return;
-        return transport.request("builder", "listRecipes", []).then((value) => {
-          const payload = value as { recipes: RecipeRow[] };
-          setRecipes(payload.recipes ?? []);
-          setRecipe("");
-        });
-      })
-      .catch(() => {
-        setError("The recipe could not be deleted - see graphlink.log for details.");
-      })
-      .finally(() => setDeletingRecipe(false));
+    setError(null);
+    try {
+      const deleted = await transport.request("builder", "deleteRecipe", [target.name]);
+      // A resolved `false` (unknown name, or a refused built-in) is NOT a
+      // rejected promise - the backend explains why in a notification.
+      if (!deleted) {
+        setError(`"${target.name}" was not deleted. See the notification for why, then try again.`);
+        return;
+      }
+      const value = await transport.request("builder", "listRecipes", []);
+      setRecipes((value as { recipes: RecipeRow[] }).recipes ?? []);
+      setRecipe((current) => (current === target.name ? "" : current));
+    } catch {
+      setError(`"${target.name}" could not be deleted. Check the connection, then try again.`);
+    } finally {
+      setDeletingRecipe(false);
+    }
   }
 
   // The selected recipe's own description AND steps - listRecipes has
@@ -211,7 +230,7 @@ export function BuilderLaunchDialog({ transport, store }: { transport: WsTranspo
 
   return (
     <Dialog name="builder-launch" title="Builder" size="md" className="builder-launch-dialog"
-      status={!canStart ? "Describe a goal, or pick a recipe." : "Review the plan before anything runs."}
+      status={starting ? "Planning the build…" : !canStart ? "Describe a goal, or pick a recipe." : "Review the plan before anything runs."}
       footer={<Button variant="primary" onClick={startBuild} disabled={starting || !canStart} loading={starting}>
         Plan the build
       </Button>}>
@@ -219,6 +238,9 @@ export function BuilderLaunchDialog({ transport, store }: { transport: WsTranspo
         The Builder plans a job as a checklist, then works through it on the canvas.
         Describe what you want built, or start from a saved recipe.
       </p>
+      {/* While a launch is pending the form is read-only, so nothing typed
+          meanwhile can be lost when it completes (#1157). */}
+      <fieldset className="builder-launch-form" disabled={starting}>
       <TextArea id="builder-goal" label="Goal" value={goal} onValueChange={setGoal}
         minRows={3} maxRows={8}
         placeholder="Research recent solar output trends, compute the growth rate, and chart it"
@@ -237,7 +259,7 @@ export function BuilderLaunchDialog({ transport, store }: { transport: WsTranspo
           <ol>{selectedRecipe.steps.map((name, index) => <li key={index}>{name}</li>)}</ol>
         </>}
         {!selectedRecipe.builtIn && <Button destructive size="sm" variant="ghost"
-          onClick={deleteSelectedRecipe} disabled={deletingRecipe} loading={deletingRecipe}>
+          onClick={() => { void deleteSelectedRecipe(); }} disabled={deletingRecipe} loading={deletingRecipe}>
           Delete this recipe
         </Button>}
       </Card>}
@@ -272,6 +294,7 @@ export function BuilderLaunchDialog({ transport, store }: { transport: WsTranspo
           </div>
         </Disclosure>
       </div>
+      </fieldset>
       {error && <InlineAlert variant="error" title="Couldn't plan the build" body={error} />}
     </Dialog>
   );

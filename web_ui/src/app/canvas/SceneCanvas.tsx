@@ -982,28 +982,33 @@ function makeHarnessFns(id: string, liveRef: { current: DispatcherLive }) {
     },
     // Python approval identifies the disclosure actually rendered by the
     // view. Never substitute the newest token into an older click.
-    onApproveTool: (approvalId?: string) => {
+    onApproveTool: (approvalId?: string, onSettled?: (delivered: boolean) => void) => {
       const { n, store } = liveRef.current;
-      if (n.pendingRequestId) store.approveHarnessTool(n.pendingRequestId, approvalId);
+      if (n.pendingRequestId) store.approveHarnessTool(n.pendingRequestId, approvalId, onSettled);
+      else onSettled?.(false);
     },
-    onApproveNetwork: (approvalId: string, scope: "once" | "task") => {
+    onApproveNetwork: (approvalId: string, scope: "once" | "task", onSettled?: (delivered: boolean) => void) => {
       const { n, store } = liveRef.current;
-      if (n.pendingRequestId) store.approveHarnessNetwork(n.pendingRequestId, approvalId, scope);
+      if (n.pendingRequestId) store.approveHarnessNetwork(n.pendingRequestId, approvalId, scope, onSettled);
+      else onSettled?.(false);
     },
-    onDenyTool: (approvalId?: string) => {
+    onDenyTool: (approvalId?: string, onSettled?: (delivered: boolean) => void) => {
       const { n, store } = liveRef.current;
-      if (n.pendingRequestId) store.denyHarnessTool(n.pendingRequestId, approvalId);
+      if (n.pendingRequestId) store.denyHarnessTool(n.pendingRequestId, approvalId, onSettled);
+      else onSettled?.(false);
     },
-    onApproveToolForSession: (approvalId?: string) => {
+    onApproveToolForSession: (approvalId?: string, onSettled?: (delivered: boolean) => void) => {
       const { n, store } = liveRef.current;
-      if (n.pendingRequestId) store.approveHarnessToolForSession(n.pendingRequestId, approvalId);
+      if (n.pendingRequestId) store.approveHarnessToolForSession(n.pendingRequestId, approvalId, onSettled);
+      else onSettled?.(false);
     },
     // Same current-snapshot posture as approve/deny: the run being answered
     // is whichever one this node currently has parked, never an id the view
     // captured earlier and might replay against a newer run.
-    onAnswerQuestion: (answer: string) => {
+    onAnswerQuestion: (answer: string, onSettled?: (delivered: boolean) => void) => {
       const { n, store } = liveRef.current;
-      if (n.pendingRequestId) store.answerHarnessQuestion(n.pendingRequestId, answer);
+      if (n.pendingRequestId) store.answerHarnessQuestion(n.pendingRequestId, answer, onSettled);
+      else onSettled?.(false);
     },
     onPickWorkspace: () => liveRef.current.store.pickHarnessWorkspace(id),
     onUseScratch: () => liveRef.current.store.useHarnessScratch(id),

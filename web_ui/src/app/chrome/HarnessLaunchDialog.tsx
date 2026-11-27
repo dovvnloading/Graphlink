@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useReactFlow } from "@xyflow/react";
 import type { WsTransport } from "../../lib/ws/transport";
 import type { SceneStore } from "../canvas/sceneStore";
@@ -12,6 +12,7 @@ import { FieldGroup } from "../ui/Field";
 import { InlineAlert } from "../ui/InlineAlert";
 import { NumberField } from "../ui/NumberField";
 import { TextArea } from "../ui/TextArea";
+import { toast } from "../ui/Toast";
 import "./BuilderLaunchDialog.css";
 
 /**
@@ -52,6 +53,9 @@ export function HarnessLaunchDialog({ transport, store }: { transport: WsTranspo
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const latestRequestId = useRef(0);
+  const open = overlays.isOpen("harness-launch");
+  const openRef = useRef(open);
+  useEffect(() => { openRef.current = open; }, [open]);
 
   function pickWorkspace() {
     if (picking || starting) return;
@@ -67,7 +71,8 @@ export function HarnessLaunchDialog({ transport, store }: { transport: WsTranspo
 
   function startAgent() {
     const trimmed = task.trim();
-    if (!trimmed || starting) return;
+    // A pending folder pick would change the workspace after launch (#1157).
+    if (!trimmed || starting || picking) return;
     if (exceedsHarnessTaskLimit(trimmed)) {
       setError(`Agent tasks cannot exceed ${MAX_HARNESS_TASK_LENGTH.toLocaleString()} characters. Shorten the task; your draft is preserved.`);
       return;
@@ -83,7 +88,10 @@ export function HarnessLaunchDialog({ transport, store }: { transport: WsTranspo
           setTask("");
           setWorkspace("");
           setExecutionProfile("host");
-          overlays.close();
+          const launcherOpen = openRef.current;
+          if (launcherOpen) overlays.close();
+          else toast.show({ title: "The agent started on the canvas.", variant: "success" });
+          if (!launcherOpen && overlays.openSurface !== null) return;
           const node = store.getScene().nodes.find((n) => n.id === nodeId);
           if (node) {
             reactFlow.setCenter(node.x + 180, node.y + 90, { duration: motionDuration(300) });
@@ -103,14 +111,17 @@ export function HarnessLaunchDialog({ transport, store }: { transport: WsTranspo
 
   return (
     <Dialog name="harness-launch" title="Agent" size="md" className="builder-launch-dialog"
-      status={!task.trim() ? "Describe a task to start." : "Actions that change your machine require approval."}
-      footer={<Button variant="primary" disabled={starting || !task.trim()} loading={starting}
+      status={starting ? "Starting the agent…" : picking ? "Waiting for the folder picker…"
+        : !task.trim() ? "Describe a task to start." : "Actions that change your machine require approval."}
+      footer={<Button variant="primary" disabled={starting || picking || !task.trim()} loading={starting}
         onClick={startAgent}>Start agent</Button>}>
+      <fieldset className="builder-launch-form" disabled={starting}>
       <TextArea id="harness-task" label="What should the agent work on?"
         value={task} onValueChange={setTask} minRows={3} maxRows={10}
         placeholder="Read the files in the workspace and summarize what they contain"
         onKeyDown={(event) => {
-          if (event.key === "Enter" && !event.shiftKey) {
+          // An IME's confirmation Enter commits composed text (#1156).
+          if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing && event.keyCode !== 229) {
             event.preventDefault();
             startAgent();
           }
@@ -135,6 +146,7 @@ export function HarnessLaunchDialog({ transport, store }: { transport: WsTranspo
         <NumberField label="Max turns" min={MIN_TURNS} max={MAX_TURNS}
           value={maxTurns} onValueChange={(value) => setMaxTurns(value === "" ? DEFAULT_MAX_TURNS : value)} />
       </FieldGroup>
+      </fieldset>
       {error && <InlineAlert variant="error" title="Couldn't start the agent" body={error} />}
     </Dialog>
   );

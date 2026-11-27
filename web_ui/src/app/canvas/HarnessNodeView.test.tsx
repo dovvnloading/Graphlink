@@ -609,7 +609,7 @@ describe("HarnessNodeView", () => {
     expect(screen.queryByRole("button", { name: "Approve once" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Always allow this tool" })).toBeNull();
     await user.dblClick(screen.getByRole("button", { name: label }));
-    expect(data.onApproveNetwork).toHaveBeenCalledExactlyOnceWith("unique-command-token", scope);
+    expect(data.onApproveNetwork).toHaveBeenCalledExactlyOnceWith("unique-command-token", scope, expect.any(Function));
     expect(screen.getByRole("button", { name: "Deny" })).toBeDisabled();
     unmount();
 
@@ -637,7 +637,7 @@ describe("HarnessNodeView", () => {
     expect(screen.getByRole("region", { name: "Proposed tool call" }).textContent)
       .toBe("shell.exec\npython build.py --all");
     await user.click(screen.getByRole("button", { name: "Approve once" }));
-    expect(data.onApproveTool).toHaveBeenCalledExactlyOnceWith("shell-disclosure-1");
+    expect(data.onApproveTool).toHaveBeenCalledExactlyOnceWith("shell-disclosure-1", expect.any(Function));
     expect(screen.getByRole("button", { name: "Deny" })).toBeDisabled();
   });
 
@@ -653,7 +653,7 @@ describe("HarnessNodeView", () => {
     renderHarness(data);
     const button = screen.getByRole("button", { name: "Always allow" });
     await user.dblClick(button);
-    expect(data.onApproveToolForSession).toHaveBeenCalledExactlyOnceWith("shell-safe-42");
+    expect(data.onApproveToolForSession).toHaveBeenCalledExactlyOnceWith("shell-safe-42", expect.any(Function));
     expect(button).toBeDisabled();
     expect(screen.getByRole("button", { name: "Approve once" })).toBeDisabled();
   });
@@ -682,7 +682,7 @@ describe("HarnessNodeView", () => {
       });
       const { unmount } = renderHarness(data);
       await user.dblClick(screen.getByRole("button", { name: "Approve once" }));
-      expect(data.onApproveTool).toHaveBeenCalledExactlyOnceWith("prompt-unique-1");
+      expect(data.onApproveTool).toHaveBeenCalledExactlyOnceWith("prompt-unique-1", expect.any(Function));
       expect(screen.getByRole("button", { name: "Deny" })).toBeDisabled();
       unmount();
 
@@ -741,7 +741,7 @@ describe("HarnessNodeView", () => {
     expect(screen.getByRole("button", { name: "Approve once" })).toBeDisabled();
     expect(screen.queryByRole("button", { name: "Always allow this tool" })).toBeNull();
     await user.click(screen.getByRole("button", { name: "Deny" }));
-    expect(data.onDenyTool).toHaveBeenCalledExactlyOnceWith("unpreviewable-file");
+    expect(data.onDenyTool).toHaveBeenCalledExactlyOnceWith("unpreviewable-file", expect.any(Function));
   });
 
   it("offers the session-scoped grant only when the backend says it may", async () => {
@@ -756,7 +756,7 @@ describe("HarnessNodeView", () => {
     });
     const { unmount } = renderHarness(offered);
     await user.click(screen.getByRole("button", { name: "Always allow this tool" }));
-    expect(offered.onApproveToolForSession).toHaveBeenCalledExactlyOnceWith("file-grant");
+    expect(offered.onApproveToolForSession).toHaveBeenCalledExactlyOnceWith("file-grant", expect.any(Function));
     unmount();
 
     renderHarness(makeData({
@@ -788,7 +788,7 @@ describe("HarnessNodeView", () => {
     expect(sourceRegion).toHaveFocus();
     expect(screen.queryByRole("button", { name: "Always allow this tool" })).toBeNull();
     await user.dblClick(screen.getByRole("button", { name: "Approve once" }));
-    expect(data.onApproveTool).toHaveBeenCalledExactlyOnceWith("python-disclosure-1");
+    expect(data.onApproveTool).toHaveBeenCalledExactlyOnceWith("python-disclosure-1", expect.any(Function));
     expect(screen.getByRole("button", { name: "Approve once" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Deny" })).toBeDisabled();
   });
@@ -844,7 +844,7 @@ describe("HarnessNodeView", () => {
     expect(container.querySelector(".plan-node-approval-summary")?.textContent).toBe(summary);
     expect(screen.queryByRole("button", { name: "Always allow this tool" })).toBeNull();
     await user.click(screen.getByRole("button", { name: "Approve once" }));
-    expect(data.onApproveTool).toHaveBeenCalledExactlyOnceWith("install-disclosure-1");
+    expect(data.onApproveTool).toHaveBeenCalledExactlyOnceWith("install-disclosure-1", expect.any(Function));
     expect(screen.getByRole("button", { name: "Approve once" })).toBeDisabled();
   });
 
@@ -857,7 +857,7 @@ describe("HarnessNodeView", () => {
     });
     const { unmount } = renderHarness(data);
     await user.click(screen.getByRole("button", { name: "Deny" }));
-    expect(data.onDenyTool).toHaveBeenCalledExactlyOnceWith("disclosure-denied");
+    expect(data.onDenyTool).toHaveBeenCalledExactlyOnceWith("disclosure-denied", expect.any(Function));
     unmount();
     const missing = makeData({ harnessAwaitingApproval: true, harnessApprovalToolName: tool });
     renderHarness(missing);
@@ -885,15 +885,16 @@ describe("HarnessNodeView", () => {
       harnessAwaitingQuestion: true,
       harnessQuestion: "Which database should I target?",
     });
+    vi.mocked(data.onAnswerQuestion).mockImplementation((_answer, settled) => settled?.(true));
     renderHarness(data);
     expect(screen.getByText("Which database should I target?")).toBeInTheDocument();
 
     await user.type(screen.getByLabelText("Answer to the agent's question"), "postgres");
     await user.click(screen.getByRole("button", { name: "Answer" }));
-    expect(data.onAnswerQuestion).toHaveBeenCalledWith("postgres");
+    expect(data.onAnswerQuestion).toHaveBeenCalledWith("postgres", expect.any(Function));
 
     await user.click(screen.getByRole("button", { name: "Dismiss" }));
-    expect(data.onAnswerQuestion).toHaveBeenLastCalledWith("");
+    expect(data.onAnswerQuestion).toHaveBeenLastCalledWith("", expect.any(Function));
   });
 
   it("offers a folder picker on scratch, and a trusted-vs-pending state when bound", async () => {
@@ -1153,5 +1154,79 @@ describe("Agent model picker", () => {
     await user.click(await screen.findByRole("button", { name: /Ollama · tool-agent:8b/ }));
     expect(selectPickerModel).toHaveBeenCalledWith("Ollama", "tool-agent:8b");
     expect(trigger).toHaveFocus();
+  });
+});
+
+describe("HarnessNodeView decision and answer delivery (#1150, #1155)", () => {
+  type Settle = (delivered: boolean) => void;
+
+  it("an undelivered decision re-enables the same review for a fresh explicit choice (#1155)", async () => {
+    const user = userEvent.setup();
+    const settles: Settle[] = [];
+    const data = makeData({
+      harnessAwaitingApproval: true, harnessApprovalToolName: "shell.exec",
+      harnessApprovalSummary: "shell.exec\nmake test", harnessApprovalId: "review-1",
+    });
+    vi.mocked(data.onApproveTool).mockImplementation((_id, settled) => { if (settled) settles.push(settled); });
+    const { rerenderWithData } = renderHarness(data);
+    await user.click(screen.getByRole("button", { name: "Approve once" }));
+    expect(screen.getByRole("button", { name: "Deny" })).toBeDisabled();
+    expect(screen.getByText("Sending your decision…")).toBeInTheDocument();
+    // A second click while in flight sends nothing.
+    await user.click(screen.getByRole("button", { name: "Approve once" }));
+    expect(data.onApproveTool).toHaveBeenCalledTimes(1);
+
+    act(() => settles[0](false));
+    expect(screen.getByRole("alert")).toHaveTextContent(/may not have reached the agent/);
+    expect(screen.getByRole("button", { name: "Deny" })).toBeEnabled();
+    expect(data.onApproveTool).toHaveBeenCalledTimes(1); // never resent automatically
+
+    // A newer review replaces it: the old error does not carry over.
+    rerenderWithData({ ...data, harnessApprovalId: "review-2" });
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("a delivered decision keeps that review's controls single-use (#1155)", async () => {
+    const user = userEvent.setup();
+    const data = makeData({
+      harnessAwaitingApproval: true, harnessApprovalToolName: "shell.exec",
+      harnessApprovalSummary: "shell.exec\nmake test", harnessApprovalId: "review-1",
+    });
+    vi.mocked(data.onDenyTool).mockImplementation((_id, settled) => settled?.(true));
+    renderHarness(data);
+    await user.click(screen.getByRole("button", { name: "Deny" }));
+    expect(screen.getByRole("button", { name: "Approve once" })).toBeDisabled();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("keeps an undelivered answer, blocks duplicates while sending, and keeps later edits (#1150)", async () => {
+    const user = userEvent.setup();
+    const settles: Settle[] = [];
+    const data = makeData({ harnessAwaitingQuestion: true, harnessQuestion: "Which database?" });
+    vi.mocked(data.onAnswerQuestion).mockImplementation((_answer, settled) => { if (settled) settles.push(settled); });
+    renderHarness(data);
+    const field = screen.getByLabelText("Answer to the agent's question");
+    await user.type(field, "postgres");
+    await user.keyboard("{Enter}");
+    expect(screen.getByText("Sending to the agent…")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Answer" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Dismiss" })).toBeDisabled();
+    act(() => settles[0](false));
+    expect(field).toHaveValue("postgres");
+    expect(screen.getByRole("alert")).toHaveTextContent(/wasn't delivered/);
+
+    await user.click(screen.getByRole("button", { name: "Answer" }));
+    await user.type(field, " 16");
+    act(() => settles[1](true));
+    expect(field).toHaveValue("postgres 16");
+  });
+
+  it("a different question never inherits an answer typed for the previous one (#1150)", async () => {
+    const user = userEvent.setup();
+    const data = makeData({ harnessAwaitingQuestion: true, harnessQuestion: "Which database?" });
+    const { rerenderWithData } = renderHarness(data);
+    await user.type(screen.getByLabelText("Answer to the agent's question"), "postgres");
+    rerenderWithData({ ...data, harnessQuestion: "Which port?" });
+    expect(screen.getByLabelText("Answer to the agent's question")).toHaveValue("");
   });
 });
