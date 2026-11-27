@@ -1659,14 +1659,15 @@ describe("toFlowNodes (R6.1 note node)", () => {
 
     const flowNodes = toFlowNodes(scene, store);
     const noteFlowNode = flowNodes.find((n) => n.id === "note-1");
-    const data = noteFlowNode!.data as {
-      onSetContent: (content: string) => void;
+    const data = noteFlowNode!.data as unknown as {
+      onSetContent: (content: string, expectedContent: string, onSettled: (success: boolean) => void) => void;
       onSetColor: (color: string | null, headerColor: string | null) => void;
       onDelete: () => void;
     };
 
-    data.onSetContent("updated");
-    expect(setContentSpy).toHaveBeenCalledWith("note-1", "updated");
+    const settled = () => {};
+    data.onSetContent("updated", "before", settled);
+    expect(setContentSpy).toHaveBeenCalledWith("note-1", "updated", "before", settled);
 
     data.onSetColor("#cf5354", null);
     expect(setColorSpy).toHaveBeenCalledWith("note-1", "#cf5354", null);

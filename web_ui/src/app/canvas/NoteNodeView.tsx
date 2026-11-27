@@ -1,9 +1,11 @@
 import { type Node, type NodeProps } from "@xyflow/react";
-import { memo, useEffect, useRef, useState } from "react";
+import { memo, useEffect, useId, useRef, useState } from "react";
 import { resolveShortcut } from "../chrome/shortcuts";
 import { GroupColorPicker } from "./GroupColorPicker";
 import { Icon } from "../ui/icons/Icon";
+import { Button } from "../ui/Button";
 import { IconButton } from "../ui/IconButton";
+import { InlineAlert } from "../ui/InlineAlert";
 import { Tooltip } from "../ui/Tooltip";
 import "./NoteNodeView.css";
 import { NodeMarkdown } from "./NodeMarkdown";
@@ -57,7 +59,8 @@ export interface NoteNodeData extends Record<string, unknown>, NoteTextInputProp
   isSummaryNote: boolean;
   isBranchComparison: boolean;
   compareSourceNodeIds: string[];
-  onSetContent: (content: string) => void;
+  /** A guarded edit: expectedContent is the text the editor started from (#1144). */
+  onSetContent: (content: string, expectedContent: string, onSettled: (success: boolean) => void) => void;
   onSetColor: (color: string | null, headerColor: string | null) => void;
   onDelete: () => void;
 }
@@ -74,6 +77,14 @@ function NoteNodeViewImpl({ data, selected }: NodeProps<NoteFlowNode>) {
   // later by that same blur calling onSetContent anyway.
   const skipBlurRef = useRef(false);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const controlsRef = useRef<HTMLDivElement | null>(null);
+  const focusEditButton = () =>
+    controlsRef.current?.querySelector<HTMLButtonElement>("[data-note-edit]")?.focus();
+  // The authoritative text this edit started from (#1144). Only a changed
+  // draft is written, and only against this baseline.
+  const baselineRef = useRef(data.content);
+  const [conflict, setConflict] = useState("");
+  const editorId = useId();
 
   // Moves focus into the edit textarea imperatively (rather than JSX
   // autoFocus) the moment `editing` flips true - same "focus follows entry
@@ -86,13 +97,49 @@ function NoteNodeViewImpl({ data, selected }: NodeProps<NoteFlowNode>) {
   }, [editing]);
 
   function beginEdit() {
+    baselineRef.current = data.content;
     setDraft(data.content);
+    setConflict("");
     setEditing(true);
   }
 
-  function commit(value: string) {
-    data.onSetContent(value);
+  /** Write a changed draft against its baseline; `close` leaves the editor. */
+  function save(value: string, close: boolean) {
+    if (value === baselineRef.current) {
+      if (close) setEditing(false);
+      return;
+    }
+    if (data.content !== baselineRef.current) {
+      // Newer text arrived while editing: never overwrite it silently.
+      setConflict("This note changed while you were editing. Keep your edit to replace the new text, "
+        + "or use the new version to discard your draft.");
+      return;
+    }
+    const expected = baselineRef.current;
+    baselineRef.current = value;
+    setConflict("");
+    if (close) setEditing(false);
+    data.onSetContent(value, expected, (success) => {
+      if (success) return;
+      baselineRef.current = expected;
+      setDraft(value);
+      setEditing(true);
+      setConflict("Your edit wasn't saved. The note may have changed; keep your edit or use the saved version.");
+    });
+  }
+
+  function keepMyEdit() {
+    baselineRef.current = data.content;
+    save(draft, true);
+  }
+
+  function useSavedVersion() {
+    skipBlurRef.current = editing;
+    baselineRef.current = data.content;
+    setDraft(data.content);
+    setConflict("");
     setEditing(false);
+    focusEditButton();
   }
 
   function onKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>) {
@@ -106,16 +153,18 @@ function NoteNodeViewImpl({ data, selected }: NodeProps<NoteFlowNode>) {
       event.preventDefault();
       skipBlurRef.current = true;
       setDraft(data.content);
+      setConflict("");
       setEditing(false);
+      // Keyboard exit returns focus to the control that opened the editor.
+      focusEditButton();
     } else if (resolveShortcut(event) === "save-chat") {
       // Save is exempt from the while-typing shortcut gate (see
       // shortcuts.ts), so Ctrl+S reaches App's document-level handler with
       // no blur. React's root listener runs before that document listener,
       // so pushing the draft here sends setNoteContent ahead of saveChat and
       // the saved session holds the note as it reads on screen. Editing
-      // stays open; the eventual blur re-sends the same text, which the
-      // backend records as no change.
-      data.onSetContent(draft);
+      // stays open; an unchanged draft is not re-sent (#1144).
+      save(draft, false);
     }
     // Enter is a plain newline here (multi-line markdown body) - only blur
     // commits, matching the spec's "onBlur commits ... Escape reverts"
@@ -127,7 +176,7 @@ function NoteNodeViewImpl({ data, selected }: NodeProps<NoteFlowNode>) {
       skipBlurRef.current = false;
       return;
     }
-    commit(draft);
+    save(draft, !conflict);
   }
 
   const plain = !data.tableStore && !data.isSystemPrompt && !data.isSummaryNote && !data.isBranchComparison;
@@ -167,7 +216,12 @@ function NoteNodeViewImpl({ data, selected }: NodeProps<NoteFlowNode>) {
               </Tooltip>
             )}
           </span>
-          <div className="note-node-controls">
+          <div className="note-node-controls" ref={controlsRef}>
+            {!data.tableStore && (
+              <IconButton data-note-edit="" icon="edit" size="sm" className="nodrag"
+                label="Edit note" aria-pressed={editing}
+                onClick={() => (editing ? textareaRef.current?.focus() : beginEdit())} />
+            )}
             <GroupColorPicker color={data.color} headerColor={data.headerColor} onSelect={data.onSetColor} />
             <IconButton icon="trash" size="sm" className="note-node-delete-btn nodrag"
               label="Delete note" onClick={data.onDelete} />
@@ -178,15 +232,33 @@ function NoteNodeViewImpl({ data, selected }: NodeProps<NoteFlowNode>) {
       onBodyDoubleClick={data.tableStore ? undefined : beginEdit}
     >
       {data.tableStore ? <TableSource id={data.targetId} store={data.tableStore} content={data.content} derived={data.tableOutput} /> : editing ? (
-        <textarea
-          ref={textareaRef}
-          className="note-node-editor nodrag"
-          value={draft}
-          onChange={(event) => setDraft(event.target.value)}
-          onKeyDown={onKeyDown}
-          onBlur={onBlur}
-          spellCheck={false}
-        />
+        <>
+          {conflict && (
+            <div className="note-node-conflict nodrag">
+              <InlineAlert variant="warning" title="Note changed" body={conflict} />
+              <div className="note-node-conflict-actions">
+                <Button size="sm" variant="secondary" onMouseDown={(event) => event.preventDefault()}
+                  onClick={keepMyEdit}>Keep my edit</Button>
+                <Button size="sm" variant="ghost" onMouseDown={(event) => event.preventDefault()}
+                  onClick={useSavedVersion}>Use the new version</Button>
+              </div>
+            </div>
+          )}
+          <textarea
+            ref={textareaRef}
+            className="note-node-editor nodrag"
+            aria-label="Note text"
+            aria-describedby={editorId}
+            value={draft}
+            onChange={(event) => setDraft(event.target.value)}
+            onKeyDown={onKeyDown}
+            onBlur={onBlur}
+            spellCheck={false}
+          />
+          <span id={editorId} className="note-node-editor-hint">
+            Markdown. Changes save when you leave the editor; Escape cancels.
+          </span>
+        </>
       ) : (
         // Nested wrapper (not applied to the outer scene-node-body div,
         // which is shared with the textarea above) - same established

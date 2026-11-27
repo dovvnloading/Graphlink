@@ -5367,6 +5367,33 @@ def test_set_note_content_updates_content():
     assert doc.nodes[note.id].content == "real note text"
 
 
+def test_set_note_content_rejects_a_stale_expected_baseline():
+    """#1144: an editor that started from older text cannot overwrite newer text."""
+    doc = SceneDocument()
+    note = doc.add_note(0, 0)
+    doc.set_note_content(note.id, "B")
+    with pytest.raises(SceneError, match="changed while you were editing"):
+        doc.set_note_content(note.id, "stale draft", "A")
+    assert doc.nodes[note.id].content == "B"
+    doc.set_note_content(note.id, "fresh edit", "B")
+    assert doc.nodes[note.id].content == "fresh edit"
+
+
+def test_set_note_content_intent_guards_and_undoes_the_expected_edit():
+    async def run():
+        bus, document, _recorder = make_bus()
+        note_id = await bus.dispatch_intent("scene", "addNote", [0, 0])
+        await bus.dispatch_intent("scene", "setNoteContent", [note_id, "v1"])
+        with pytest.raises(SceneError):
+            await bus.dispatch_intent("scene", "setNoteContent", [note_id, "stale", "v0"])
+        assert document.nodes[note_id].content == "v1"
+        await bus.dispatch_intent("scene", "setNoteContent", [note_id, "v2", "v1"])
+        assert document.nodes[note_id].content == "v2"
+        document.undo()
+        assert document.nodes[note_id].content == "v1"
+    asyncio.run(run())
+
+
 def test_create_frame_validates_membership():
     doc = SceneDocument()
     real = doc.add_node(0, 0)

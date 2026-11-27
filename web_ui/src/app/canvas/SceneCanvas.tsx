@@ -1152,7 +1152,8 @@ function makeNoteFns(id: string, liveRef: { current: DispatcherLive }) {
     onBindTextInput: (sourceId: string, operation: TextInputOperation) => liveRef.current.store.bindNoteTextInput(sourceId, id, operation),
     onRunTextInput: (onSettled: (success: boolean) => void) => liveRef.current.store.runNoteTextInput(id, onSettled),
     onUnbindTextInput: () => liveRef.current.store.unbindNoteTextInput(id),
-    onSetContent: (content: string) => liveRef.current.store.setNoteContent(id, content),
+    onSetContent: (content: string, expectedContent: string, onSettled: (success: boolean) => void) =>
+      liveRef.current.store.setNoteContent(id, content, expectedContent, onSettled),
     onSetColor: (color: string | null, headerColor: string | null) =>
       liveRef.current.store.setGroupColor(id, color, headerColor),
     onDelete: () => liveRef.current.store.removeNodes([id]),
