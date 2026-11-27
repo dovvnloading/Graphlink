@@ -1404,8 +1404,9 @@ export class SceneStore {
     this.transport.fireIntent("builder", "denyTool", [requestId]);
   }
 
-  setPlanSteps(nodeId: string, steps: { id: string; title: string; status: string; detail: string }[]): void {
-    this.transport.fireIntent("scene", "setPlanSteps", [nodeId, steps]);
+  /** Resolves true only when the backend applied the edit (#1149). */
+  async setPlanSteps(nodeId: string, steps: { id: string; title: string; status: string; detail: string }[]): Promise<boolean> {
+    return (await this.transport.request("scene", "setPlanSteps", [nodeId, steps])) === true;
   }
 
   saveBuilderRecipe(nodeId: string): void {

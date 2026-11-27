@@ -645,9 +645,11 @@ class TestBuilderIntents:
                 {"id": "s1", "title": "old", "status": "pending", "detail": ""},
             ]
             node.state.builder_status = "awaiting_start"
-            await bus.dispatch_intent("scene", "setPlanSteps", [
+            applied = await bus.dispatch_intent("scene", "setPlanSteps", [
                 node.id, [{"id": "s1", "title": "edited", "status": "pending", "detail": ""}],
             ])
+            # The editor's authoritative acknowledgment (#1149).
+            assert applied is True
             assert node.state.plan_steps[0]["title"] == "edited"
             document.undo()
             restored = document.nodes[node.id]
@@ -831,10 +833,11 @@ class TestBuilderIntents:
             node.state.plan_steps = [
                 {"id": "s1", "title": "already ran", "status": "done", "detail": "d"},
             ]
-            await bus.dispatch_intent("scene", "setPlanSteps", [
+            applied = await bus.dispatch_intent("scene", "setPlanSteps", [
                 node.id, [{"id": "s1", "title": "rewritten history", "status": "done", "detail": ""}],
             ])
-            # Refused with a notification, not applied.
+            # Refused with a notification, not applied, and says so (#1149).
+            assert applied is False
             assert node.state.plan_steps[0]["title"] == "already ran"
 
 

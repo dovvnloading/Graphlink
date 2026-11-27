@@ -1,0 +1,12 @@
+@layer nodes {
+.node-full-instruction-text {
+  margin: 0 0 var(--gl-space-1-5);
+  max-height: calc(var(--gl-space-8) * 5);
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: var(--gl-text-xs);
+  color: var(--gl-surface-text-primary);
+  user-select: text;
+}
+}

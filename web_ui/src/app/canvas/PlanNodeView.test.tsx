@@ -87,8 +87,12 @@ describe("PlanNodeView", () => {
     expect(screen.getByText("found 3 sources")).toBeInTheDocument();
     expect(screen.getByText("Write summary")).toBeInTheDocument();
     expect(screen.getByText("Chart it")).toBeInTheDocument();
-    expect(screen.getByText(/2 of 12 steps/)).toBeInTheDocument();
-    expect(screen.getByText(/12.3k \/ 150k tokens/)).toBeInTheDocument();
+    // Labelled metric chips, as on the Agent card (#1159).
+    const budget = screen.getByRole("group", { name: "Build budget" });
+    expect(budget.children).toHaveLength(3);
+    expect(budget.children[0]).toHaveTextContent("Steps 2 of 12");
+    expect(budget.children[1]).toHaveTextContent("Tokens 12.3k of 150k");
+    expect(budget.children[2]).toHaveTextContent(/^Time .+ of .+$/);
     expect(screen.getByText("Running")).toBeInTheDocument();
   });
 
@@ -472,19 +476,19 @@ describe("PlanNodeView plan editing (ADR-021 stage 21.3)", () => {
     expect(screen.getByText("Gather research")).toBeTruthy();
   });
 
-  it("closes an open editor when the underlying plan moves under it", async () => {
-    // The draft is keyed to the step list it was seeded from, so a build
-    // that runs a step (or replans) while the editor is open drops the
-    // draft rather than letting the user save an edit against a plan that
-    // has since moved - which set_plan_steps would reject anyway, since it
-    // refuses to rewrite a step that has already run.
+  it("keeps the user's edits as a conflict when the plan moves under an open editor (#1149)", async () => {
+    // The draft is keyed to the step list it was seeded from. A build that
+    // runs a step (or replans) while the editor is open makes the draft
+    // unsaveable - set_plan_steps refuses to rewrite a step that has run -
+    // but the user's text is kept on screen, never silently dropped.
     const onSetPlanSteps = vi.fn();
     const user = userEvent.setup();
     const data = editable({ onSetPlanSteps, builderStatus: "paused" });
     const { rerender } = render(planElement(data));
 
     await user.click(screen.getByRole("button", { name: "Edit plan" }));
-    expect(screen.getByRole("textbox", { name: "Step 1 title" })).toBeTruthy();
+    await user.clear(screen.getByRole("textbox", { name: "Step 2 title" }));
+    await user.type(screen.getByRole("textbox", { name: "Step 2 title" }), "My rewritten step");
 
     // The same node, one step later: s1 has run.
     rerender(
@@ -497,7 +501,11 @@ describe("PlanNodeView plan editing (ADR-021 stage 21.3)", () => {
       }),
     );
 
-    expect(screen.queryByRole("textbox", { name: "Step 1 title" })).toBeNull();
+    expect(screen.getByText("The plan changed")).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "Step 2 title" })).toHaveValue("My rewritten step");
+    expect(screen.getByRole("button", { name: "Save plan" })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "Discard edits" }));
+    expect(screen.queryByRole("textbox", { name: "Step 2 title" })).toBeNull();
     expect(screen.getByRole("button", { name: "Edit plan" })).toBeTruthy();
     expect(onSetPlanSteps).not.toHaveBeenCalled();
   });
@@ -568,5 +576,100 @@ describe("PlanNodeView plan editing (ADR-021 stage 21.3)", () => {
       // to the same paths, the distinction is back to being colour-only.
       expect(new Set(shapes).size).toBe(5);
     });
+  });
+});
+
+describe("PlanNodeView editing, access and activity (#1149, #1152, #1158, #1160)", () => {
+  const pendingPlan = (overrides: Partial<PlanNodeData> = {}) => makeData({
+    builderStatus: "awaiting_start", pendingRequestId: null,
+    planSteps: [
+      { id: "s1", title: "Gather research", status: "pending", detail: "" },
+      { id: "s2", title: "Write summary", status: "pending", detail: "" },
+    ],
+    ...overrides,
+  });
+
+  it("a refused or failed save keeps the edits and explains; success closes (#1149)", async () => {
+    const user = userEvent.setup();
+    const onSetPlanSteps = vi.fn()
+      .mockResolvedValueOnce(false)
+      .mockRejectedValueOnce(new Error("socket unavailable"))
+      .mockResolvedValueOnce(true);
+    render(planElement(pendingPlan({ onSetPlanSteps })));
+    await user.click(screen.getByRole("button", { name: "Edit plan" }));
+    const title = screen.getByRole("textbox", { name: "Step 1 title" });
+    await user.clear(title);
+    await user.type(title, "Gather better research");
+
+    await user.click(screen.getByRole("button", { name: "Save plan" }));
+    expect(await screen.findByText(/wasn't saved/)).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "Step 1 title" })).toHaveValue("Gather better research");
+    await user.click(screen.getByRole("button", { name: "Save plan" }));
+    expect(await screen.findByText(/Couldn't confirm the plan was saved/)).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "Step 1 title" })).toHaveValue("Gather better research");
+    await user.click(screen.getByRole("button", { name: "Save plan" }));
+    await vi.waitFor(() => expect(screen.queryByRole("textbox", { name: "Step 1 title" })).toBeNull());
+  });
+
+  it("Start build is blocked while plan edits are open (#1149)", async () => {
+    const user = userEvent.setup();
+    const onStartExecution = vi.fn();
+    render(planElement(pendingPlan({ onStartExecution })));
+    await user.click(screen.getByRole("button", { name: "Edit plan" }));
+    expect(screen.getByRole("button", { name: "Start build" })).toBeDisabled();
+    expect(screen.getByText(/Save or cancel your plan edits/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    await user.click(screen.getByRole("button", { name: "Start build" }));
+    expect(onStartExecution).toHaveBeenCalledOnce();
+  });
+
+  it("exposes each step's state in words, and a concise progress summary (#1160)", () => {
+    render(planElement(makeData()));
+    const steps = screen.getByRole("list", { name: "Plan steps" });
+    const items = Array.from(steps.querySelectorAll("li")).map((li) => li.textContent);
+    expect(items[0]).toMatch(/^Done: Gather research/);
+    expect(items[1]).toMatch(/^Running: Write summary/);
+    expect(items[2]).toMatch(/^Pending: Chart it/);
+    expect(screen.getByText("1 of 3 steps done. Running: Write summary")).toHaveAttribute("role", "status");
+  });
+
+  it("shows the full multiline goal on demand, selectable (#1158)", async () => {
+    const user = userEvent.setup();
+    const goal = "Research solar output\n- compare 2020 and 2025\n- chart the growth";
+    render(planElement(makeData({ planGoal: goal })));
+    const toggle = screen.getByRole("button", { name: "Full goal" });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    await user.click(toggle);
+    const region = screen.getByRole("region", { name: "Full goal" });
+    expect(region.querySelector(".node-full-instruction-text")?.textContent).toBe(goal);
+    expect(screen.getByRole("button", { name: "Copy goal" })).toBeInTheDocument();
+  });
+
+  it("follows new activity at the bottom, pauses when scrolled up, and resumes on Jump to latest (#1152)", async () => {
+    const user = userEvent.setup();
+    const row = (n: number) => ({ stepId: "s2", tool: `tool-${n}`, summary: `call ${n}`, outcome: "ok", elapsedMs: 10 });
+    const data = makeData({ builderActivity: [row(1), row(2)] });
+    const { rerender } = render(planElement(data));
+    await user.click(screen.getByRole("button", { name: /2 activity entries/ }));
+    const log = screen.getByRole("log", { name: "Build activity" });
+    const scrollTo = vi.fn();
+    Object.assign(log, { scrollTo });
+    Object.defineProperty(log, "scrollHeight", { value: 1000, configurable: true });
+    Object.defineProperty(log, "clientHeight", { value: 200, configurable: true });
+
+    // At the bottom: a new row is followed.
+    log.scrollTop = 800;
+    fireEvent.scroll(log);
+    rerender(planElement({ ...data, builderActivity: [row(1), row(2), row(3)] }));
+    expect(scrollTo).toHaveBeenCalledTimes(1);
+
+    // Reading earlier rows: new rows don't move the view and are counted.
+    log.scrollTop = 100;
+    fireEvent.scroll(log);
+    rerender(planElement({ ...data, builderActivity: [row(1), row(2), row(3), row(4), row(5)] }));
+    expect(scrollTo).toHaveBeenCalledTimes(1);
+    await user.click(screen.getByRole("button", { name: "Jump to latest (2 new)" }));
+    expect(scrollTo).toHaveBeenCalledTimes(2);
+    expect(screen.queryByRole("button", { name: /Jump to latest/ })).toBeNull();
   });
 });

@@ -1230,3 +1230,39 @@ describe("HarnessNodeView decision and answer delivery (#1150, #1155)", () => {
     expect(screen.getByLabelText("Answer to the agent's question")).toHaveValue("");
   });
 });
+
+describe("HarnessNodeView checklist, task and activity access (#1152, #1158, #1160)", () => {
+  it("names each checklist step's state in words (#1160)", () => {
+    renderHarness(makeData({ harnessPlan: [
+      { text: "read the config", status: "done" },
+      { text: "patch the parser", status: "active" },
+      { text: "run tests", status: "pending" },
+    ] }));
+    const items = screen.getAllByRole("listitem").map((item) => item.textContent);
+    expect(items).toEqual(["Done: read the config", "In progress: patch the parser", "Pending: run tests"]);
+  });
+
+  it("shows the full task on demand (#1158)", async () => {
+    const user = userEvent.setup();
+    renderHarness(makeData({ harnessGoal: "Fix the parser\nthen run the whole suite" }));
+    await user.click(screen.getByRole("button", { name: "Full task" }));
+    expect(screen.getByRole("region", { name: "Full task" }).querySelector(".node-full-instruction-text")?.textContent)
+      .toBe("Fix the parser\nthen run the whole suite");
+  });
+
+  it("does not snap the activity log while the reader is scrolled up (#1152)", async () => {
+    const row = (n: number) => ({ tool: `tool-${n}`, summary: `call ${n}`, outcome: "ok", elapsedMs: 10 });
+    const data = makeData({ harnessActivity: [row(1), row(2)] as HarnessNodeData["harnessActivity"] });
+    const { rerenderWithData } = renderHarness(data);
+    const log = screen.getByRole("log", { name: "Agent activity" });
+    const scrollTo = vi.fn();
+    Object.assign(log, { scrollTo });
+    Object.defineProperty(log, "scrollHeight", { value: 1000, configurable: true });
+    Object.defineProperty(log, "clientHeight", { value: 200, configurable: true });
+    log.scrollTop = 100;
+    fireEvent.scroll(log);
+    rerenderWithData({ ...data, harnessActivity: [row(1), row(2), row(3)] as HarnessNodeData["harnessActivity"] });
+    expect(scrollTo).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Jump to latest (1 new)" })).toBeInTheDocument();
+  });
+});
