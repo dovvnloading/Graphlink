@@ -207,13 +207,16 @@ export function GlobalSearchDialog({ transport }: { transport: WsTransport }) {
   const [recents, setRecents] = useState<string[]>(loadRecents);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const latestRequestId = useRef(0);
-  const lastRequested = useRef("");
+  const lastRequested = useRef<{ key: string; failed: boolean } | null>(null);
 
-  const runSearch = useCallback((searchText: string, searchScope: SearchScope) => {
+  const runSearch = useCallback((searchText: string, searchScope: SearchScope, retryFailed = false) => {
     const trimmed = searchText.trim();
     const requestKey = JSON.stringify([trimmed, searchScope]);
-    if (!trimmed || lastRequested.current === requestKey) return;
-    lastRequested.current = requestKey;
+    const previous = lastRequested.current;
+    // Only explicit submission may retry a failed request. A queued debounce
+    // must not silently retry after an immediate submission has failed.
+    if (!trimmed || (previous?.key === requestKey && !(retryFailed && previous.failed))) return;
+    lastRequested.current = { key: requestKey, failed: false };
     const requestId = ++latestRequestId.current;
     setSearching(true);
     setError(null);
@@ -231,6 +234,7 @@ export function GlobalSearchDialog({ transport }: { transport: WsTransport }) {
       })
       .catch(() => {
         if (requestId !== latestRequestId.current) return;
+        lastRequested.current = { key: requestKey, failed: true };
         setError("Search failed. Check the connection and try again.");
       })
       .finally(() => {
@@ -252,7 +256,7 @@ export function GlobalSearchDialog({ transport }: { transport: WsTransport }) {
 
   function resetSearch() {
     ++latestRequestId.current; // Invalidates replies for earlier text or scope immediately.
-    lastRequested.current = "";
+    lastRequested.current = null;
     setResults(null);
     setError(null);
     setSearching(false);
@@ -308,10 +312,10 @@ export function GlobalSearchDialog({ transport }: { transport: WsTransport }) {
             } else if (event.key === "Enter") {
               event.preventDefault();
               if (results && selected) void activateResult(selected);
-              else runSearch(query, scope);
+              else runSearch(query, scope, true);
             }
           }} />
-        <Button variant="primary" iconStart="search" onClick={() => runSearch(query, scope)}
+        <Button variant="primary" iconStart="search" onClick={() => runSearch(query, scope, true)}
           disabled={!query.trim() || searching} loading={searching}>Search</Button>
       </div>
       <SegmentedControl label="Search scope" size="sm" value={scope}

@@ -9,7 +9,7 @@
  *   intercepted) for asserting the jump-to-node call's exact arguments.
  */
 import { ReactFlowProvider, type useReactFlow as UseReactFlowType } from "@xyflow/react";
-import { act, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -194,6 +194,131 @@ describe("GlobalSearchDialog", () => {
     await user.click(screen.getByRole("button", { name: "Search" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent(/search failed/i);
+  });
+
+  it.each(["click", "Enter"])("retries a failed search via %s without changing its query", async (method) => {
+    const { request } = await setup();
+    vi.useFakeTimers();
+    try {
+      request.mockRejectedValueOnce(new Error("offline"));
+      let resolveRetry: (value: unknown) => void = () => {};
+      request.mockImplementationOnce(() => new Promise((resolve) => { resolveRetry = resolve; }));
+      const input = screen.getByPlaceholderText(/search every workspace/i);
+      const search = screen.getByRole("button", { name: "Search" });
+
+      fireEvent.change(input, { target: { value: "query" } });
+      await act(async () => { fireEvent.keyDown(input, { key: "Enter" }); });
+      expect(screen.getByRole("alert")).toHaveTextContent(/search failed/i);
+      expect(search).toBeEnabled();
+
+      // The debounce from typing must not turn a failure into an implicit retry.
+      await act(async () => { await vi.advanceTimersByTimeAsync(250); });
+      expect(request).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        if (method === "click") fireEvent.click(search);
+        else fireEvent.keyDown(input, { key: "Enter" });
+      });
+      expect(request).toHaveBeenCalledTimes(2);
+      expect(request).toHaveBeenNthCalledWith(1, "globalSearch", "search", ["query", 10, null, "all"]);
+      expect(request).toHaveBeenNthCalledWith(2, "globalSearch", "search", ["query", 10, null, "all"]);
+      expect(input).toHaveValue("query");
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+      expect(search).toBeDisabled();
+      expect(search).toHaveAttribute("aria-busy", "true");
+
+      // Keyboard submission must also respect the in-flight guard.
+      fireEvent.keyDown(input, { key: "Enter" });
+      expect(request).toHaveBeenCalledTimes(2);
+
+      await act(async () => { resolveRetry({ results: [DOCUMENT_HIT] }); });
+      expect(screen.getByText("Fox Story")).toBeInTheDocument();
+      expect(screen.getByText("1 result found")).toBeInTheDocument();
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+      expect(search).toBeEnabled();
+
+      fireEvent.click(search);
+      expect(request).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps repeated failures recoverable after a debounced search in a non-default scope", async () => {
+    const { request } = await setup();
+    vi.useFakeTimers();
+    try {
+      request.mockRejectedValueOnce(new Error("offline"));
+      request.mockRejectedValueOnce(new Error("still offline"));
+      request.mockResolvedValueOnce({ results: [DOCUMENT_HIT] });
+      const input = screen.getByPlaceholderText(/search every workspace/i);
+      const search = screen.getByRole("button", { name: "Search" });
+
+      fireEvent.click(screen.getByRole("radio", { name: "Knowledge" }));
+      fireEvent.change(input, { target: { value: "query" } });
+      await act(async () => { await vi.advanceTimersByTimeAsync(250); });
+      expect(request).toHaveBeenCalledTimes(1);
+      expect(screen.getByRole("alert")).toHaveTextContent(/search failed/i);
+
+      await act(async () => { fireEvent.click(search); });
+      expect(request).toHaveBeenCalledTimes(2);
+      expect(screen.getByRole("alert")).toHaveTextContent(/search failed/i);
+      expect(search).toBeEnabled();
+
+      await act(async () => { fireEvent.keyDown(input, { key: "Enter" }); });
+      expect(request.mock.calls).toEqual([
+        ["globalSearch", "search", ["query", 10, null, "knowledge"]],
+        ["globalSearch", "search", ["query", 10, null, "knowledge"]],
+        ["globalSearch", "search", ["query", 10, null, "knowledge"]],
+      ]);
+      expect(screen.getByText("Fox Story")).toBeInTheDocument();
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(["query", "scope"])("ignores a stale rejection after a %s change", async (changed) => {
+    const { request } = await setup();
+    vi.useFakeTimers();
+    try {
+      let rejectOld: (reason: Error) => void = () => {};
+      let resolveNew: (value: unknown) => void = () => {};
+      request.mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectOld = reject; }));
+      request.mockImplementationOnce(() => new Promise((resolve) => { resolveNew = resolve; }));
+      const input = screen.getByPlaceholderText(/search every workspace/i);
+      const search = screen.getByRole("button", { name: "Search" });
+
+      fireEvent.change(input, { target: { value: "query" } });
+      fireEvent.keyDown(input, { key: "Enter" });
+      if (changed === "query") {
+        fireEvent.change(input, { target: { value: "new query" } });
+        fireEvent.keyDown(input, { key: "Enter" });
+      } else {
+        fireEvent.click(screen.getByRole("radio", { name: "Graphs" }));
+      }
+      expect(request).toHaveBeenCalledTimes(2);
+      expect(request).toHaveBeenNthCalledWith(2, "globalSearch", "search",
+        [changed === "query" ? "new query" : "query", 10, null, changed === "scope" ? "graphs" : "all"]);
+
+      await act(async () => { rejectOld(new Error("stale failure")); });
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+      expect(search).toBeDisabled();
+
+      fireEvent.keyDown(input, { key: "Enter" });
+      await act(async () => { await vi.advanceTimersByTimeAsync(250); });
+      expect(request).toHaveBeenCalledTimes(2);
+
+      await act(async () => { resolveNew({ results: [GRAPH_HIT] }); });
+      expect(screen.getByText("Workspace B / Onboarding Notes")).toBeInTheDocument();
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+      expect(search).toBeEnabled();
+
+      fireEvent.click(search);
+      expect(request).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("a newer query can run while an older reply is in flight; stale results are ignored", async () => {
