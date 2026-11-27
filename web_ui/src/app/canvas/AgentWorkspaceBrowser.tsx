@@ -35,6 +35,10 @@ export function HarnessWorkspaceFiles({
   const [loading, setLoading] = useState(false);
   const [opening, setOpening] = useState<string | null>(null);
   const [error, setError] = useState("");
+  // The page read that failed, kept for an explicit Retry (#1162). Path,
+  // cursor and page history only change when a read succeeds, so the
+  // confirmed page and its Previous/Next stay coherent after a failure.
+  const [failedRead, setFailedRead] = useState<{ path: string; cursor: string | null; previous: (string | null)[] } | null>(null);
   const subscribeKnowledge = useCallback(
     (listener: StateListener) => onSubscribeKnowledgeIngest?.(listener) ?? (() => {}),
     [onSubscribeKnowledgeIngest],
@@ -47,18 +51,20 @@ export function HarnessWorkspaceFiles({
   const loadFolder = useCallback((nextPath: string, nextCursor: string | null = null,
     previous: (string | null)[] = []) => {
     const request = ++requestRef.current;
-    setPath(nextPath);
-    setCursor(nextCursor);
-    setPreviousCursors(previous);
     setLoading(true);
     setError("");
-    setListing(null);
+    setFailedRead(null);
     void (nextCursor === null ? onList(nextPath) : onList(nextPath, nextCursor))
       .then((result) => {
-        if (request === requestRef.current) setListing(result);
+        if (request !== requestRef.current) return;
+        setPath(nextPath);
+        setCursor(nextCursor);
+        setPreviousCursors(previous);
+        setListing(result);
       })
       .catch((reason: unknown) => {
         if (request === requestRef.current) {
+          setFailedRead({ path: nextPath, cursor: nextCursor, previous });
           setError(reason instanceof Error ? reason.message : "Could not list workspace files.");
         }
       })
@@ -93,6 +99,7 @@ export function HarnessWorkspaceFiles({
       setLoading(false);
       setOpening(null);
       setError("");
+      setFailedRead(null);
       if (expanded) loadFolder("");
     });
   }, [onTrustChanged, expanded, loadFolder]);
@@ -136,8 +143,9 @@ export function HarnessWorkspaceFiles({
             <IconButton size="sm" className="nodrag" icon="arrow-up" label="Up one folder"
               disabled={!path || loading} onClick={() => loadFolder(parent)} />
             <Tooltip label={path || "/"}><span className="harness-files-current">{path || "/"}</span></Tooltip>
+            {/* Refresh re-reads the page on screen, not the first page. */}
             <IconButton size="sm" className="nodrag" icon="refresh" label="Refresh workspace files"
-              onClick={() => loadFolder(path)} />
+              disabled={loading} onClick={() => loadFolder(path, cursor, previousCursors)} />
           </div>
           {listing && (
             <div className="harness-files-root">
@@ -145,7 +153,16 @@ export function HarnessWorkspaceFiles({
             </div>
           )}
           {loading && <p className="harness-files-note" role="status">Loading files…</p>}
-          {error && <p className="harness-files-error" role="alert">{error}</p>}
+          {error && <p className="harness-files-error" role="alert">
+            {failedRead ? `Couldn't load ${failedRead.path || "/"}: ${/[.!?]$/.test(error) ? error : error + "."}` : error}
+            {failedRead && listing ? " Still showing the last page that loaded." : ""}
+          </p>}
+          {failedRead && (
+            <Button size="sm" className="nodrag" disabled={loading}
+              onClick={() => loadFolder(failedRead.path, failedRead.cursor, failedRead.previous)}>
+              Retry
+            </Button>
+          )}
           <KnowledgeFileImportStatus state={knowledgeImport} />
           {listing && listing.entries.length === 0 && (
             <p className="harness-files-note">No files in this folder.</p>

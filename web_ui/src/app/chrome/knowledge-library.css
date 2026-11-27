@@ -49,6 +49,7 @@
 .knowledge-library-toolbar { display: flex; gap: var(--gl-space-2); align-items: center; flex-wrap: wrap; }
 .knowledge-library-muted { margin: 0; color: var(--gl-surface-text-muted); font-size: var(--gl-text-sm); }
 .knowledge-library-error { margin: 0; color: var(--gl-semantic-status-error); font-size: var(--gl-text-sm); overflow-wrap: anywhere; }
+.knowledge-library-error-block { display: flex; flex-wrap: wrap; align-items: center; gap: var(--gl-space-2); }
 .knowledge-library-status { margin: 0; color: var(--gl-surface-text-secondary); font-size: var(--gl-text-sm); }
 .knowledge-library-list { display: grid; list-style: none; margin: 0; padding: 0; }
 .knowledge-library-row {
