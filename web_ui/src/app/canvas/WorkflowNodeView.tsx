@@ -22,6 +22,10 @@ import type { SceneStore } from "./sceneStore";
 import { readWorkflowNode, workflowPin, type WorkflowDocument, type WorkflowNodeState, type WorkflowVersion } from "./workflowLibrary";
 import "./McpToolNodeView.css";
 
+type WorkflowConfiguration = {
+  inputs: Record<string, unknown>; parameters: Record<string, unknown>; sources: Record<string, unknown>;
+};
+
 export interface WorkflowNodeData extends Record<string, unknown> {
   title: string;
   raw: string;
@@ -34,11 +38,47 @@ function Editor({ id, state, store, x, y }: { id: string; state: WorkflowNodeSta
   const overlays = useOverlays();
   const askConfirm = useConfirm();
   const spec = state.document.spec;
-  const [inputs, setInputs] = useState<Record<string, string>>(() => Object.fromEntries(spec.inputs.map(p => [
-    p.name, p.kind === "text" ? String(state.inputs[p.name] ?? "") : JSON.stringify(state.inputs[p.name] ?? null),
-  ])));
+  // The authoritative configuration and the form it seeds (#1154). A clean
+  // form follows authoritative changes (undo/redo, another window); a dirty
+  // one keeps the user's edits and shows a conflict instead.
+  const authoritative: WorkflowConfiguration = {
+    inputs: state.inputs, parameters: state.parameters, sources: state.sources ?? {},
+  };
+  const authoritativeKey = JSON.stringify(authoritative);
+  const formOf = (config: WorkflowConfiguration) => ({
+    inputs: Object.fromEntries(spec.inputs.map(p => [
+      p.name, p.kind === "text" ? String(config.inputs[p.name] ?? "") : JSON.stringify(config.inputs[p.name] ?? null),
+    ])) as Record<string, string>,
+    parameters: config.parameters as Record<string, string | number>,
+    sources: config.sources as Record<string, string>,
+  });
+  const [seed, setSeed] = useState(() => ({
+    key: authoritativeKey, config: authoritative, form: JSON.stringify(formOf(authoritative)),
+  }));
+  const [inputs, setInputs] = useState<Record<string, string>>(() => formOf(authoritative).inputs);
   const [parameters, setParameters] = useState<Record<string, string | number>>(state.parameters);
   const [sources, setSources] = useState<Record<string, string>>(state.sources ?? {});
+  const dirty = JSON.stringify({ inputs, parameters, sources }) !== seed.form;
+  if (authoritativeKey !== seed.key && !dirty) {
+    const fresh = formOf(authoritative);
+    setInputs(fresh.inputs);
+    setParameters(fresh.parameters);
+    setSources(fresh.sources);
+    setSeed({ key: authoritativeKey, config: authoritative, form: JSON.stringify(fresh) });
+  }
+  const configConflict = authoritativeKey !== seed.key && dirty;
+  function reloadConfiguration() {
+    const fresh = formOf(authoritative);
+    setInputs(fresh.inputs);
+    setParameters(fresh.parameters);
+    setSources(fresh.sources);
+    setSeed({ key: authoritativeKey, config: authoritative, form: JSON.stringify(fresh) });
+  }
+  function keepMyEdits() {
+    // An explicit choice to replace the newer values: the baseline becomes
+    // the current configuration, and the edits stay unsaved until Save.
+    setSeed((current) => ({ key: authoritativeKey, config: authoritative, form: current.form }));
+  }
   const scene = useSyncExternalStore(store.subscribe, store.getScene);
   const sourceChoices = availableTextSources(scene.nodes, id);
   const [latest, setLatest] = useState<WorkflowVersion | null>(null);
@@ -67,7 +107,9 @@ function Editor({ id, state, store, x, y }: { id: string; state: WorkflowNodeSta
   }
   const values = () => Object.fromEntries(spec.inputs.filter(p => !sources[p.name]).map(p => [p.name, p.kind === "text" ? inputs[p.name] : JSON.parse(inputs[p.name])]));
   async function save() {
-    const saved = await store.mutateWorkflowNode("configure", { node_id: id, expected_revision: spec.revision, inputs: values(), parameters,
+    if (configConflict) throw new Error("This node's inputs changed. Reload them or keep your edits first.");
+    const saved = await store.mutateWorkflowNode("configure", { node_id: id, expected_revision: spec.revision,
+      expected_configuration: seed.config, inputs: values(), parameters,
       sources: Object.fromEntries(Object.entries(sources).filter(([, source]) => !!source)) });
     if (!saved) throw new Error("Another graph operation is in progress. Try again.");
   }
@@ -79,6 +121,14 @@ function Editor({ id, state, store, x, y }: { id: string; state: WorkflowNodeSta
       <WorkflowSpecView value={state.document} />
     </div>
     {error && <InlineAlert variant="error" title="This workflow node failed" body={error} />}
+    {configConflict && <div className="workflow-node-conflict">
+      <InlineAlert variant="warning" title="Inputs changed"
+        body="This node's inputs changed while you were editing, for example by undo or in another window. Your edits are kept; reload to see the current values, or keep your edits to save over them." />
+      <div className="workflow-actions">
+        <Button size="sm" variant="secondary" onClick={reloadConfiguration}>Reload inputs</Button>
+        <Button size="sm" variant="ghost" onClick={keepMyEdits}>Keep my edits</Button>
+      </div>
+    </div>}
     {latest && !preview && <InlineAlert title={"Version " + latest.version + " is available"}
       body={"This node stays on version " + state.version + " until you upgrade it."}
       action={{ label: "Review upgrade", onClick: () => void act(async () => {
@@ -117,10 +167,10 @@ function Editor({ id, state, store, x, y }: { id: string; state: WorkflowNodeSta
       })}
     </div>}
     <div className="workflow-actions">
-      <Button size="sm" variant="primary" iconStart="play" disabled={busy} onClick={() => void act(async () => {
+      <Button size="sm" variant="primary" iconStart="play" disabled={busy || configConflict} onClick={() => void act(async () => {
         await save(); store.requestGraphRunnerNodes([id]); overlays.open("graph-runner", "dialog");
       })}>Preview run</Button>
-      <Button size="sm" variant="secondary" disabled={busy} onClick={() => void act(save)}>Save inputs</Button>
+      <Button size="sm" variant="secondary" disabled={busy || configConflict} onClick={() => void act(save)}>Save inputs</Button>
       <MenuButton label="More" menuLabel="More actions for this workflow node" disabled={busy}>
         <MenuItem label="Check for a newer version" icon="refresh" onSelect={() => void act(checkVersion)} />
         <MenuItem label="Unpack as editable nodes" icon="layers" onSelect={() => void act(async () => {

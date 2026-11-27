@@ -387,3 +387,52 @@ def test_workflow_config_hash_pins_source_identity():
     before = canvas.config_hash(node)
     canvas.configure(doc, node, {}, {}, {"input": second.id})
     assert canvas.config_hash(node) != before
+
+
+def test_configure_refuses_a_stale_configuration_baseline(tmp_path):
+    """#1154: an editor open across an undo cannot overwrite newer inputs."""
+    from backend.api.intents_workflow_library import register_workflow_library
+    from backend.domain.graph import SceneDocument
+    from backend.workflow import canvas
+
+    class Bus:
+        def __init__(self):
+            self.handlers = {}
+
+        def register_intent(self, topic, intent, handler, **_kwargs):
+            self.handlers[topic, intent] = handler
+
+        async def publish(self, *_args, **_kwargs):
+            return None
+
+    doc = SceneDocument()
+    source = doc.add_note(0, 0)
+    first = doc.add_note(400, 0)
+    doc.bind_note_text_input(source.id, first.id, "copy")
+    captured = canvas.selected_workflow(doc, [source.id, first.id], "Copy", ["output_1"])
+    path = tmp_path / "chats.db"
+    with closing(chat_library._connect(path)) as conn, conn:
+        pin = store.save(conn, captured, name="Copy")
+        frozen = store.get(conn, pin["workflow_id"], pin["revision"])
+    node_id = canvas.insert(doc, frozen, 1, 1200, 0)
+    bus = Bus()
+    register_workflow_library(bus, doc, lambda: chat_library._connect(path), lambda fn: fn)
+    edit = bus.handlers["scene", "mutateWorkflowNode"]
+    revision = frozen["spec"]["revision"]
+
+    async def scenario():
+        await edit("configure", {"node_id": node_id, "expected_revision": revision,
+                                 "inputs": {"input_1": "newer"}, "parameters": {}, "sources": {}})
+        stale = {"inputs": {}, "parameters": {}, "sources": {}}
+        with pytest.raises(Exception, match="changed since you started editing"):
+            await edit("configure", {"node_id": node_id, "expected_revision": revision,
+                                     "expected_configuration": stale,
+                                     "inputs": {"input_1": "stale draft"}, "parameters": {}, "sources": {}})
+        assert canvas.data(doc.nodes[node_id])["inputs"] == {"input_1": "newer"}
+        fresh = {"inputs": {"input_1": "newer"}, "parameters": {}, "sources": {}}
+        await edit("configure", {"node_id": node_id, "expected_revision": revision,
+                                 "expected_configuration": fresh,
+                                 "inputs": {"input_1": "accepted"}, "parameters": {}, "sources": {}})
+        assert canvas.data(doc.nodes[node_id])["inputs"] == {"input_1": "accepted"}
+
+    asyncio.run(scenario())

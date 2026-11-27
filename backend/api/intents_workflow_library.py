@@ -103,8 +103,20 @@ def register_workflow_library(bus, document, connect, serialize_mutation):
             elif action == "configure":
                 if node is None:
                     raise ValueError("Workflow node no longer exists.")
-                if canvas.data(node)["document"]["spec"]["revision"] != payload["expected_revision"]:
+                current = canvas.data(node)
+                if current["document"]["spec"]["revision"] != payload["expected_revision"]:
                     raise ValueError("The pinned version changed. Reopen the node.")
+                # The configuration the editor started from (#1154): a form
+                # that stayed open across an undo or another change must not
+                # silently overwrite newer values.
+                expected = payload.get("expected_configuration")
+                if expected is not None and (
+                        not isinstance(expected, dict)
+                        or current["inputs"] != expected.get("inputs")
+                        or current["parameters"] != expected.get("parameters")
+                        or current.get("sources", {}) != (expected.get("sources") or {})):
+                    raise ValueError("This node's inputs changed since you started editing. "
+                                     "Reload them, then save again.")
                 mutate = lambda: canvas.configure(document, node, payload["inputs"], payload["parameters"], payload.get("sources", {}))
             elif action == "upgrade":
                 if node is None:
