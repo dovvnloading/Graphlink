@@ -81,7 +81,7 @@ function makeStore(
     sendModelComparison,
   };
   return {
-    store, updateDraft, setReasoningLevel, selectModel, selectPickerModel, openOllamaSettings, loadPickerModels, attachFile, removeAttachment,
+    state, store, updateDraft, setReasoningLevel, selectModel, selectPickerModel, openOllamaSettings, loadPickerModels, attachFile, removeAttachment,
     addAttachmentToKnowledge, emitKnowledgeJobs,
     cancelChatRequest, dismissNotification, loadComparisonModels, sendModelComparison,
   };
@@ -97,7 +97,9 @@ function makeSceneStore(
     knowledgePreference?: { nodeId: string | null; hasDocuments: boolean; enabled: boolean; override: boolean | null };
   } = {},
 ) {
-  const sendMessage = vi.fn();
+  // Admits every send by default; tests that need a rejection override it.
+  const sendMessage = vi.fn((_text: string, _useKnowledge?: boolean | null, onSettled?: (admitted: boolean) => void) =>
+    onSettled?.(true));
   const sendComposerAgentMessage = vi.fn().mockResolvedValue(true);
   const getHarnessIsolationEngine = vi.fn().mockResolvedValue(
     overrides.isolationEngine === undefined ? "docker" : overrides.isolationEngine,
@@ -315,7 +317,7 @@ describe("Composer", () => {
     await user.click(toggle);
     expect(toggle).toHaveAttribute("aria-pressed", "false");
     await user.click(screen.getByRole("button", { name: "Send message" }));
-    expect(sendMessage).toHaveBeenCalledWith("Find the runbook", false);
+    expect(sendMessage).toHaveBeenCalledWith("Find the runbook", false, expect.any(Function));
   });
 
   it("persists a Use knowledge override on an existing branch", async () => {
@@ -337,7 +339,7 @@ describe("Composer", () => {
     await waitFor(() => expect(setChatUseKnowledge).toHaveBeenCalledWith("n2", false));
     await waitFor(() => expect(screen.getByRole("button", { name: "Send message" })).not.toBeDisabled());
     await user.click(screen.getByRole("button", { name: "Send message" }));
-    expect(sendMessage).toHaveBeenCalledWith("Ask without retrieval");
+    expect(sendMessage).toHaveBeenCalledWith("Ask without retrieval", null, expect.any(Function));
   });
 
 
@@ -416,7 +418,7 @@ describe("Composer", () => {
     await waitFor(() => expect(toggle).not.toBeDisabled());
     expect(toggle).toHaveAttribute("aria-pressed", "true");
     await user.click(screen.getByRole("button", { name: "Send message" }));
-    expect(sendMessage).toHaveBeenCalledWith("Ask with retrieval", true);
+    expect(sendMessage).toHaveBeenCalledWith("Ask with retrieval", true, expect.any(Function));
   });
 
   it("ignores an obsolete library lookup completing after a newer revision", async () => {
@@ -667,9 +669,8 @@ describe("Composer", () => {
 
     await user.click(screen.getByRole("button", { name: /Compare/ }));
     expect(await screen.findByRole("checkbox", { name: "Ollama · alpha" })).toBeVisible();
-    expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
     await user.click(screen.getByRole("checkbox", { name: "Ollama · alpha" }));
-    expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Done" })).toBeDisabled();
     await user.click(screen.getByRole("checkbox", { name: "Ollama · beta" }));
     await user.click(screen.getByRole("button", { name: "Done" }));
     await user.click(screen.getByRole("button", { name: "Send message" }));
@@ -687,6 +688,76 @@ describe("Composer", () => {
     expect(updateDraft).not.toHaveBeenCalled();
     onSettled(true);
     expect(updateDraft).toHaveBeenCalledWith("");
+  });
+
+  it("opening and dismissing Compare without Done leaves single-model Send in charge (#1137)", async () => {
+    const user = userEvent.setup();
+    const { store, sendModelComparison } = makeStore({
+      composer: {
+        draft: { ...initialComposerState.draft, text: "just one" },
+        request: { ...initialComposerState.request, canSend: true },
+      },
+    });
+    const { sceneStore, sendMessage } = makeSceneStore();
+    render(
+      <OverlayProvider>
+        {/* @ts-expect-error - minimal test store */}
+        <Composer store={store} sceneStore={sceneStore} />
+      </OverlayProvider>,
+    );
+    await user.click(screen.getByRole("button", { name: "Compare models" }));
+    await user.click(await screen.findByRole("checkbox", { name: "Ollama · alpha" }));
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("checkbox", { name: "Ollama · alpha" })).toBeNull();
+    const compare = screen.getByRole("button", { name: "Compare models" });
+    expect(compare).toHaveAttribute("aria-pressed", "false");
+    await user.click(screen.getByRole("button", { name: "Send message" }));
+    expect(sendMessage).toHaveBeenCalledWith("just one", null, expect.any(Function));
+    expect(sendModelComparison).not.toHaveBeenCalled();
+  });
+
+  it("dismissing an edit to a committed comparison keeps the committed routes (#1137)", async () => {
+    const user = userEvent.setup();
+    const { store, sendModelComparison, loadComparisonModels } = makeStore({
+      composer: {
+        draft: { ...initialComposerState.draft, text: "compare" },
+        request: { ...initialComposerState.request, canSend: true },
+      },
+    });
+    const { sceneStore } = makeSceneStore();
+    render(
+      <OverlayProvider>
+        {/* @ts-expect-error - minimal test store */}
+        <Composer store={store} sceneStore={sceneStore} />
+      </OverlayProvider>,
+    );
+    await user.click(screen.getByRole("button", { name: "Compare models" }));
+    await user.click(await screen.findByRole("checkbox", { name: "Ollama · alpha" }));
+    await user.click(screen.getByRole("checkbox", { name: "Ollama · beta" }));
+    await user.click(screen.getByRole("button", { name: "Done" }));
+    const committed = screen.getByRole("button", { name: "Compare models: 2 selected" });
+    expect(committed).toHaveAttribute("aria-pressed", "true");
+
+    // Reopen: the committed pair is pre-checked; add a third, then dismiss.
+    await user.click(committed);
+    expect(await screen.findByRole("checkbox", { name: "Ollama · alpha" })).toBeChecked();
+    await user.click(screen.getByRole("checkbox", { name: "Ollama · gamma" }));
+    await user.keyboard("{Escape}");
+    expect(screen.getByRole("button", { name: "Compare models: 2 selected" })).toBeInTheDocument();
+
+    // A failed model-list refresh does not touch the committed routes.
+    loadComparisonModels.mockRejectedValueOnce(new Error("offline"));
+    await user.click(screen.getByRole("button", { name: "Compare models: 2 selected" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("offline");
+    await user.keyboard("{Escape}");
+
+    await user.click(screen.getByRole("button", { name: "Send message" }));
+    expect(sendModelComparison).toHaveBeenCalledWith(
+      "compare",
+      [{ provider: "Ollama", modelId: "alpha" }, { provider: "Ollama", modelId: "beta" }],
+      null,
+      expect.any(Function),
+    );
   });
 
   it("limits comparison selection to four and can switch back to ordinary send", async () => {
@@ -713,7 +784,7 @@ describe("Composer", () => {
     expect(screen.getByRole("checkbox", { name: /Ollama · epsilon/ })).not.toBeDisabled();
     await user.click(screen.getByRole("button", { name: "Use single-model send" }));
     await user.click(screen.getByRole("button", { name: "Send message" }));
-    expect(sendMessage).toHaveBeenCalledWith("one model");
+    expect(sendMessage).toHaveBeenCalledWith("one model", null, expect.any(Function));
   });
 
   it("renders the draft text and forwards edits", async () => {
@@ -871,6 +942,47 @@ describe("Composer", () => {
     expect(screen.getByRole("menuitemradio", { name: "Model 0" })).toBeVisible();
   });
 
+  it("model search edits text natively: caret, selection and Home/End (#1136)", async () => {
+    const user = userEvent.setup();
+    const modelOptions = Array.from({ length: 12 }, (_, i) => ({ id: `lab/model-${i}`, label: `Model ${i}` }));
+    const { store, loadPickerModels } = makeStore({
+      composer: {
+        route: { ...initialComposerState.route, provider: "OpenRouter", modelOptions },
+        capabilities: { ...initialComposerState.capabilities, modelSelection: true },
+        request: { ...initialComposerState.request, canSend: true },
+      },
+    });
+    loadPickerModels.mockResolvedValue(modelOptions.map(({ id, label }) => ({
+      provider: "OpenRouter", modelId: id, label, source: "cloud", capabilities: [], sizeBytes: null,
+    })));
+    render(
+      <OverlayProvider>
+        {/* @ts-expect-error Test doubles implement only the composer surface. */}
+        <Composer store={store} sceneStore={makeSceneStore().sceneStore} />
+      </OverlayProvider>,
+    );
+    await user.click(screen.getByRole("button", { name: /OpenRouter/ }));
+    const search = await screen.findByRole("searchbox", { name: "Search models" }) as HTMLInputElement;
+    await user.type(search, "abc");
+    await user.keyboard("{ArrowLeft}x");
+    expect(search).toHaveValue("abxc");
+    await user.keyboard("{Home}");
+    expect(search).toHaveFocus();
+    expect(search.selectionStart).toBe(0);
+    await user.keyboard("m");
+    expect(search).toHaveValue("mabxc");
+    await user.keyboard("{End}");
+    expect(search).toHaveFocus();
+    search.setSelectionRange(1, 3);
+    await user.keyboard("{Backspace}");
+    expect(search).toHaveValue("mxc");
+    await user.clear(search);
+    await user.type(search, "model-1");
+    expect(search).toHaveValue("model-1");
+    await user.keyboard("{ArrowDown}");
+    expect(screen.getByRole("menuitemradio", { name: "Model 1" })).toHaveFocus();
+  });
+
   it("Send is enabled once there's text, calls sceneStore.sendMessage, and clears the draft", async () => {
     const user = userEvent.setup();
     const { store, updateDraft } = makeStore({
@@ -889,7 +1001,7 @@ describe("Composer", () => {
     const sendButton = screen.getByLabelText("Send message");
     expect(sendButton).not.toBeDisabled();
     await user.click(sendButton);
-    expect(sendMessage).toHaveBeenCalledWith("hi");
+    expect(sendMessage).toHaveBeenCalledWith("hi", null, expect.any(Function));
     expect(updateDraft).toHaveBeenCalledWith("");
   });
 
@@ -912,8 +1024,72 @@ describe("Composer", () => {
     await user.type(input, "{Shift>}{Enter}{/Shift}");
     expect(sendMessage).not.toHaveBeenCalled();
     await user.type(input, "{Enter}");
-    expect(sendMessage).toHaveBeenCalledWith("hi");
+    expect(sendMessage).toHaveBeenCalledWith("hi", null, expect.any(Function));
     expect(updateDraft).toHaveBeenCalledWith("");
+  });
+
+  describe("draft settlement on normal and synthesis sends (#1135)", () => {
+    function renderPending(overrides: { synthesizeTargetNodeIds?: string[] } = {}) {
+      const fixture = makeStore({
+        composer: {
+          draft: { ...initialComposerState.draft, text: "a long unsent prompt" },
+          request: { ...initialComposerState.request, canSend: true },
+        },
+      });
+      const scene = makeSceneStore(overrides);
+      const settle: Array<(admitted: boolean) => void> = [];
+      scene.sendMessage.mockImplementation((_text, _useKnowledge, onSettled) => {
+        if (onSettled) settle.push(onSettled);
+      });
+      render(
+        <OverlayProvider>
+          {/* @ts-expect-error - test double */}
+          <Composer store={fixture.store} sceneStore={scene.sceneStore} />
+        </OverlayProvider>,
+      );
+      return { ...fixture, ...scene, settle };
+    }
+
+    const sendPaths: Array<[string, { synthesizeTargetNodeIds?: string[] }]> = [
+      ["normal", {}], ["synthesis", { synthesizeTargetNodeIds: ["n1", "n2"] }],
+    ];
+    for (const [label, overrides] of sendPaths) {
+      it(`keeps the ${label} draft and says so when the send is not admitted`, async () => {
+        const user = userEvent.setup();
+        const { sendMessage, updateDraft, settle } = renderPending(overrides);
+        await user.click(screen.getByRole("button", { name: "Send message" }));
+        expect(sendMessage).toHaveBeenCalledTimes(1);
+        expect(updateDraft).not.toHaveBeenCalled();
+        act(() => settle[0](false));
+        expect(updateDraft).not.toHaveBeenCalled();
+        expect(screen.getByRole("alert")).toHaveTextContent(/couldn't confirm that your message was sent/);
+        // Never replayed automatically; the user can retry explicitly.
+        expect(sendMessage).toHaveBeenCalledTimes(1);
+        await user.click(screen.getByRole("button", { name: "Send message" }));
+        expect(sendMessage).toHaveBeenCalledTimes(2);
+        act(() => settle[1](true));
+        expect(updateDraft).toHaveBeenCalledWith("");
+        expect(screen.queryByRole("alert")).toBeNull();
+      });
+    }
+
+    it("blocks a duplicate submission while admission is pending", async () => {
+      const user = userEvent.setup();
+      const { sendMessage } = renderPending();
+      await user.click(screen.getByRole("button", { name: "Send message" }));
+      expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
+      await user.type(screen.getByLabelText("Message composer"), "{Enter}");
+      expect(sendMessage).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not clear text edited while admission was pending", async () => {
+      const user = userEvent.setup();
+      const { state, updateDraft, settle } = renderPending();
+      await user.click(screen.getByRole("button", { name: "Send message" }));
+      state.composer = { ...state.composer, draft: { ...state.composer.draft, text: "a newer thought" } };
+      act(() => settle[0](true));
+      expect(updateDraft).not.toHaveBeenCalled();
+    });
   });
 
   it("Enter fired while an IME is still composing does not send", () => {

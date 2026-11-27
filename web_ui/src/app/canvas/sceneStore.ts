@@ -1860,7 +1860,11 @@ export class SceneStore {
   // and returns early. The two staging fields are already kept mutually
   // exclusive by their own setters, so this branch and the replyTargetNodeId
   // branch below it can never both apply to the same call.
-  sendMessage(text: string, useKnowledge: boolean | null = null): void {
+  sendMessage(
+    text: string,
+    useKnowledge: boolean | null = null,
+    onSettled?: (admitted: boolean) => void,
+  ): void {
     const synthesizeNodeIds = this.synthesizeTargetNodeIds;
     if (synthesizeNodeIds !== null) {
       // REVIEW-FIX: this used to clear the staged synthesize-target selection
@@ -1882,6 +1886,7 @@ export class SceneStore {
         undefined,
         (succeeded) => {
           if (succeeded) this.setSynthesizeTargetNodeIds(null);
+          onSettled?.(succeeded);
         },
       );
       return;
@@ -1899,6 +1904,7 @@ export class SceneStore {
     // misplacing the message the user meant to branch).
     this.transport.fireIntent("scene", "sendMessage", args, undefined, false, undefined, (succeeded) => {
       if (succeeded && branchFromNodeId !== null) this.setReplyTargetNodeId(null);
+      onSettled?.(succeeded);
     });
   }
 

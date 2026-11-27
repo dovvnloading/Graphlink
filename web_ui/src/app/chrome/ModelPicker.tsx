@@ -216,25 +216,8 @@ export function ComposerModelMenu({ store, disabled = false }: { store: Composer
   // Focus search after MenuSurface's layout effect initially focuses its first item.
   useEffect(() => { if (openEpoch > 0) input.current?.focus(); }, [openEpoch, result]);
 
-  // Menu's capture-phase typeahead precedes input handlers. Search owns its
-  // printable edits while focused; paste and screen-reader input still use
-  // the ordinary onChange path below.
-  useEffect(() => {
-    const handleInput = (event: globalThis.KeyboardEvent) => {
-      if (document.activeElement !== input.current || event.ctrlKey || event.altKey || event.metaKey) return;
-      if (event.key.length === 1) {
-        event.preventDefault();
-        event.stopImmediatePropagation();
-        setQuery((value) => value + event.key);
-      } else if (event.key === "Backspace") {
-        event.preventDefault();
-        event.stopImmediatePropagation();
-        setQuery((value) => value.slice(0, -1));
-      }
-    };
-    document.addEventListener("keydown", handleInput, true);
-    return () => document.removeEventListener("keydown", handleInput, true);
-  }, []);
+  // Search edits are native input edits: Menu's keyboard handler leaves
+  // editable fields alone apart from Up/Down/Escape/Tab (#1136).
 
   const current = result?.store === store && result.retry === retry ? result : null;
   const models = current?.models ?? [];

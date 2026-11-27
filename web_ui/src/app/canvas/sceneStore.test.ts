@@ -1812,6 +1812,19 @@ describe("SceneStore", () => {
     expect(intents).toEqual([{ topic: "scene", intent: "sendMessage", args: ["hello"] }]);
   });
 
+  it("sendMessage reports admission for both normal and synthesis sends (#1135)", () => {
+    const { transport, fireIntentSettlers } = makeFakeTransport({ autoSettleFireIntent: false });
+    const store = new SceneStore(transport);
+    const settled: boolean[] = [];
+    store.sendMessage("plain", null, (admitted) => settled.push(admitted));
+    store.setSynthesizeTargetNodeIds(["n1", "n2"]);
+    store.sendMessage("merge", null, (admitted) => settled.push(admitted));
+    fireIntentSettlers[0](false);
+    fireIntentSettlers[1](true);
+    expect(settled).toEqual([false, true]);
+    expect(store.getSynthesizeTargetNodeIds()).toBeNull();
+  });
+
   it("sendMessage consumes a pending reply target as the branch_from_node_id arg, then clears it", () => {
     const { transport, intents } = makeFakeTransport();
     const store = new SceneStore(transport);

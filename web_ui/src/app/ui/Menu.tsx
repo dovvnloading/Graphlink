@@ -42,6 +42,12 @@ function itemLabel(item: HTMLElement): string {
     .trim().toLocaleLowerCase();
 }
 
+function isEditableField(element: HTMLElement): boolean {
+  if (element.isContentEditable || element instanceof HTMLTextAreaElement) return true;
+  return element instanceof HTMLInputElement &&
+    !["checkbox", "radio", "button", "submit", "reset", "range"].includes(element.type);
+}
+
 /** Native capture listener works for the kit and legacy raw role=menuitem buttons.
  * The active panel is re-queried on every key, including after inline submenus change. */
 function useMenuKeyboard(
@@ -64,6 +70,11 @@ function useMenuKeyboard(
         onEscape();
         return;
       }
+      // A search field inside a menu edits text natively: caret keys,
+      // Home/End, selection, IME and typed letters are not menu commands.
+      // Only Up/Down leave the field for the items (#1136).
+      if (isEditableField(focused) && event.key !== "Tab" &&
+          event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
       if (event.key === "ArrowLeft" && onLeft) {
         event.preventDefault();
         event.stopPropagation();

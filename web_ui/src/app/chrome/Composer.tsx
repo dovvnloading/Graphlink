@@ -229,21 +229,33 @@ export function Composer({
   const [agentSending, setAgentSending] = useState(false);
   const [agentError, setAgentError] = useState("");
   const [newAgentProfile, setNewAgentProfile] = useState<HarnessExecutionProfile>("host");
+  // Committed send mode and routes; the picker edits a pending copy that
+  // only Done applies, so opening or dismissing it never reroutes Send (#1137).
   const [comparisonMode, setComparisonMode] = useState(false);
+  const [committedComparisonKeys, setCommittedComparisonKeys] = useState<string[]>([]);
   const [comparisonOptions, setComparisonOptions] = useState<ComparisonModel[]>([]);
   const [selectedComparisonKeys, setSelectedComparisonKeys] = useState<string[]>([]);
+  // A normal or synthesis send awaiting admission, and why the last one
+  // could not be confirmed. The draft is kept until admission (#1135).
+  const [sendPending, setSendPending] = useState(false);
+  const [sendError, setSendError] = useState("");
   const [comparisonLoading, setComparisonLoading] = useState(false);
   const [comparisonError, setComparisonError] = useState("");
   const comparisonKey = (model: ComparisonModel) => JSON.stringify([model.provider, model.modelId]);
   const selectedComparisonModels = comparisonOptions.filter(
     (model) => selectedComparisonKeys.includes(comparisonKey(model)),
   );
-  const comparisonReady = !comparisonMode || selectedComparisonModels.length >= 2;
+  const committedComparisonModels = comparisonOptions.filter(
+    (model) => committedComparisonKeys.includes(comparisonKey(model)),
+  );
+  const comparisonReady = !comparisonMode || committedComparisonModels.length >= 2;
 
   async function openComparisonPicker() {
-    setComparisonMode(true);
     overlays.toggle("model-comparison", "popover");
     if (overlays.isOpen("model-comparison")) return;
+    // Start every visit from what is committed; unconfirmed edits from a
+    // dismissed visit are discarded.
+    setSelectedComparisonKeys(comparisonMode ? committedComparisonKeys : []);
     setComparisonLoading(true);
     setComparisonError("");
     try {
@@ -269,14 +281,16 @@ export function Composer({
   const hasUsableModel = comparisonMode && !agentMode && !isSynthesizing
     ? comparisonReady : routeHasUsableModel(composer.route);
   const sendDisabled = !composer.draft.text.trim() || !composer.request.canSend ||
-    !hasUsableModel || knowledgeUpdating || agentSending;
+    !hasUsableModel || knowledgeUpdating || agentSending || sendPending;
   const sendDisabledReason = !composer.draft.text.trim()
     ? "Type a message" : !hasUsableModel
-      ? "Choose a model first" : "Wait for the current response to finish";
+      ? comparisonMode && !agentMode && !isSynthesizing
+        ? "Choose at least two models to compare" : "Choose a model first"
+      : sendPending ? "Sending…" : "Wait for the current response to finish";
 
   function send() {
     const text = composer.draft.text.trim();
-    if (!text || !composer.request.canSend || knowledgeUpdating) return;
+    if (!text || !composer.request.canSend || knowledgeUpdating || sendPending) return;
     if (!hasUsableModel) return;
     if (agentMode) {
       if (exceedsHarnessTaskLimit(text)) {
@@ -302,7 +316,7 @@ export function Composer({
     }
     if (comparisonMode && !isSynthesizing) {
       if (!comparisonReady) return;
-      const models = selectedComparisonModels.map(({ provider, modelId }) => ({ provider, modelId }));
+      const models = committedComparisonModels.map(({ provider, modelId }) => ({ provider, modelId }));
       const onSettled = (succeeded: boolean) => {
         if (!succeeded) return; // preserve the draft and staged branch target
         if (effectiveReplyTarget?.id) clearReplyTarget();
@@ -320,14 +334,21 @@ export function Composer({
     if (!isSynthesizing && !replyTargetNode && effectiveReplyTarget) {
       sceneStore.setReplyTargetNodeId(effectiveReplyTarget.id);
     }
-    // Unmodified single-model and Synthesize Branches paths.
+    // Single-model and Synthesize Branches paths. The draft is cleared only
+    // once the backend admits the send, and only if it was not edited in the
+    // meantime; a send that could not be confirmed is never replayed (#1135).
     const firstRootOverride = knowledgePreference?.nodeId === null ? knowledgePreference.override : null;
-    if (firstRootOverride !== null && firstRootOverride !== undefined) {
-      sceneStore.sendMessage(text, firstRootOverride);
-    } else {
-      sceneStore.sendMessage(text);
-    }
-    store.updateDraft("");
+    setSendPending(true);
+    setSendError("");
+    sceneStore.sendMessage(text, firstRootOverride ?? null, (admitted) => {
+      setSendPending(false);
+      if (!admitted) {
+        setSendError("Graphlink couldn't confirm that your message was sent. Your draft is kept. "
+          + "Check the canvas before you send it again.");
+        return;
+      }
+      if (store.getComposer().draft.text.trim() === text) store.updateDraft("");
+    });
   }
 
   return (
@@ -418,6 +439,7 @@ export function Composer({
         )}
       <KnowledgeFileImportStatus state={knowledgeImport} />
       {agentError && <p className="composer-agent-error" role="alert">{agentError}</p>}
+      {sendError && !agentMode && <p className="composer-agent-error" role="alert">{sendError}</p>}
       <div className="composer-input-wrap">
         <textarea
           // ADR-012 stage 12.3: the skip-link's own jump target - see
@@ -495,11 +517,11 @@ export function Composer({
               overlays.close();
             }} />
           <IconButton icon="compare" label={comparisonMode
-            ? `Compare models: ${selectedComparisonModels.length} selected` : "Compare models"}
+            ? `Compare models: ${committedComparisonModels.length} selected` : "Compare models"}
             data-overlay-trigger="model-comparison" aria-pressed={comparisonMode}
             disabled={!composer.request.canSend || isSynthesizing || agentMode}
             onClick={() => { void openComparisonPicker(); }} />
-          {comparisonMode && <span className="composer-compare-count">{selectedComparisonModels.length}</span>}
+          {comparisonMode && <span className="composer-compare-count">{committedComparisonModels.length}</span>}
         </div>
         <div className="composer-rail-end">
           <ComposerModelMenu store={store} disabled={composer.request.state === "generating"} />
@@ -543,6 +565,10 @@ export function Composer({
             comparisonKey={comparisonKey}
             setSelectedComparisonKeys={setSelectedComparisonKeys}
             onUseSingleModel={() => setComparisonMode(false)}
+            onApply={() => {
+              setCommittedComparisonKeys(selectedComparisonKeys);
+              setComparisonMode(true);
+            }}
           />
         </Suspense>
       )}
