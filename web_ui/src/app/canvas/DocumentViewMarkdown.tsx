@@ -12,6 +12,7 @@ import rehypeExternalLinks from "rehype-external-links";
 import Zoom from "react-medium-image-zoom";
 import "./ZoomVendor.css";
 import { rehypeHighlightSearchMatches } from "./documentViewSearchHighlight";
+import { copyText as copyToClipboard } from "../clipboard";
 
 /**
  * Document View's enhanced markdown renderer (full redesign, stage 1 of 4 -
@@ -105,17 +106,11 @@ const CodeBlock = memo(function CodeBlock({ node: _node, children, ...props }: J
     // .textContent flattens through any depth of those for free.
     const text = preRef.current?.textContent ?? "";
     if (!text) return;
-    navigator.clipboard
-      ?.writeText(text)
-      .then(() => {
-        setCopied(true);
-        setTimeout(() => setCopied(false), 2000);
-      })
-      // See NodeMarkdown.tsx's identical handler for why this .catch exists
-      // (ADR-011 stage 11.6's clipboard sweep missed four sites; this is one).
-      .catch((error: unknown) => {
-        console.error("Failed to copy code block to clipboard", error);
-      });
+    void copyToClipboard(text, "the code block").then((copied) => {
+      if (!copied) return;
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
   }
 
   return (

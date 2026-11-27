@@ -8,6 +8,7 @@ import { NodeHeading } from "./NodeHeading";
 import { NodeShell } from "./NodeShell";
 import { useLodVisibility } from "./useLodVisibility";
 import { MenuItem, MenuGroup } from "../ui/Menu";
+import { copyText as copyToClipboard } from "../clipboard";
 
 /**
  * The code node (Qt-removal plan R3.5/R3.6) - a card holding a single code
@@ -131,9 +132,7 @@ function CodeNodeMenu({
     <NodeMenu position={position} onClose={onClose} className="chat-node-menu">
       <MenuGroup label="Edit">
         <MenuItem icon="copy" label="Copy code" onSelect={() => {
-          navigator.clipboard.writeText(code).catch((error: unknown) => {
-            console.error("[code-node] Copy code failed:", error);
-          });
+          void copyToClipboard(code, "the code", { announce: true });
         }} />
       </MenuGroup>
       <MenuGroup label="Branch">

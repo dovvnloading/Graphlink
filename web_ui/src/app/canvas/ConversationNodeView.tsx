@@ -14,6 +14,7 @@ import { IconButton } from "../ui/IconButton";
 import { TextArea } from "../ui/TextArea";
 import { Button } from "../ui/Button";
 import { Tooltip } from "../ui/Tooltip";
+import { copyText as copyToClipboard } from "../clipboard";
 
 /**
  * The conversation node (Qt-removal plan R3.25/R3.26) - ConversationNode's
@@ -127,9 +128,7 @@ function ConversationBubbleMenu({
   return (
     <NodeMenu position={position} onClose={onClose} className="chat-node-menu">
       <MenuItem icon="copy" label="Copy message" onSelect={() => {
-        navigator.clipboard.writeText(content).catch((error: unknown) => {
-          console.error("[conversation-node] Copy message failed:", error);
-        });
+        void copyToClipboard(content, "the message", { announce: true });
       }} />
       <MenuItem label="Delete from history" destructive onSelect={onDeleteMessage} />
     </NodeMenu>
@@ -191,19 +190,15 @@ function ConversationBubble({
   // own transient "copied" flash independent of the menu's lifecycle.
   function onQuickCopy() {
     const version = ++copyVersion.current;
-    navigator.clipboard
-      .writeText(message.content)
-      .then(() => {
-        if (version !== copyVersion.current) return;
+    void copyToClipboard(message.content, "the message")
+      .then((copied) => {
+        if (!copied || version !== copyVersion.current) return;
         if (copyResetTimer.current !== null) clearTimeout(copyResetTimer.current);
         setCopied(true);
         copyResetTimer.current = setTimeout(() => {
           copyResetTimer.current = null;
           setCopied(false);
         }, 1500);
-      })
-      .catch((error: unknown) => {
-        console.error("[conversation-node] Copy message failed:", error);
       });
   }
 

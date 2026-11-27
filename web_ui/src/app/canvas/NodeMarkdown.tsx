@@ -14,6 +14,7 @@ import "./MarkdownVendor.css";
 import { useCanvasSearchQuery } from "./CanvasSearchContext";
 import { rehypeHighlightSearchMatches } from "./documentViewSearchHighlight";
 import type { DisplayCitation, KnowledgeCitationSource } from "./ChatCitationChips";
+import { copyText as copyToClipboard } from "../clipboard";
 
 /**
  * Shared markdown renderer for scene NODE cards (node redesign, stage 1 of 4
@@ -145,21 +146,13 @@ const CodeBlock = memo(function CodeBlock({ node: _node, children, ...props }: J
   function onCopy() {
     const text = preRef.current?.textContent ?? "";
     if (!text) return;
-    navigator.clipboard
-      ?.writeText(text)
-      .then(() => {
-        setCopied(true);
-        setTimeout(() => setCopied(false), 2000);
-      })
-      // ADR-011 stage 11.6 promised a .catch() on every clipboard write; a
-      // 2026-08-12 audit found four sites (this one included) still missing
-      // it. A rejected write - denied permission, or any non-secure context -
-      // otherwise became an unhandled promise rejection with the "Copied"
-      // state silently never arriving, leaving the user staring at a button
-      // that looks like it did nothing.
-      .catch((error: unknown) => {
-        console.error("Failed to copy code block to clipboard", error);
-      });
+    // A refused or unavailable clipboard is explained by the shared helper;
+    // the Copied state appears only after a real write (#1147).
+    void copyToClipboard(text, "the code block").then((copied) => {
+      if (!copied) return;
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
   }
 
   return (
