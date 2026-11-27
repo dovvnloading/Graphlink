@@ -64,7 +64,7 @@ describe("exportCanvasAsPng", () => {
     const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
     const rf = fakeRf([]);
 
-    await exportCanvasAsPng(rf, "--gl-surface-window");
+    await expect(exportCanvasAsPng(rf, "--gl-surface-window")).resolves.toBe("empty");
 
     expect(toPngMock).not.toHaveBeenCalled();
     expect(clickSpy).not.toHaveBeenCalled();
@@ -76,7 +76,7 @@ describe("exportCanvasAsPng", () => {
     document.body.removeChild(viewportEl); // remove it before calling
     const rf = fakeRf([fakeNode("n1", 0, 0)]);
 
-    await exportCanvasAsPng(rf, "--gl-surface-window");
+    await expect(exportCanvasAsPng(rf, "--gl-surface-window")).resolves.toBe("no-canvas");
 
     expect(toPngMock).not.toHaveBeenCalled();
     expect(rf.setViewportCalls).toEqual([]);
@@ -242,7 +242,7 @@ describe("exportCanvasAsPng", () => {
 
     const rf = fakeRf([fakeNode("n1", 0, 0)]);
 
-    await expect(exportCanvasAsPng(rf, "--gl-surface-window")).resolves.toBeUndefined();
+    await expect(exportCanvasAsPng(rf, "--gl-surface-window")).resolves.toBe("failed");
 
     expect(clickSpy).not.toHaveBeenCalled();
     expect(consoleSpy).toHaveBeenCalledWith("[export-png] Export failed:", expect.any(Error));
@@ -309,7 +309,7 @@ describe("exportCanvasAsPng", () => {
 
     it("defaults to a no-op when the caller omits it - every pre-11.2 call site keeps working unchanged", async () => {
       vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
-      await expect(exportCanvasAsPng(fakeRf([fakeNode("n1", 0, 0)]), "--gl-surface-window")).resolves.toBeUndefined();
+      await expect(exportCanvasAsPng(fakeRf([fakeNode("n1", 0, 0)]), "--gl-surface-window")).resolves.toBe("exported");
     });
   });
 });

@@ -6,6 +6,7 @@ import { useOverlays } from "../overlays/overlays";
 import { Button } from "../ui/Button";
 import { IconButton } from "../ui/IconButton";
 import { MenuButton, MenuItem } from "../ui/Menu";
+import { toast } from "../ui/Toast";
 import type { MenuPosition } from "../canvas/menuPosition";
 import { openHelp } from "./helpNavigation";
 import "./AppBar.css";
@@ -21,6 +22,11 @@ export function AppBar({ store }: { store: SceneStore }) {
   const { setViewport, getViewport, getNodes } = useReactFlow();
   const overflowTrigger = useRef<HTMLButtonElement | null>(null);
   const [overflowPosition, setOverflowPosition] = useState<MenuPosition | null>(null);
+  // Shared by the toolbar and overflow entry points: one capture at a time,
+  // since export moves the live viewport and suspends virtualization (#1130).
+  const pngExportingRef = useRef(false);
+  const [pngExporting, setPngExporting] = useState(false);
+  const canvasEmpty = scene.nodes.length === 0;
 
   const exportMethods = async () => {
     const markdown = await store.exportWorkspaceMethods();
@@ -28,22 +34,46 @@ export function AppBar({ store }: { store: SceneStore }) {
       "graphlink-workspace-methods.md");
   };
   const exportPng = async () => {
-    const { exportCanvasAsPng } = await import("../canvas/exportCanvasPng");
-    await exportCanvasAsPng(
-      { getNodes, getViewport, setViewport },
-      "--gl-graph-canvas",
-      (value) => store.setExportInProgress(value),
-    );
+    if (pngExportingRef.current) return;
+    pngExportingRef.current = true;
+    setPngExporting(true);
+    const progress = toast.show({ title: "Exporting PNG…", variant: "info" });
+    try {
+      const { exportCanvasAsPng } = await import("../canvas/exportCanvasPng");
+      const outcome = await exportCanvasAsPng(
+        { getNodes, getViewport, setViewport },
+        "--gl-graph-canvas",
+        (value) => store.setExportInProgress(value),
+      );
+      toast.dismiss(progress);
+      if (outcome === "exported") toast.show({ title: "PNG export downloaded.", variant: "success" });
+      else if (outcome === "empty") {
+        toast.show({ title: "Nothing to export. Add a node to the canvas, then export again.", variant: "info" });
+      } else if (outcome === "no-canvas") {
+        toast.show({ title: "Couldn't find the canvas to export. Close any open view, then try again.", variant: "error" });
+      } else {
+        toast.show({
+          title: "Couldn't export the PNG. An image on the canvas may be unreachable. Check graphlink.log, then try again.",
+          variant: "error",
+        });
+      }
+    } catch (error) {
+      console.error("[export-png]", error);
+      toast.dismiss(progress);
+      toast.show({ title: "Couldn't load the PNG exporter. Reload Graphlink, then try again.", variant: "error" });
+    } finally {
+      pngExportingRef.current = false;
+      setPngExporting(false);
+    }
   };
+  const pngDisabledReason = pngExporting ? "An export is already running" : canvasEmpty ? "Add a node to export a PNG" : undefined;
   // Verified-result availability is not present in the client scene contract.
   // Leave methods export enabled; the server checks receipts and its precise
   // error reply is displayed once by the transport's intent-error listener.
   const requestMethodsExport = () => {
     void exportMethods().catch(() => { /* Error reply is toasted centrally. */ });
   };
-  const requestPngExport = () => {
-    void exportPng().catch((error: unknown) => console.error("[export-png]", error));
-  };
+  const requestPngExport = () => { void exportPng(); };
   const toggleOverflow = (button: HTMLButtonElement) => {
     if (overflowPosition) {
       setOverflowPosition(null);
@@ -78,7 +108,8 @@ export function AppBar({ store }: { store: SceneStore }) {
           aria-pressed={overlays.isOpen("pins")}
           onClick={() => overlays.toggle("pins", "popover")} />
         <MenuButton label="Export" className="appbar-menu-button" menuLabel="Export">
-          <MenuItem label="Export PNG…" icon="download" onSelect={requestPngExport} />
+          <MenuItem label="Export PNG…" icon="download" onSelect={requestPngExport}
+            disabled={pngDisabledReason !== undefined} disabledReason={pngDisabledReason} />
           <MenuItem label="Export methods…" icon="document-text" onSelect={requestMethodsExport} />
         </MenuButton>
       </div>
@@ -107,7 +138,7 @@ export function AppBar({ store }: { store: SceneStore }) {
         <Suspense fallback={<span role="status">Loading toolbar actions…</span>}>
           <LazyAppBarOverflowMenu store={store} position={overflowPosition}
             onClose={() => setOverflowPosition(null)} ignoreRef={overflowTrigger}
-            exportPng={exportPng} exportMethods={exportMethods} />
+            exportPng={exportPng} exportMethods={exportMethods} pngDisabledReason={pngDisabledReason} />
         </Suspense>
       )}
 

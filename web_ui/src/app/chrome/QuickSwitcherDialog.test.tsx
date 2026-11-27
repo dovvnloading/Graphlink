@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { QuickSwitcherDialog } from "./QuickSwitcherDialog";
@@ -166,6 +166,65 @@ describe("QuickSwitcherDialog", () => {
 
     expect(intents).toContainEqual(["app-chat-library", "loadChat", [2]]);
     expect(screen.queryByLabelText("Search graphs by title")).toBeNull();
+  });
+
+  it("runs one switch at a time and shows it is pending (#1138)", async () => {
+    const { user, push, intents, request } = setup();
+    let resolve: (value: unknown) => void = () => {};
+    request.mockImplementationOnce(() => new Promise((done) => { resolve = done; }));
+    push(SNAPSHOT);
+    await user.click(screen.getByText("open quick switcher"));
+    await user.keyboard("{ArrowDown}{Enter}{Enter}");
+    await user.click(screen.getByText("Recent Graph"));
+    expect(intents.filter((entry) => entry[1] === "loadChat")).toEqual([["app-chat-library", "loadChat", [2]]]);
+    expect(screen.getByRole("status")).toHaveTextContent('Opening "Older Graph"…');
+    expect(screen.getByRole("listbox", { name: "Graphs" })).toHaveAttribute("aria-busy", "true");
+    await act(async () => { resolve(undefined); });
+    expect(screen.queryByLabelText("Search graphs by title")).toBeNull();
+  });
+
+  it("a failed switch explains itself, keeps the query and selection, and can be retried (#1138)", async () => {
+    const { user, push, intents, request } = setup();
+    request.mockRejectedValueOnce(new Error("socket unavailable"));
+    push(SNAPSHOT);
+    await user.click(screen.getByText("open quick switcher"));
+    await user.type(screen.getByLabelText("Search graphs by title"), "older");
+    await user.keyboard("{Enter}");
+    expect(await screen.findByRole("alert")).toHaveTextContent(/confirm that "Older Graph" opened/);
+    expect(screen.getByLabelText("Search graphs by title")).toHaveValue("older");
+    expect(screen.getByRole("option", { name: /Older Graph/ })).toHaveAttribute("aria-selected", "true");
+    await user.keyboard("{Enter}");
+    expect(intents.filter((entry) => entry[1] === "loadChat")).toHaveLength(2);
+    expect(screen.queryByLabelText("Search graphs by title")).toBeNull();
+  });
+
+  it("a late reply does not close a surface opened after the switcher was dismissed (#1138)", async () => {
+    const user = userEvent.setup();
+    const fake = makeTransport();
+    let resolve: (value: unknown) => void = () => {};
+    fake.request.mockImplementationOnce(() => new Promise((done) => { resolve = done; }));
+    function Probe() {
+      const overlays = useOverlays();
+      return <>
+        <button type="button" onClick={() => overlays.open("library", "dialog")}>open library</button>
+        <output data-testid="surface">{overlays.openSurface ?? ""}</output>
+      </>;
+    }
+    render(
+      <OverlayProvider>
+        <OpenQuickSwitcherButton />
+        <Probe />
+        <QuickSwitcherDialog transport={fake.transport} />
+        <ConfirmDialog />
+      </OverlayProvider>,
+    );
+    fake.push(SNAPSHOT);
+    await user.click(screen.getByText("open quick switcher"));
+    await user.keyboard("{Enter}");
+    await user.click(screen.getByText("open library"));
+    expect(screen.getByTestId("surface")).toHaveTextContent("library");
+    await act(async () => { resolve(undefined); });
+    expect(screen.getByTestId("surface")).toHaveTextContent("library");
   });
 
   it("never discards a partial graph without a nested kit confirmation", async () => {

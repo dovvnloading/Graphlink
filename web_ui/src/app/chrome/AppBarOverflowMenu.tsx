@@ -8,7 +8,7 @@ import { Menu, MenuGroup, MenuItem } from "../ui/Menu";
 import { openHelp } from "./helpNavigation";
 
 export function AppBarOverflowMenu({
-  store, exportPng, exportMethods, position, onClose, ignoreRef,
+  store, exportPng, exportMethods, position, onClose, ignoreRef, pngDisabledReason,
 }: {
   store: SceneStore;
   exportPng: () => Promise<void>;
@@ -16,10 +16,13 @@ export function AppBarOverflowMenu({
   position: MenuPosition;
   onClose: () => void;
   ignoreRef: RefObject<HTMLElement | null>;
+  /** Why Export PNG is unavailable (empty canvas, export running), if it is. */
+  pngDisabledReason?: string;
 }) {
   const overlays = useOverlays();
   const scene = useSyncExternalStore(store.subscribe, store.getScene);
-  const downloadPng = () => { void exportPng().catch((error: unknown) => console.error("[export-png]", error)); };
+  // exportPng reports its own outcome and never rejects (#1130).
+  const downloadPng = () => { void exportPng(); };
   const downloadMethods = () => {
     // The transport listener owns server failures; do not add a second inline alert.
     void exportMethods().catch(() => {});
@@ -39,7 +42,8 @@ export function AppBarOverflowMenu({
           onSelect={() => overlays.open("organize", "dialog")} />
         <MenuItem label="Pins" icon="pin"
           onSelect={() => overlays.toggle("pins", "popover")} />
-        <MenuItem label="Export PNG…" icon="download" onSelect={downloadPng} />
+        <MenuItem label="Export PNG…" icon="download" onSelect={downloadPng}
+          disabled={pngDisabledReason !== undefined} disabledReason={pngDisabledReason} />
         <MenuItem label="Export methods…" icon="document-text" onSelect={downloadMethods} />
       </MenuGroup>
       <MenuGroup label="Panels">
