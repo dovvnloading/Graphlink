@@ -399,6 +399,25 @@ function TableEditor({ state, nodeId, pluginId, store, defaultOpen = false }: {
     setError("");
     if (clearSchema) setSchema(null);
   }
+  // Type hints belong to the source they were reviewed against (#1148). A
+  // new source or file starts with none, so an old hint can never apply to
+  // a same-named column in different data.
+  function changeSource(apply: () => void) {
+    invalidate(true);
+    setOverrides("{}");
+    apply();
+  }
+  function removeOverride(column: string) {
+    if (!columnTypes) return;
+    const next = { ...columnTypes };
+    delete next[column];
+    invalidate();
+    setOverrides(JSON.stringify(next));
+  }
+  const reviewedColumns = new Set(schema?.columns.map((col) => col.label) ?? []);
+  // Hints not shown in the type-review table (no preview yet, or headers
+  // that changed) stay visible and removable without editing JSON.
+  const unmatchedOverrides = Object.entries(columnTypes ?? {}).filter(([column]) => !reviewedColumns.has(column));
   const [exporting, setExporting] = useState(false);
   const table = state.table;
   const rowsLimit = state.limits?.tableRows ?? 100000;
@@ -458,12 +477,13 @@ function TableEditor({ state, nodeId, pluginId, store, defaultOpen = false }: {
   // result sections; an imported table shows one status line by default.
   return <section className="science-data-table" aria-label="Typed data table">
     {table && <p role="status">{table.sourceName} · {table.rowCount.toLocaleString()} rows · {table.columnCount} columns</p>}
-    <ResultDisclosure defaultOpen={defaultOpen} label={table ? "Replace data table" : "Import a data table"} onClose={() => { invalidate(true); setFile(null); }}>
+    <ResultDisclosure defaultOpen={defaultOpen} label={table ? "Replace data table" : "Import a data table"}
+      onClose={() => changeSource(() => setFile(null))}>
     <p>Import mixed data and missing values. Tables support {rowsLimit.toLocaleString()} rows and {cellsLimit.toLocaleString()} cells, stored outside the graph.</p>
     <form onSubmit={submit} onChange={() => invalidate()}>
       <fieldset disabled={busy}>
         <Select label="Table data source" value={source} onChange={(value) => {
-          invalidate(true); setSource(value as "paste" | "file"); setFile(null);
+          changeSource(() => { setSource(value as "paste" | "file"); setFile(null); });
         }} options={[{ value: "paste", label: "Paste CSV / TSV" }, { value: "file", label: "Choose a file" }]} />
         <Select label="Table format" value={format} onChange={(value) => {
           invalidate(); setFormat(value as "csv" | "tsv");
@@ -473,13 +493,19 @@ function TableEditor({ state, nodeId, pluginId, store, defaultOpen = false }: {
             <input type="file" aria-label="CSV or TSV file" accept=".csv,.tsv,text/csv,text/tab-separated-values"
               onChange={(e) => {
                 const next = e.target.files?.[0] ?? null;
-                invalidate(true); setFile(next);
+                changeSource(() => setFile(next));
                 if (next?.name.toLowerCase().endsWith(".tsv")) setFormat("tsv");
                 if (next?.name.toLowerCase().endsWith(".csv")) setFormat("csv");
               }} />
           </label> :
           <label>Pasted table text
-            <textarea rows={4} aria-label="Pasted table text" value={text} onChange={(e) => setText(e.target.value)} />
+            <textarea rows={4} aria-label="Pasted table text" value={text} onChange={(e) => {
+              const next = e.target.value;
+              // A changed header row makes the reviewed columns obsolete:
+              // clear them, and list any hints for review below.
+              if (next.split(/\r?\n/, 1)[0] !== text.split(/\r?\n/, 1)[0]) invalidate(true);
+              setText(next);
+            }} />
           </label>}
         <label>Missing-value markers (comma-separated; blank always missing)
           <input type="text" aria-label="Missing-value markers" value={missing} onChange={(e) => setMissing(e.target.value)} />
@@ -501,6 +527,18 @@ function TableEditor({ state, nodeId, pluginId, store, defaultOpen = false }: {
                 ({ value: kind, label: kind }))]} />{validReview && <small>{col.type}</small>}</td>
             <td>{col.unit || "—"}</td><td>{col.missingCount}</td>
           </tr>)}</tbody></table>
+        </div>}
+        {unmatchedOverrides.length > 0 && <div className="science-type-hints" role="group"
+          aria-label="Column type hints not in the reviewed columns">
+          <p>{schema
+            ? "These type hints don't match any reviewed column. Remove them before previewing."
+            : "These type hints will be sent with the next preview."}</p>
+          <ul>{unmatchedOverrides.map(([column, kind]) => <li key={column}>
+            <span>{column} → {kind}</span>
+            <Button size="sm" variant="ghost" onClick={() => removeOverride(column)}>
+              Remove hint for {column}
+            </Button>
+          </li>)}</ul>
         </div>}
         <CanvasDisclosure label={"Advanced column overrides"}>
           <label>Column type overrides (JSON)

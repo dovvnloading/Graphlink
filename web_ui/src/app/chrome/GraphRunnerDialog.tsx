@@ -165,6 +165,10 @@ function Runner({ store }: { store: SceneStore }) {
   const [busy, setBusy] = useState("Loading run history…");
   const [cancellingRun, setCancellingRun] = useState(false);
   const [error, setError] = useState("");
+  // A failed read-only status poll is not an execution outcome (#1141): it
+  // keeps the last known run visible as stale and keeps polling, backing off.
+  const [statusReadFailures, setStatusReadFailures] = useState(0);
+  const [checkingStatus, setCheckingStatus] = useState(false);
   // A new handoff is a stable store snapshot. Reconcile it during render,
   // like OrganizationDialog, so scope/selection cannot briefly show a stale
   // preview. Selecting bound nodes never starts execution or grants approval.
@@ -216,18 +220,39 @@ function Runner({ store }: { store: SceneStore }) {
   }, [store, modelNoteHandoff, requestedIds]);
   // Poll in-flight requests to expose the backend's cancellable running state.
   // Do not invent a local run: a lost reply must remain retryable by operation ID.
+  // Only the read is retried, with backoff (1 s, doubling to 8 s); the
+  // execution mutation is never repeated (#1141).
   useEffect(() => {
-    if (!(running || busy === "Running graph…" || busy === "Resuming run…") || error) return;
+    if (!(running || busy === "Running graph…" || busy === "Resuming run…")) return;
     let active = true;
+    const delay = Math.min(1000 * 2 ** statusReadFailures, 8000);
     const timer = setTimeout(() => {
       store.getGraphRun().then((run) => {
-        if (active) setLatest(run);
-      }).catch((err: unknown) => {
-        if (active) setError(err instanceof Error ? err.message : String(err));
+        if (!active) return;
+        setLatest(run);
+        setStatusReadFailures(0);
+      }).catch(() => {
+        if (active) setStatusReadFailures((count) => count + 1);
       });
-    }, 1000);
+    }, delay);
     return () => { active = false; clearTimeout(timer); };
-  }, [busy, error, latest, running, store]);
+  }, [busy, latest, running, statusReadFailures, store]);
+
+  /** Read-only, so usable while a run or another action is in flight. */
+  async function checkRunStatus() {
+    if (checkingStatus) return;
+    setCheckingStatus(true);
+    try {
+      const run = await store.getGraphRun();
+      setLatest(run);
+      setStatusReadFailures(0);
+      if (run && preview?.operationId === run.runId) setPreview(null);
+    } catch {
+      setStatusReadFailures((count) => count + 1);
+    } finally {
+      setCheckingStatus(false);
+    }
+  }
 
   async function perform(label: string, action: () => Promise<void>) {
     if (busy) return;
@@ -446,13 +471,19 @@ function Runner({ store }: { store: SceneStore }) {
     <p className={busy ? undefined : "visually-hidden"} role="status">{busy}</p>
     <McpApprovalPanel store={store} active={scene.nodes.some(node => node.kind === "mcp_connect.tool")
       && (!!running || busy === "Running graph…" || busy === "Resuming run…")} />
+    {statusReadFailures > 0 && <div className="runner-error">
+      <p role="status">Couldn't read the latest run status. {latest
+        ? "The run below shows the last known status and may be out of date."
+        : "No run status is available yet."} Retrying automatically.</p>
+      <Button variant="secondary" disabled={checkingStatus} onClick={() => void checkRunStatus()}>
+        {checkingStatus ? "Checking run status…" : "Check run status"}
+      </Button>
+    </div>}
     {error && <div className="runner-error">
       <p role="alert">{error}</p>
-      <Button variant="secondary" disabled={!!busy} onClick={() => void perform("Checking run status…", async () => {
-        const run = await store.getGraphRun();
-        setLatest(run);
-        if (run && preview?.operationId === run.runId) setPreview(null);
-      })}>Check run status</Button>
+      <Button variant="secondary" disabled={checkingStatus} onClick={() => void checkRunStatus()}>
+        {checkingStatus ? "Checking run status…" : "Check run status"}
+      </Button>
     </div>}
     {preview && <section aria-label="Run preview">
       <header className="runner-section-header">

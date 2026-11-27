@@ -80,12 +80,18 @@ export function SceneMinimap({ store }: { store: SceneStore }) {
   const [collapsed, setCollapsed] = useState(readCollapsed);
   const mapId = useId();
 
-  const { entries, waiting } = useMemo(() => {
+  const { entries, waiting, hiddenWaiting } = useMemo(() => {
     const entries = new Map<string, MapEntry>();
     const waiting: SceneNodeRow[] = [];
+    // Decisions inside collapsed groups or docked panels are not on the map;
+    // they are counted separately so the chip's scope stays honest (#1140).
+    let hiddenWaiting = 0;
     const hidden = hiddenGroupMemberIds(scene.nodes);
     for (const node of scene.nodes) {
-      if (node.isDocked || hidden.has(node.id)) continue;
+      if (node.isDocked || hidden.has(node.id)) {
+        if (minimapMeta(node).state === "attention") hiddenWaiting += 1;
+        continue;
+      }
       const meta = minimapMeta(node);
       entries.set(node.id, {
         ...meta, sources: [], label: node.title || node.kind.replaceAll("_", " "),
@@ -95,8 +101,12 @@ export function SceneMinimap({ store }: { store: SceneStore }) {
     for (const edge of scene.edges) {
       if (entries.has(edge.source)) entries.get(edge.target)?.sources.push(edge.source);
     }
-    return { entries, waiting };
+    return { entries, waiting, hiddenWaiting };
   }, [scene.nodes, scene.edges]);
+  // The waiting node the chip last showed. Each press moves to the next
+  // one (Previous goes back), so every counted decision is reachable
+  // without answering another first. Navigation only selects and pans.
+  const [waitingCursor, setWaitingCursor] = useState<string | null>(null);
 
   function toggleCollapsed() {
     setCollapsed(!collapsed);
@@ -138,6 +148,20 @@ export function SceneMinimap({ store }: { store: SceneStore }) {
 
   if (entries.size === 0) return null;
   const size = compact ? COMPACT_MAP : WIDE_MAP;
+  const cursorIndex = waiting.findIndex((node) => node.id === waitingCursor);
+  const stepWaiting = (direction: 1 | -1) => {
+    if (!waiting.length) return;
+    // A resolved or removed target simply drops out; start over from the ends.
+    const index = cursorIndex < 0
+      ? (direction === 1 ? 0 : waiting.length - 1)
+      : (cursorIndex + direction + waiting.length) % waiting.length;
+    const target = waiting[index];
+    setWaitingCursor(target.id);
+    selectAndCenter(target.id, target);
+  };
+  const nextIndex = cursorIndex < 0 ? 0 : (cursorIndex + 1) % Math.max(waiting.length, 1);
+  const nextTarget = waiting[nextIndex];
+  const nextLabel = nextTarget ? (entries.get(nextTarget.id)?.label ?? nextTarget.kind) : "";
 
   return (
     <MinimapMetaContext.Provider value={entries}>
@@ -171,11 +195,21 @@ export function SceneMinimap({ store }: { store: SceneStore }) {
             size="sm" aria-expanded={!collapsed} aria-controls={mapId}
             onClick={toggleCollapsed}
           />
+          {waiting.length > 1 && (
+            <IconButton icon="chevron-left" size="sm" label="Previous waiting decision"
+              onClick={() => stepWaiting(-1)} />
+          )}
           {waiting.length > 0 && (
             <Button variant="ghost" size="sm" className="scene-minimap-waiting"
-              onClick={() => selectAndCenter(waiting[0].id, waiting[0])}>
+              aria-label={`${waiting.length} waiting. Show ${nextIndex + 1} of ${waiting.length}: ${nextLabel}`}
+              onClick={() => stepWaiting(1)}>
               {waiting.length} waiting
             </Button>
+          )}
+          {hiddenWaiting > 0 && (
+            <span className="scene-minimap-hidden-waiting">
+              {waiting.length > 0 ? "+" : ""}{hiddenWaiting} in hidden groups or docked panels
+            </span>
           )}
         </div>
       </Panel>
