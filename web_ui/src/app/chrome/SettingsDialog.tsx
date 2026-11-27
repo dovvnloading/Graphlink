@@ -244,6 +244,9 @@ export function SettingsDialog({ transport }: { transport: WsTransport }) {
   // A section change is immediate; the persisted choice is acknowledged later
   // by app-settings. A stale snapshot must not visibly bounce the rail back.
   const persistedSection = SECTIONS.find((section) => sectionKey(section) === state.activeSection) ?? "General";
+  // Once the backend acknowledges the optimistic choice, retire it, so a
+  // later targeted navigation (Manage models..., provider setup) wins (#1142).
+  if (localSection && sectionKey(localSection) === state.activeSection) setLocalSection(null);
   const activeSection = localSection && sectionKey(localSection) !== state.activeSection
     ? localSection : persistedSection;
   const switchSection = (section: Section) => {

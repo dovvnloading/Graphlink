@@ -327,6 +327,37 @@ describe("SettingsDialog", () => {
     expect(intents).toContainEqual(["app-settings", "setActiveSection", ["workspace agent"]]);
   });
 
+  it("honors targeted navigation after an acknowledged rail selection (#1142)", async () => {
+    const { user, push } = setup();
+    await user.click(screen.getByText("open settings"));
+    const rail = () => screen.getByRole("navigation", { name: "Settings sections" });
+    await user.click(within(rail()).getByRole("button", { name: "Knowledge" }));
+    act(() => push({ ...snapshot, activeSection: "knowledge" }));
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("navigation", { name: "Settings sections" })).toBeNull();
+
+    // Manage models... asks for Ollama while Settings is closed.
+    act(() => push({ ...snapshot, activeSection: "ollama (local)" }));
+    await user.click(screen.getByText("open settings"));
+    expect(within(rail()).getByRole("button", { name: "Ollama (Local)" })).toHaveAttribute("aria-current", "page");
+
+    // And a targeted navigation while open.
+    act(() => push({ ...snapshot, activeSection: "api endpoint" }));
+    expect(within(rail()).getByRole("button", { name: "API Endpoint" })).toHaveAttribute("aria-current", "page");
+  });
+
+  it("a stale snapshot does not bounce a newer rail selection (#1142)", async () => {
+    const { user, push } = setup();
+    await user.click(screen.getByText("open settings"));
+    const rail = screen.getByRole("navigation", { name: "Settings sections" });
+    await user.click(within(rail).getByRole("button", { name: "Knowledge" }));
+    await user.click(within(rail).getByRole("button", { name: "Integrations" }));
+    act(() => push({ ...snapshot, activeSection: "knowledge" }));
+    expect(within(rail).getByRole("button", { name: "Integrations" })).toHaveAttribute("aria-current", "page");
+    act(() => push({ ...snapshot, activeSection: "integrations" }));
+    expect(within(rail).getByRole("button", { name: "Integrations" })).toHaveAttribute("aria-current", "page");
+  });
+
   it("General page renders the auto model policy select at its current value", async () => {
     const { user } = setup();
     await user.click(screen.getByText("open settings"));
