@@ -229,3 +229,54 @@ describe("rehypeHighlightSearchMatches", () => {
     expect(marks(tree.children[0] as ElementNode)).toHaveLength(1);
   });
 });
+
+describe("matches across inline formatting (#1167)", () => {
+  function el(tagName: string, ...children: unknown[]): ElementNode {
+    return { type: "element", tagName, properties: {}, children };
+  }
+  function allMarks(node: unknown, found: ElementNode[] = []): ElementNode[] {
+    const element = node as ElementNode;
+    if (element.tagName === "mark") found.push(element);
+    for (const child of element.children ?? []) allMarks(child, found);
+    return found;
+  }
+  function run(tree: unknown, query: string) {
+    rehypeHighlightSearchMatches(query)(tree as { type: string; children?: unknown[] });
+    return allMarks(tree);
+  }
+
+  it("a phrase straddling bold and plain text is one logical match in two fragments", () => {
+    const tree = root(paragraph(el("strong", text("Solar")), text(" output grew")));
+    const found = run(tree, "solar output");
+    expect(found.map((mark) => textContent(mark))).toEqual(["Solar", " output"]);
+    expect(new Set(found.map((mark) => mark.properties.dataSearchMatchIndex))).toEqual(new Set([0]));
+    // Structure is preserved: the bold fragment's mark stays inside <strong>.
+    expect(textContent(tree as unknown as ElementNode)).toBe("Solar output grew");
+  });
+
+  it("matches across adjacent syntax-highlight tokens in a code block", () => {
+    const tree = root(el("pre", el("code", el("span", text("const")), text(" total"), el("span", text(" = 1")))));
+    const found = run(tree, "const total =");
+    expect(found.map((mark) => textContent(mark)).join("")).toBe("const total =");
+    expect(new Set(found.map((mark) => mark.properties.dataSearchMatchIndex)).size).toBe(1);
+  });
+
+  it("never joins text across separate blocks", () => {
+    const tree = root(paragraph(text("end of one")), paragraph(text("start of two")));
+    expect(run(tree, "one start")).toHaveLength(0);
+  });
+
+  it("keeps aria-hidden content out of matches", () => {
+    const hidden = { type: "element", tagName: "span", properties: { ariaHidden: true }, children: [text("#")] };
+    const tree = root(el("h2", text("Intro"), hidden, text("duction")));
+    expect(run(tree, "intro#")).toHaveLength(0);
+    expect(run(root(el("h2", text("Intro"), { ...hidden, children: [text("#")] }, text("duction"))), "introduction")).toHaveLength(2);
+  });
+
+  it("still caps logical matches", () => {
+    const words = Array.from({ length: MAX_DOCUMENT_SEARCH_MATCHES + 5 }, () => "ab").join(" ");
+    const tree = root(paragraph(el("em", text(words.slice(0, 3))), text(words.slice(3))));
+    const indices = new Set(run(tree, "ab").map((mark) => mark.properties.dataSearchMatchIndex));
+    expect(indices.size).toBe(MAX_DOCUMENT_SEARCH_MATCHES);
+  });
+});

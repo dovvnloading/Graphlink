@@ -1,4 +1,4 @@
-import { Suspense, lazy, memo, useCallback, useDeferredValue, useEffect, useRef, useState } from "react";
+import { Suspense, lazy, memo, useCallback, useDeferredValue, useEffect, useId, useRef, useState } from "react";
 import { DocumentViewToc } from "./DocumentViewToc";
 import { DocumentViewSearch } from "./DocumentViewSearch";
 import type { DocumentHeading } from "./documentViewHeadings";
@@ -29,6 +29,8 @@ const SEARCH_MATCH_CURRENT_CLASS = "document-view-search-match-current";
 const DEFAULT_WIDTH = 500;
 const MIN_WIDTH = 320;
 const MAX_WIDTH = 900;
+const RESIZE_STEP = 24;
+const RESIZE_STEP_LARGE = 96;
 
 // Stage 4: relative multipliers, not absolute pixel values - the actual
 // inherited body font-size in `.document-view-panel-scroll` is never set
@@ -273,15 +275,25 @@ export function DocumentViewPanel({
 
   const onResizeHandleKeyDown = useCallback(
     (event: React.KeyboardEvent<HTMLDivElement>) => {
-      // Adversarial-review finding: double-click-to-reset had no keyboard
-      // equivalent at all - the handle was a plain, non-focusable div, so a
-      // keyboard-only user had no way to invoke it. Enter/Space (not arrow-
-      // key resizing, which would be a larger, separate feature) mirrors
-      // the double-click's own single action.
+      // Enter/Space resets, mirroring the double-click. Arrow keys resize
+      // in steps (Shift for larger ones) and Home/End jump to the limits,
+      // leaving expanded mode exactly as a pointer drag does (#1166).
       if (event.key === "Enter" || event.key === " ") {
         event.preventDefault();
         onResetWidth();
+        return;
       }
+      const step = event.shiftKey ? RESIZE_STEP_LARGE : RESIZE_STEP;
+      let next: ((current: number) => number) | null = null;
+      if (event.key === "ArrowRight") next = (current) => current + step;
+      else if (event.key === "ArrowLeft") next = (current) => current - step;
+      else if (event.key === "Home") next = () => MIN_WIDTH;
+      else if (event.key === "End") next = () => MAX_WIDTH;
+      if (!next) return;
+      event.preventDefault();
+      const resize = next;
+      setIsExpanded(false);
+      setWidth((current) => Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, resize(current))));
     },
     [onResetWidth],
   );
@@ -361,7 +373,7 @@ export function DocumentViewPanel({
   const searchPending = searchQuery.trim() !== renderedSearchQuery.trim();
   const [currentMatchIndex, setCurrentMatchIndex] = useState(0);
   const [matchCount, setMatchCount] = useState(0);
-  const searchMatchesRef = useRef<HTMLElement[]>([]);
+  const searchMatchesRef = useRef<HTMLElement[][]>([]);
 
   // A new document (or the panel closing and a different one opening next)
   // must never start the reader mid-scroll from whatever the PREVIOUS
@@ -408,9 +420,15 @@ export function DocumentViewPanel({
     if (!searchPending) setCurrentMatchIndex((i) => (matchCount === 0 ? 0 : (i - 1 + matchCount) % matchCount));
   }, [matchCount, searchPending]);
 
+  const headerRef = useRef<HTMLElement | null>(null);
+  const panelId = useId();
+  const resizeHintId = useId();
   const onSearchClose = useCallback(() => {
     setIsSearchOpen(false);
     setSearchQuery("");
+    // The search input is about to unmount; return focus to the control
+    // that opened it rather than dropping it to the document (#1163).
+    headerRef.current?.querySelector<HTMLButtonElement>("[data-find-trigger]")?.focus();
   }, []);
 
   // Cache the actual rendered marks only when the Markdown inputs change,
@@ -420,9 +438,18 @@ export function DocumentViewPanel({
     const container = scrollRef.current;
     if (!container) return;
     const collect = () => {
-      const matches = renderedSearchQuery.trim()
-        ? Array.from(container.querySelectorAll<HTMLElement>(SEARCH_MATCH_SELECTOR))
-        : [];
+      // One logical match can span several marks (a phrase across inline
+      // formatting); group the fragments by their shared index (#1167).
+      const groups = new Map<string, HTMLElement[]>();
+      if (renderedSearchQuery.trim()) {
+        for (const mark of container.querySelectorAll<HTMLElement>(SEARCH_MATCH_SELECTOR)) {
+          const key = mark.dataset.searchMatchIndex ?? String(groups.size);
+          const group = groups.get(key);
+          if (group) group.push(mark);
+          else groups.set(key, [mark]);
+        }
+      }
+      const matches = Array.from(groups.values());
       searchMatchesRef.current = matches;
       setMatchCount(matches.length);
     };
@@ -443,11 +470,11 @@ export function DocumentViewPanel({
     const matches = searchMatchesRef.current;
     if (!container || searchPending || matches.length === 0) return;
     const current = matches[Math.min(currentMatchIndex, matches.length - 1)];
-    current.classList.add(SEARCH_MATCH_CURRENT_CLASS);
+    for (const fragment of current) fragment.classList.add(SEARCH_MATCH_CURRENT_CLASS);
     const containerRect = container.getBoundingClientRect();
-    const currentRect = current.getBoundingClientRect();
+    const currentRect = current[0].getBoundingClientRect();
     container.scrollTop += currentRect.top - containerRect.top;
-    return () => current.classList.remove(SEARCH_MATCH_CURRENT_CLASS);
+    return () => { for (const fragment of current) fragment.classList.remove(SEARCH_MATCH_CURRENT_CLASS); };
   }, [content, renderedSearchQuery, citation, currentMatchIndex, matchCount, searchPending]);
 
   // The markdown renderer is lazy. A citation can open Document View before
@@ -529,6 +556,7 @@ export function DocumentViewPanel({
 
   return (
     <aside
+      id={panelId}
       ref={panelRef}
       className={[
         "document-view-panel",
@@ -549,13 +577,13 @@ export function DocumentViewPanel({
           .join(" ")}
         style={{ width: isExpanded ? undefined : width }}
       >
-        <header className="document-view-panel-header">
+        <header className="document-view-panel-header" ref={headerRef}>
           <div className="document-view-panel-heading">
             <span className="document-view-panel-title">Document View</span>
             {sourceLabel && <span className="document-view-panel-subtitle">{sourceLabel}</span>}
           </div>
           <DocumentViewToc headings={headings} scrollContainerRef={scrollRef} />
-          <IconButton icon="search" size="sm" label="Find in document"
+          <IconButton icon="search" size="sm" label="Find in document" data-find-trigger=""
             onClick={() => isSearchOpen ? onSearchClose() : setIsSearchOpen(true)}
             disabled={!content} aria-expanded={isSearchOpen} />
           <IconButton icon="copy" size="sm" label={copied ? "Copied" : "Copy content" }
@@ -640,7 +668,16 @@ export function DocumentViewPanel({
         tabIndex={0}
         aria-orientation="vertical"
         aria-label="Resize Document View panel. Press Enter to reset to the default width."
+        aria-describedby={resizeHintId}
+        aria-controls={panelId}
+        aria-valuemin={MIN_WIDTH}
+        aria-valuemax={MAX_WIDTH}
+        aria-valuenow={width}
+        aria-valuetext={isExpanded ? "Expanded" : `${width} pixels wide`}
       />
+      <span id={resizeHintId} className="document-view-visually-hidden">
+        Use the Left and Right arrow keys to resize, with Shift for larger steps, and Home or End for the narrowest or widest size.
+      </span>
     </aside>
   );
 }

@@ -70,6 +70,9 @@ export function DocumentViewToc({
     function onKeyDown(event: KeyboardEvent) {
       if (event.key !== "Escape") return;
       setIsOpen(false);
+      // Keyboard dismissal returns focus to the outline trigger (#1163);
+      // pointer dismissal leaves focus wherever the user clicked.
+      rootRef.current?.querySelector<HTMLButtonElement>("[data-toc-trigger]")?.focus();
       // stopImmediatePropagation(), not plain stopPropagation() - both this
       // listener and DocumentViewPanel.tsx's own Escape-to-close-the-whole-
       // panel listener are attached to the SAME target (`document`), and
@@ -118,6 +121,10 @@ export function DocumentViewToc({
       const containerRect = container.getBoundingClientRect();
       const targetRect = target.getBoundingClientRect();
       container.scrollTop += targetRect.top - containerRect.top;
+      // Move focus to the chosen heading, so reading (and Tab) continues
+      // from there instead of from a menu that just disappeared (#1163).
+      if (!target.hasAttribute("tabindex")) target.setAttribute("tabindex", "-1");
+      target.focus({ preventScroll: true });
     }
     setIsOpen(false);
   }
@@ -126,7 +133,7 @@ export function DocumentViewToc({
 
   return (
     <div className="document-view-toc" ref={rootRef}>
-      <IconButton icon="panel-left" label="Table of contents" size="sm" aria-haspopup="true" aria-expanded={isOpen} onClick={() => setIsOpen((open) => !open)} />
+      <IconButton icon="panel-left" label="Table of contents" size="sm" aria-haspopup="true" data-toc-trigger="" aria-expanded={isOpen} onClick={() => setIsOpen((open) => !open)} />
       {isOpen && (
         <div className="document-view-toc-dropdown" role="navigation" aria-label="Table of contents">
           {headings.map((heading) => (

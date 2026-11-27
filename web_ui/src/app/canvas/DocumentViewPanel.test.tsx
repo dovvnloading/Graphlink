@@ -232,6 +232,40 @@ describe("DocumentViewPanel", () => {
     expect(panel.style.width).toBe("600px");
   });
 
+  it("resizes from the keyboard within its range and exposes the values (#1166)", () => {
+    const { container } = renderPanel();
+    const handle = screen.getByRole("separator", { name: "Resize Document View panel. Press Enter to reset to the default width." });
+    const panel = container.querySelector(".document-view-panel") as HTMLElement;
+    expect(handle).toHaveAttribute("aria-valuenow", "500");
+    expect(handle).toHaveAttribute("aria-valuemin", "320");
+    expect(handle).toHaveAttribute("aria-valuemax", "900");
+    expect(handle).toHaveAttribute("aria-controls", panel.id);
+    expect(handle).toHaveAccessibleDescription(/arrow keys to resize/);
+
+    fireEvent.keyDown(handle, { key: "ArrowRight" });
+    expect(panel.style.width).toBe("524px");
+    fireEvent.keyDown(handle, { key: "ArrowLeft", shiftKey: true });
+    expect(panel.style.width).toBe("428px");
+    fireEvent.keyDown(handle, { key: "Home" });
+    expect(panel.style.width).toBe("320px");
+    fireEvent.keyDown(handle, { key: "ArrowLeft" });
+    expect(panel.style.width).toBe("320px");
+    fireEvent.keyDown(handle, { key: "End" });
+    expect(handle).toHaveAttribute("aria-valuenow", "900");
+    fireEvent.keyDown(handle, { key: "Enter" });
+    expect(panel.style.width).toBe("500px");
+  });
+
+  it("closing Find returns focus to the Find button (#1163)", async () => {
+    const user = userEvent.setup();
+    renderPanel({ content: "the cat sat" });
+    await user.click(screen.getByRole("button", { name: "Find in document" }));
+    expect(screen.getByRole("textbox", { name: "Search query" })).toHaveFocus();
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("textbox", { name: "Search query" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Find in document" })).toHaveFocus();
+  });
+
   it("clamps the resize width to the configured min/max range", () => {
     const { container } = renderPanel();
     const handle = screen.getByRole("separator", { name: "Resize Document View panel. Press Enter to reset to the default width." });
@@ -374,6 +408,20 @@ describe("DocumentViewPanel", () => {
       expect(countText(container)).toBe("1 of 2");
       expect(matches[0]).toHaveClass("document-view-search-match-current");
       expect(matches[1]).not.toHaveClass("document-view-search-match-current");
+    });
+
+    it("counts and navigates a phrase across inline formatting as one match (#1167)", async () => {
+      const user = userEvent.setup();
+      const { container } = renderPanel({ content: "**Solar** output rose. Solar output fell." });
+      await user.click(screen.getByRole("button", { name: "Find in document" }));
+      await user.type(screen.getByRole("textbox", { name: "Search query" }), "solar output");
+      expect(countText(container)).toBe("1 of 2");
+      const first = container.querySelectorAll('[data-search-match-index="0"]');
+      expect(first).toHaveLength(2);
+      for (const fragment of first) expect(fragment).toHaveClass("document-view-search-match-current");
+      await user.click(screen.getByRole("button", { name: "Next match" }));
+      expect(countText(container)).toBe("2 of 2");
+      for (const fragment of first) expect(fragment).not.toHaveClass("document-view-search-match-current");
     });
 
     it("Next/Previous move the current-match highlight, wrapping around at either end", async () => {
