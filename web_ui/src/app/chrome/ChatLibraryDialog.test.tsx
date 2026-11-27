@@ -443,6 +443,37 @@ describe("ChatLibraryDialog on the kit", () => {
     expect(screen.getByText("Second chat")).toBeInTheDocument();
   });
 
+  it("Clear search keeps the workspace, status and tag scope; Clear filters resets it (#1139)", async () => {
+    const { user, intents } = setup();
+    await user.click(screen.getByText("open library"));
+    await chooseWorkspace(user, "Default");
+    await user.click(screen.getByRole("radio", { name: "Starred" }));
+    await user.click(screen.getByRole("button", { name: "design" }));
+    await user.type(screen.getByRole("searchbox", { name: "Search chats" }), "no such chat");
+    expect(screen.getByText("No matching chats")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Clear search" }));
+    expect(screen.getByRole("searchbox", { name: "Search chats" })).toHaveValue("");
+    expect(screen.getByText("First chat")).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: "Starred" })).toBeChecked();
+    expect(screen.getByRole("button", { name: "design" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "Workspace" })).toHaveTextContent("Default");
+    await user.click(screen.getByRole("button", { name: "New chat" }));
+    expect(intents).toContainEqual(["app-chat-library", "newChat", [1]]);
+  });
+
+  it("an empty filtered view with no query offers only Clear filters (#1139)", async () => {
+    const { user } = setup();
+    await user.click(screen.getByText("open library"));
+    await chooseWorkspace(user, "Work");
+    await user.click(screen.getByRole("radio", { name: "Archived" }));
+    expect(screen.getByText("No matching chats")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Clear search" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Clear filters" }));
+    expect(screen.getByRole("radio", { name: "All" })).toBeChecked();
+    expect(screen.getByText("First chat")).toBeInTheDocument();
+  });
+
   it("canceling the inline pencil rename does not request a mutation", async () => {
     const { user, intents } = setup();
     await user.click(screen.getByText("open library"));

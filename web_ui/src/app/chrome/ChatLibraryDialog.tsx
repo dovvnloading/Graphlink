@@ -129,6 +129,7 @@ export function ChatLibraryDialog({ transport, store }: { transport: WsTransport
     });
   }, [workspaceRows, query, filter, selectedTags]);
   const groups = useMemo(() => groupRows(filtered), [filtered]);
+  const filtersActive = filter !== "all" || selectedTags.size > 0 || selectedWorkspaceId !== null;
   const activeWorkspace = workspaces.find((workspace) => workspace.id === workspaceSettingsId);
 
   async function confirmNavigation(title: string): Promise<boolean> {
@@ -384,7 +385,14 @@ export function ChatLibraryDialog({ transport, store }: { transport: WsTransport
             actions={<Button iconStart="chat-plus" onClick={() => { void newChat(); }}>New chat</Button>} />
         ) : filtered.length === 0 ? (
           <EmptyState icon="search" title="No matching chats" body="Try another search or change the filters."
-            actions={<Button onClick={() => { setQuery(""); setFilter("all"); setSelectedTags(new Set()); setSelectedWorkspaceId(null); }}>{query.trim() ? "Clear search" : "Clear filters"}</Button>} />
+            actions={<>
+              {/* Clear search keeps the chosen scope; Clear filters is the
+                  separate, explicitly labelled reset of the scope (#1139). */}
+              {query.trim() && <Button onClick={() => setQuery("")}>Clear search</Button>}
+              {filtersActive && <Button variant={query.trim() ? "ghost" : "secondary"} onClick={() => {
+                setFilter("all"); setSelectedTags(new Set()); setSelectedWorkspaceId(null);
+              }}>Clear filters</Button>}
+            </>} />
         ) : (
           <div className="chat-library-groups">
             {groups.map((group) => (

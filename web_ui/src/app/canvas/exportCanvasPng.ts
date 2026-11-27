@@ -172,6 +172,9 @@ export async function waitForChartPlaceholdersToClear(
   }
 }
 
+/** What an export did, so callers can tell the user (#1130). */
+export type ExportPngOutcome = "exported" | "empty" | "no-canvas" | "failed";
+
 export async function exportCanvasAsPng(
   rf: Pick<ReactFlowInstance, "getNodes" | "getViewport" | "setViewport">,
   backgroundColorVar: string,
@@ -191,7 +194,7 @@ export async function exportCanvasAsPng(
   // the only fix that doesn't depend on the live container happening to
   // already be at least 1920x1080.
   setExportInProgress: (value: boolean) => void = () => {},
-): Promise<void> {
+): Promise<ExportPngOutcome> {
   const nodes = rf.getNodes();
   if (nodes.length === 0) {
     // An empty canvas has nothing worth exporting - silent no-op rather
@@ -199,13 +202,13 @@ export async function exportCanvasAsPng(
     // established "nothing to do yet" guards (autosave's empty-canvas
     // skip, saveChat's own "nothing was added" guard). Deliberately before
     // setExportInProgress(true) below - nothing to suspend virtualization
-    // for either.
-    return;
+    // for either. The caller explains the outcome.
+    return "empty";
   }
 
   const viewportEl = document.querySelector(".react-flow__viewport") as HTMLElement | null;
   if (!viewportEl) {
-    return;
+    return "no-canvas";
   }
 
   const bounds = getNodesBounds(nodes);
@@ -238,8 +241,10 @@ export async function exportCanvasAsPng(
     anchor.href = dataUrl;
     anchor.download = timestampedFilename();
     anchor.click();
+    return "exported";
   } catch (error) {
     console.error("[export-png] Export failed:", error);
+    return "failed";
   } finally {
     await rf.setViewport(userViewport);
     setExportInProgress(false);

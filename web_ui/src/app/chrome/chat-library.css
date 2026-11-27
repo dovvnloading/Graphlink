@@ -183,6 +183,7 @@
   text-overflow: ellipsis;
 }
 .quick-switcher-result-meta { display: block; font-size: var(--gl-text-xs); color: var(--gl-surface-text-muted); }
+.quick-switcher-status { margin: 0; font-size: var(--gl-text-xs); color: var(--gl-surface-text-muted); }
 .quick-switcher-shortcuts {
   display: flex;
   flex-wrap: wrap;

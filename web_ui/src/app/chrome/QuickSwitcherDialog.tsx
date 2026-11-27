@@ -5,6 +5,7 @@ import type { WsTransport } from "../../lib/ws/transport";
 import { Dialog, useOverlays } from "../overlays/overlays";
 import { useConfirm } from "../ui/ConfirmDialog";
 import { EmptyState } from "../ui/EmptyState";
+import { InlineAlert } from "../ui/InlineAlert";
 import { TextField } from "../ui/TextField";
 import { Kbd } from "../ui/Kbd";
 import { Icon } from "../ui/icons/Icon";
@@ -23,6 +24,15 @@ export function QuickSwitcherDialog({ transport }: { transport: WsTransport }) {
   const [selectedIndex, setSelectedIndex] = useState(0);
   const resultsRef = useRef<HTMLUListElement>(null);
   const isOpen = overlays.isOpen("quick-switcher");
+  // One switch at a time (#1138). The ref blocks a second Enter fired before
+  // React re-renders; the state drives the visible pending indicator.
+  const pendingRef = useRef(false);
+  const [pendingTitle, setPendingTitle] = useState<string | null>(null);
+  const [switchError, setSwitchError] = useState("");
+  // Read after awaits: a late reply must not close a surface the user
+  // opened since, or a switcher they already dismissed.
+  const isOpenRef = useRef(isOpen);
+  useEffect(() => { isOpenRef.current = isOpen; }, [isOpen]);
 
   // Global palette/shortcut callers cannot use hooks. They obtain the same
   // nested kit confirmation from this always-mounted component.
@@ -44,6 +54,7 @@ export function QuickSwitcherDialog({ transport }: { transport: WsTransport }) {
     if (isOpen) {
       setQuery("");
       setSelectedIndex(0);
+      setSwitchError("");
     }
   }
 
@@ -61,7 +72,11 @@ export function QuickSwitcherDialog({ transport }: { transport: WsTransport }) {
     if (isOpen) resultsRef.current?.querySelector('[aria-selected="true"]')?.scrollIntoView?.({ block: "nearest" });
   }, [isOpen, clampedIndex]);
 
-  async function jumpTo(id: number) {
+  async function jumpTo(id: number, title: string) {
+    if (pendingRef.current) return;
+    pendingRef.current = true;
+    setPendingTitle(title);
+    setSwitchError("");
     try {
       const outcome = await transport.request("app-chat-library", "loadChat", [id]);
       if (outcome === "discard-required") {
@@ -75,9 +90,14 @@ export function QuickSwitcherDialog({ transport }: { transport: WsTransport }) {
         const retry = await transport.request("app-chat-library", "loadChat", [id, true]);
         if (retry === "discard-required") return;
       }
-      overlays.close();
+      if (isOpenRef.current) overlays.close();
     } catch (error) {
       console.error("[quick-switcher] Could not switch graphs:", error);
+      // A timeout may still have switched; say only what is known.
+      setSwitchError(`Couldn't confirm that "${title}" opened. Check the connection, then try again.`);
+    } finally {
+      pendingRef.current = false;
+      setPendingTitle(null);
     }
   }
 
@@ -91,7 +111,7 @@ export function QuickSwitcherDialog({ transport }: { transport: WsTransport }) {
     } else if (event.key === "Enter") {
       event.preventDefault();
       const row = filtered[clampedIndex];
-      if (row) void jumpTo(row.id);
+      if (row) void jumpTo(row.id, row.title);
     }
   }
 
@@ -103,7 +123,7 @@ export function QuickSwitcherDialog({ transport }: { transport: WsTransport }) {
         prefixIcon="search"
         suffix={{ type: "clear" }}
         value={query}
-        onValueChange={(value) => { setQuery(value); setSelectedIndex(0); }}
+        onValueChange={(value) => { setQuery(value); setSelectedIndex(0); setSwitchError(""); }}
         placeholder="Jump to a graph…"
         onKeyDown={onKeyDown}
         role="combobox"
@@ -113,10 +133,13 @@ export function QuickSwitcherDialog({ transport }: { transport: WsTransport }) {
         autoComplete="off"
         spellCheck={false}
       />
+      {pendingTitle !== null && <p className="quick-switcher-status" role="status">Opening "{pendingTitle}"…</p>}
+      {switchError && <InlineAlert variant="error" title="Graph didn't open" body={switchError} />}
       {filtered.length === 0 ? (
         <EmptyState icon="search" title="No matching graphs" body="Try a different title or open the chat library." />
       ) : (
-        <ul id="quick-switcher-results" className="quick-switcher-results" role="listbox" aria-label="Graphs" ref={resultsRef}>
+        <ul id="quick-switcher-results" className="quick-switcher-results" role="listbox" aria-label="Graphs" ref={resultsRef}
+          aria-busy={pendingTitle !== null}>
           {filtered.map((row, index) => {
             const stamp = row.updatedLabel;
             return (
@@ -129,7 +152,7 @@ export function QuickSwitcherDialog({ transport }: { transport: WsTransport }) {
                 aria-selected={index === clampedIndex}
                 className={"quick-switcher-result" + (index === clampedIndex ? " is-selected" : "")}
                 onMouseEnter={() => setSelectedIndex(index)}
-                onClick={() => { void jumpTo(row.id); }}
+                onClick={() => { void jumpTo(row.id, row.title); }}
               >
                 <Icon name="chat" size="md" />
                 <span className="quick-switcher-result-copy">
