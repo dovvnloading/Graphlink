@@ -8,7 +8,7 @@ import type { ComparisonModel } from "./composerStore";
 /** Multi-model choices load only when Compare opens; 2–4 selectable routes. */
 export function ModelComparisonPicker({
   comparisonMode, comparisonOptions, selectedComparisonKeys, selectedComparisonModels,
-  comparisonLoading, comparisonError, comparisonKey, setSelectedComparisonKeys, onUseSingleModel,
+  comparisonLoading, comparisonError, comparisonKey, setSelectedComparisonKeys, onUseSingleModel, onApply,
 }: {
   comparisonMode: boolean;
   comparisonOptions: ComparisonModel[];
@@ -19,12 +19,14 @@ export function ModelComparisonPicker({
   comparisonKey: (model: ComparisonModel) => string;
   setSelectedComparisonKeys: Dispatch<SetStateAction<string[]>>;
   onUseSingleModel: () => void;
+  /** Done: commit the pending choices as the send mode (#1137). */
+  onApply: () => void;
 }) {
   const overlays = useOverlays();
   return (
     <Popover anchored name="model-comparison" label="Compare models"
       className="reasoning-popover model-picker-popover">
-      <p>Choose 2–4 models. Each answer streams into its own canvas branch.</p>
+      <p>Choose 2–4 models, then select Done. Each answer streams into its own canvas branch.</p>
       {comparisonLoading && <p role="status"><Spinner size={14} decorative /> Loading configured models…</p>}
       {comparisonError && <p role="alert">{comparisonError}</p>}
       {!comparisonLoading && !comparisonError && comparisonOptions.length === 0 && (
@@ -46,14 +48,15 @@ export function ModelComparisonPicker({
       </div>
       <p role="status">
         {selectedComparisonModels.length}/4 selected
-        {comparisonMode && selectedComparisonModels.length < 2 ? " · choose at least two" : ""}
+        {selectedComparisonModels.length < 2 ? " · choose at least two" : ""}
+        {comparisonMode ? " · comparison is on" : ""}
       </p>
       <div className="composer-comparison-actions">
         <Button variant="ghost" onClick={() => { onUseSingleModel(); overlays.close(); }}>
           Use single-model send
         </Button>
         <Button variant="secondary" disabled={selectedComparisonModels.length < 2}
-          onClick={() => overlays.close()}>Done</Button>
+          onClick={() => { onApply(); overlays.close(); }}>Done</Button>
       </div>
     </Popover>
   );
