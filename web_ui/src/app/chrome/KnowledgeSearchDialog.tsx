@@ -261,11 +261,17 @@ export function KnowledgeSearchDialog({
   const firstDocument = currentDocumentPage * DOCUMENT_PAGE_SIZE;
   const visibleDocuments = documents.slice(firstDocument, firstDocument + DOCUMENT_PAGE_SIZE);
   const [loadingDocuments, setLoadingDocuments] = useState(true);
+  // Whether a list read has ever succeeded: a failed first read is an
+  // error with Retry, never a confirmed empty library (#1164).
+  const [documentsLoaded, setDocumentsLoaded] = useState(false);
+  const [refreshingDocuments, setRefreshingDocuments] = useState(false);
   const [libraryError, setLibraryError] = useState<string | null>(null);
   const [documentAction, setDocumentAction] = useState<number | null>(null);
   const [documentStatus, setDocumentStatus] = useState<string | null>(null);
   const [watchedFolders, setWatchedFolders] = useState<WatchedFolder[]>([]);
   const [loadingWatches, setLoadingWatches] = useState(true);
+  const [watchesLoaded, setWatchesLoaded] = useState(false);
+  const [refreshingWatches, setRefreshingWatches] = useState(false);
   const [watchError, setWatchError] = useState<string | null>(null);
   const [watchAction, setWatchAction] = useState<string | null>(null);
   const latestWatchRequest = useRef(0);
@@ -286,6 +292,7 @@ export function KnowledgeSearchDialog({
         if (requestId !== latestLibraryRequest.current) return;
         if (!result || !Array.isArray(result.documents)) throw new Error("Invalid document list response.");
         setDocuments(result.documents);
+        setDocumentsLoaded(true);
         setLibraryError(null);
       })
       .catch((cause: unknown) => {
@@ -294,7 +301,10 @@ export function KnowledgeSearchDialog({
         }
       })
       .finally(() => {
-        if (requestId === latestLibraryRequest.current) setLoadingDocuments(false);
+        if (requestId === latestLibraryRequest.current) {
+          setLoadingDocuments(false);
+          setRefreshingDocuments(false);
+        }
       });
   }, [transport]);
 
@@ -306,6 +316,7 @@ export function KnowledgeSearchDialog({
         const result = value as { folders: WatchedFolder[] } | null;
         if (!result || !Array.isArray(result.folders)) throw new Error("Invalid watched folder list response.");
         setWatchedFolders(result.folders);
+        setWatchesLoaded(true);
         setWatchError(null);
       })
       .catch((cause: unknown) => {
@@ -314,9 +325,12 @@ export function KnowledgeSearchDialog({
         }
       })
       .finally(() => {
-        if (requestId === latestWatchRequest.current) setLoadingWatches(false);
+        if (requestId === latestWatchRequest.current) {
+          setLoadingWatches(false);
+          setRefreshingWatches(false);
+        }
       });
-  }, [transport]);
+  }, [transport, setRefreshingWatches]);
 
   const knowledgeOpen = overlays.isOpen("knowledge");
   useEffect(() => {
@@ -391,7 +405,12 @@ export function KnowledgeSearchDialog({
   }
 
   async function uploadFiles(files: File[]) {
-    if (files.length === 0 || picking || uploadProgress || importJobs.some(isActive)) return;
+    if (files.length === 0) return;
+    if (importBlockedReason) {
+      // A blocked drop never starts or queues an upload, and says why (#1165).
+      setImportError(`Those files weren't added. ${importBlockedReason}`);
+      return;
+    }
     const total = files.reduce((sum, file) => sum + file.size, 0);
     if (files.length > 10_000 || total > MAX_JOB_BYTES || files.some((file) => file.size > MAX_FILE_BYTES)) {
       setImportError("Drop limit: 10,000 files, 25 MiB per file, 500 MiB per job.");
@@ -583,6 +602,12 @@ export function KnowledgeSearchDialog({
   }
 
   const importBusy = picking !== null || uploadProgress !== null || importJobs.some(isActive);
+  // The same readiness rule for Add files, Add folder and drag-and-drop.
+  const importBlockedReason = picking !== null ? "Finish with the file picker first."
+    : uploadProgress !== null ? "Wait for the current upload to finish, or cancel it."
+      : importJobs.some(isActive) ? "Wait for the current import to finish, or cancel it."
+        : watchAction === "addWatchedFolder:all" ? "Wait for the watched folder to be added."
+          : null;
   const documentActionsBusy = documentAction !== null || importJobs.some(isActive) || uploadProgress !== null;
 
   return (
@@ -631,7 +656,7 @@ export function KnowledgeSearchDialog({
       </section>
       <Tabs label="Knowledge library sections" defaultValue="documents" items={[
         {
-          id: "documents", label: "Documents (" + documents.length + ")",
+          id: "documents", label: documentsLoaded ? "Documents (" + documents.length + ")" : "Documents",
           content: (
             <section className="knowledge-library-panel" aria-label="Workspace documents">
               <div className="knowledge-library-toolbar">
@@ -640,14 +665,22 @@ export function KnowledgeSearchDialog({
                   loading={picking === "files"} onClick={() => beginImport("files")}>Add files</Button>
                 <Button iconStart="folder" disabled={importBusy || watchAction === "addWatchedFolder:all"}
                   loading={picking === "folder"} onClick={() => beginImport("folder")}>Add folder</Button>
-                <Button iconStart="refresh" size="sm" onClick={() => void refreshDocuments()}>Refresh</Button>
+                <Button iconStart="refresh" size="sm" loading={refreshingDocuments}
+                  onClick={() => { setRefreshingDocuments(true); void refreshDocuments(); }}>Refresh</Button>
               </div>
               <p className="knowledge-import-hint">
                 PDF, DOCX, XLSX, Markdown, text, CSV, JSON, HTML and code · 25 MB per file, 500 MB per job
               </p>
               <div className={"knowledge-drop-zone" + (dragging ? " knowledge-drop-zone-active" : "")}
                 role="region" aria-label="Drop files to index"
-                onDragOver={(event) => { event.preventDefault(); setDragging(true); }}
+                onDragOver={(event) => {
+                  event.preventDefault();
+                  if (importBlockedReason) {
+                    event.dataTransfer.dropEffect = "none";
+                    return;
+                  }
+                  setDragging(true);
+                }}
                 onDragLeave={(event) => {
                   if (!event.currentTarget.contains(event.relatedTarget as Node)) setDragging(false);
                 }}
@@ -660,7 +693,9 @@ export function KnowledgeSearchDialog({
                   <div className="knowledge-drop-overlay">
                     <div className="knowledge-drop-overlay-content"><Icon name="upload" /> Drop files to index</div>
                   </div>
-                ) : documents.length === 0 && !loadingDocuments ? (
+                ) : importBlockedReason ? (
+                  <div className="knowledge-drop-placeholder">Dropping files is paused. {importBlockedReason}</div>
+                ) : documentsLoaded && documents.length === 0 && !loadingDocuments ? (
                   <EmptyState icon="upload" title="No documents yet"
                     body="Drag files here or choose Add files to index sources in this workspace." />
                 ) : (
@@ -694,7 +729,15 @@ export function KnowledgeSearchDialog({
                   {job.warnings.length > 0 && <p className="knowledge-import-stats">{job.warnings[0]}</p>}
                 </div>
               ))}
-              {libraryError && <p role="alert" className="knowledge-library-error">{libraryError}</p>}
+              {libraryError && <div className="knowledge-library-error-block">
+                <p role="alert" className="knowledge-library-error">
+                  {documentsLoaded
+                    ? `Couldn't refresh the documents: ${libraryError} The list below is the last one loaded and may be out of date.`
+                    : `Couldn't load the documents: ${libraryError}`}
+                </p>
+                <Button size="sm" loading={refreshingDocuments}
+                  onClick={() => { setRefreshingDocuments(true); void refreshDocuments(); }}>Retry</Button>
+              </div>}
               {documentStatus && <p role="status" className="knowledge-library-status">{documentStatus}</p>}
               {loadingDocuments ? <p role="status" className="knowledge-library-muted">Loading documents…</p> :
                 documents.length > 0 && (
@@ -747,7 +790,7 @@ export function KnowledgeSearchDialog({
           ),
         },
         {
-          id: "watches", label: "Watched folders (" + watchedFolders.length + ")",
+          id: "watches", label: watchesLoaded ? "Watched folders (" + watchedFolders.length + ")" : "Watched folders",
           content: (
             <section className="knowledge-library-panel" aria-label="Watched folders">
               <div className="knowledge-library-toolbar">
@@ -756,14 +799,23 @@ export function KnowledgeSearchDialog({
                 <Button iconStart="refresh"
                   disabled={watchAction !== null || watchedFolders.length === 0 || watchedFolders.every(isWatchSyncing)}
                   onClick={() => void watchedFolderIntent("syncWatchedFolders")}>Sync all now</Button>
-                <Button size="sm" onClick={() => void refreshWatchedFolders()}>Refresh watched folders</Button>
+                <Button size="sm" loading={refreshingWatches}
+                  onClick={() => { setRefreshingWatches(true); void refreshWatchedFolders(); }}>Refresh watched folders</Button>
               </div>
               <p className="knowledge-library-muted">
                 Watched folders sync automatically about every 10 minutes. Removing a watch keeps indexed documents.
               </p>
-              {watchError && <p role="alert" className="knowledge-library-error">{watchError}</p>}
+              {watchError && <div className="knowledge-library-error-block">
+                <p role="alert" className="knowledge-library-error">
+                  {watchesLoaded
+                    ? `Couldn't refresh the watched folders: ${watchError} The list below may be out of date.`
+                    : `Couldn't load the watched folders: ${watchError}`}
+                </p>
+                <Button size="sm" loading={refreshingWatches}
+                  onClick={() => { setRefreshingWatches(true); void refreshWatchedFolders(); }}>Retry</Button>
+              </div>}
               {loadingWatches ? <p role="status" className="knowledge-library-muted">Loading watched folders…</p> :
-                watchedFolders.length === 0 ? (
+                !watchesLoaded ? null : watchedFolders.length === 0 ? (
                   <EmptyState icon="folder" title="No watched folders yet"
                     body="Add a watched folder to keep local files indexed automatically." />
                 ) : (

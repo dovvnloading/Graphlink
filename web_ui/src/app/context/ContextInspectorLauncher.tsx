@@ -51,7 +51,22 @@ function ContextInspectorSurface({
   const selectedId = useSyncExternalStore(sceneStore.subscribe, sceneStore.getSelectedNodeId);
   const replyTargetId = useSyncExternalStore(sceneStore.subscribe, sceneStore.getReplyTargetNodeId);
   const [revision, setRevision] = useState(0);
-  const [response, setResponse] = useState<{ key: string; preview: ContextPreview | null; error: string | null } | null>(null);
+  const [response, setResponse] = useState<{
+    key: string; draft: string; preview: ContextPreview | null; error: string | null;
+  } | null>(null);
+  // Each opening is its own request, so a preview from an earlier visit is
+  // never shown as the next send while the new one loads (#1161).
+  const [openCount, setOpenCount] = useState(0);
+  const [wasOpen, setWasOpen] = useState(isOpen);
+  if (isOpen !== wasOpen) {
+    setWasOpen(isOpen);
+    if (isOpen) setOpenCount((count) => count + 1);
+  }
+  const draftText = useSyncExternalStore(composerStore.subscribe, () => composerStore.getComposer().draft.text);
+  const routeKey = useSyncExternalStore(composerStore.subscribe, () => {
+    const route = composerStore.getComposer().route;
+    return `${route?.provider ?? ""}:${route?.modelId ?? ""}`;
+  });
 
   const selected = scene.nodes.find((node) => node.id === selectedId && node.kind === "chat");
   const replyTarget = scene.nodes.find((node) => node.id === replyTargetId && node.kind === "chat");
@@ -60,11 +75,14 @@ function ContextInspectorSurface({
     ? replyTarget?.id ?? selected?.id ?? lastChat?.id ?? null
     : targetNodeId;
 
-  const requestKey = `${nodeId ?? ""}:${useKnowledge ?? "auto"}:${revision}`;
+  // A changed target, knowledge choice or model is a new request; a changed
+  // draft only marks the result out of date, so typing sends nothing.
+  const requestKey = `${nodeId ?? ""}:${useKnowledge ?? "auto"}:${revision}:${openCount}:${routeKey}`;
   const currentResponse = response?.key === requestKey ? response : null;
   const preview = currentResponse?.preview;
   const error = currentResponse?.error;
   const loading = isOpen && !!nodeId && !currentResponse;
+  const stale = !!currentResponse?.preview && currentResponse.draft !== draftText;
 
   useEffect(() => {
     if (!isOpen || !nodeId) return;
@@ -76,11 +94,12 @@ function ContextInspectorSurface({
     void transport.request("scene", "inspectChatContext", args).then(
       (result) => {
         if (disposed) return;
-        setResponse({ key: requestKey, preview: result as ContextPreview, error: null });
+        setResponse({ key: requestKey, draft, preview: result as ContextPreview, error: null });
       },
       (cause: unknown) => {
         if (disposed) return;
-        setResponse({ key: requestKey, preview: null, error: cause instanceof Error ? cause.message : "Context inspection failed" });
+        setResponse({ key: requestKey, draft, preview: null,
+          error: cause instanceof Error ? cause.message : "Context inspection failed" });
       },
     );
     return () => { disposed = true; };
@@ -103,7 +122,7 @@ function ContextInspectorSurface({
       {nodeId && (
         <Popover anchored name={name} label="Next chat context" className="context-inspector-popover">
           <Suspense fallback={<p role="status"><Spinner size={14} decorative /> Loading context inspector…</p>}>
-            <LazyContextInspectorPanel preview={preview} error={error} loading={loading}
+            <LazyContextInspectorPanel preview={preview} error={error} loading={loading} stale={stale}
               onRefresh={() => setRevision((n) => n + 1)}
               onClose={() => overlays.closeLayer(name)} />
           </Suspense>

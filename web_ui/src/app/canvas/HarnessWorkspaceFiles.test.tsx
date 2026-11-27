@@ -95,6 +95,40 @@ describe("HarnessWorkspaceFiles", () => {
       .toBeInTheDocument();
   });
 
+  it("a failed Next page keeps the confirmed page and its controls, and Retry recovers (#1162)", async () => {
+    const user = userEvent.setup();
+    let failNext = true;
+    const onList = vi.fn(async (path: string, cursor?: string): Promise<HarnessWorkspaceListing> => {
+      if (cursor === "page-one-end" && failNext) throw new Error("socket unavailable");
+      return {
+        ...listing(path),
+        entries: [{ name: cursor ? "file_300.txt" : "file_000.txt", path: cursor ? "file_300.txt" : "file_000.txt", isDir: false, size: 1 }],
+        truncated: !cursor, nextCursor: cursor ? null : "page-one-end",
+      };
+    });
+    render(<HarnessWorkspaceFiles onList={onList} onOpen={vi.fn(async () => {})} onReveal={vi.fn()} />);
+    await user.click(screen.getByRole("button", { name: "Browse files" }));
+    await screen.findByRole("button", { name: "Open file_000.txt in Document View" });
+    await user.click(screen.getByRole("button", { name: "Next page" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(/Couldn't load \/: socket unavailable\. Still showing/);
+    // The confirmed first page and its pagination stay usable.
+    expect(screen.getByRole("button", { name: "Open file_000.txt in Document View" })).toBeInTheDocument();
+    expect(screen.getByText("Page 1")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Next page" })).toBeEnabled();
+
+    failNext = false;
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await screen.findByRole("button", { name: "Open file_300.txt in Document View" })).toBeInTheDocument();
+    expect(screen.getByText("Page 2")).toBeInTheDocument();
+    // Refresh re-reads the page on screen, not the first page.
+    await user.click(screen.getByRole("button", { name: "Refresh workspace files" }));
+    await waitFor(() => expect(onList).toHaveBeenLastCalledWith("", "page-one-end"));
+    expect(screen.getByText("Page 2")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Previous page" }));
+    expect(await screen.findByRole("button", { name: "Open file_000.txt in Document View" })).toBeInTheDocument();
+    expect(screen.getByText("Page 1")).toBeInTheDocument();
+  });
+
   it("refreshes the root and removes stale entries when a trusted folder is revoked", async () => {
     const user = userEvent.setup();
     let trustChanged!: () => void;

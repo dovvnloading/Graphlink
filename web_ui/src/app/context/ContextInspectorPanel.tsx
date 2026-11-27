@@ -48,10 +48,12 @@ export type ContextPreview = {
 };
 
 
-export function ContextInspectorPanel({ preview, error, loading, onRefresh, onClose }: {
+export function ContextInspectorPanel({ preview, error, loading, stale = false, onRefresh, onClose }: {
   preview: ContextPreview | null | undefined;
   error: string | null | undefined;
   loading: boolean;
+  /** The message changed since this preview was taken (#1161). */
+  stale?: boolean;
   onRefresh: () => void;
   onClose: () => void;
 }) {
@@ -66,7 +68,10 @@ export function ContextInspectorPanel({ preview, error, loading, onRefresh, onCl
             </div>
           </header>
           {loading && <p role="status"><Spinner size={14} decorative /> Inspecting context…</p>}
-          {error && <p role="alert">{error}</p>}
+          {error && <p role="alert">Couldn't inspect the context: {error} Select Refresh to try again.</p>}
+          {stale && <p role="status" className="context-inspector-stale">
+            Your message changed since this preview. Select Refresh to see what the next send will include.
+          </p>}
           {preview && (
             <>
               <p className="context-inspector-meta">

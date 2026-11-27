@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { SceneStore } from "../canvas/sceneStore";
 import type { ComposerStore } from "../chrome/composerStore";
@@ -17,8 +17,13 @@ function fixture(options: { noChat?: boolean; selected?: string | null; target?:
     getSelectedNodeId: () => options.selected ?? null,
     getReplyTargetNodeId: () => options.target ?? null,
   } as unknown as SceneStore;
-  const composer = { draft: { text: "draft one" } };
-  const composerStore = { getComposer: () => composer } as unknown as ComposerStore;
+  const composer = { draft: { text: "draft one" }, route: { provider: "Ollama", modelId: "local-model" } };
+  const composerListeners = new Set<() => void>();
+  const composerStore = {
+    getComposer: () => composer,
+    subscribe: (listener: () => void) => { composerListeners.add(listener); return () => composerListeners.delete(listener); },
+  } as unknown as ComposerStore;
+  const emitComposer = () => act(() => { for (const listener of composerListeners) listener(); });
   const request = vi.fn().mockResolvedValue({
     nodeId: options.target ?? options.selected ?? "n2",
     provider: "ollama",
@@ -38,7 +43,7 @@ function fixture(options: { noChat?: boolean; selected?: string | null; target?:
     ],
   });
   const transport = { request } as unknown as WsTransport;
-  return { sceneStore, composerStore, composer, transport, request };
+  return { sceneStore, composerStore, composer, emitComposer, transport, request };
 }
 
 describe("Context Inspector", () => {
@@ -94,5 +99,45 @@ describe("Context Inspector", () => {
     fireEvent.click(screen.getByRole("button", { name: "Context Inspector" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("offline");
     expect(screen.queryByText(/prompt tokens/)).not.toBeInTheDocument();
+  });
+
+  it("reopening never shows the previous visit's preview as the next send (#1161)", async () => {
+    const f = fixture({ selected: "n1" });
+    render(<ContextInspectorLauncher sceneStore={f.sceneStore} composerStore={f.composerStore} transport={f.transport} />);
+    fireEvent.click(screen.getByRole("button", { name: "Context Inspector" }));
+    expect(await screen.findByText(/local-model/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Close context inspector" }));
+
+    f.composer.draft.text = "a different question";
+    f.request.mockImplementationOnce(() => new Promise(() => {}));
+    fireEvent.click(screen.getByRole("button", { name: "Context Inspector" }));
+    expect(await screen.findByText("Inspecting context…")).toBeInTheDocument();
+    expect(screen.queryByText(/local-model/)).toBeNull();
+    expect(f.request).toHaveBeenLastCalledWith("scene", "inspectChatContext", ["n1", "a different question"]);
+  });
+
+  it("an edit while open marks the preview out of date without sending on each keystroke (#1161)", async () => {
+    const f = fixture({ selected: "n1" });
+    render(<ContextInspectorLauncher sceneStore={f.sceneStore} composerStore={f.composerStore} transport={f.transport} />);
+    fireEvent.click(screen.getByRole("button", { name: "Context Inspector" }));
+    expect(await screen.findByText(/local-model/)).toBeInTheDocument();
+    f.composer.draft.text = "draft one, edited";
+    f.emitComposer();
+    expect(screen.getByText(/Your message changed since this preview/)).toBeInTheDocument();
+    expect(f.request).toHaveBeenCalledTimes(1);
+  });
+
+  it("a model change requests a fresh preview and ignores the older reply (#1161)", async () => {
+    const f = fixture({ selected: "n1" });
+    let finishOld: (value: unknown) => void = () => {};
+    f.request.mockImplementationOnce(() => new Promise((resolve) => { finishOld = resolve; }));
+    render(<ContextInspectorLauncher sceneStore={f.sceneStore} composerStore={f.composerStore} transport={f.transport} />);
+    fireEvent.click(screen.getByRole("button", { name: "Context Inspector" }));
+    f.composer.route = { provider: "OpenAI", modelId: "cloud-model" };
+    f.emitComposer();
+    await waitFor(() => expect(f.request).toHaveBeenCalledTimes(2));
+    expect(await screen.findByText(/local-model/)).toBeInTheDocument();
+    await act(async () => { finishOld({ nodeId: "n1", provider: "stale", model: "old-route", sources: [] }); });
+    expect(screen.queryByText(/old-route/)).toBeNull();
   });
 });

@@ -747,3 +747,89 @@ describe("KnowledgeSearchDialog kit library", () => {
   });
 
 });
+
+describe("KnowledgeSearchDialog list reads and drop readiness (#1164, #1165)", () => {
+  async function open(handler: (intent: string) => Promise<unknown>) {
+    const user = userEvent.setup();
+    const fake = makeRequestOnlyTransport();
+    fake.transport.subscribe = () => () => {};
+    fake.transport.fireIntent = (topic, intent, args = []) => { fake.intents.push([topic, intent, args]); };
+    fake.request.mockImplementation(async (_topic, intent) => handler(intent));
+    render(
+      <OverlayProvider>
+        <OpenKnowledgeButton />
+        <KnowledgeSearchDialog transport={fake.transport} />
+        <ConfirmDialog />
+      </OverlayProvider>,
+    );
+    await user.click(screen.getByRole("button", { name: "open knowledge" }));
+    return { user, ...fake };
+  }
+  const doc = { documentId: 1, title: "Notes.md", type: "md", sizeBytes: 10, chunks: 1, addedAt: "2026-11-01T00:00:00Z" };
+
+  it("a failed first read shows Retry, not an empty library, and retry recovers (#1164)", async () => {
+    let fail = true;
+    const { user } = await open(async (intent) => {
+      if (intent === "listDocuments") {
+        if (fail) throw new Error("socket unavailable");
+        return { documents: [doc] };
+      }
+      if (intent === "listWatchedFolders") return { folders: [] };
+      return {};
+    });
+    expect(await screen.findByText(/Couldn't load the documents: socket unavailable/)).toBeInTheDocument();
+    expect(screen.queryByText("No documents yet")).toBeNull();
+    expect(screen.getByRole("tab", { name: "Documents" })).toBeInTheDocument();
+    fail = false;
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await screen.findByText("Notes.md")).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Documents (1)" })).toBeInTheDocument();
+  });
+
+  it("a confirmed empty list still shows the onboarding empty state (#1164)", async () => {
+    await open(async (intent) => (intent === "listDocuments" ? { documents: [] }
+      : intent === "listWatchedFolders" ? { folders: [] } : {}));
+    expect(await screen.findByText("No documents yet")).toBeInTheDocument();
+  });
+
+  it("a failed refresh keeps the last list and says it may be out of date (#1164)", async () => {
+    let fail = false;
+    const { user } = await open(async (intent) => {
+      if (intent === "listDocuments") {
+        if (fail) throw new Error("timed out");
+        return { documents: [doc] };
+      }
+      if (intent === "listWatchedFolders") return { folders: [] };
+      return {};
+    });
+    expect(await screen.findByText("Notes.md")).toBeInTheDocument();
+    fail = true;
+    await user.click(screen.getByRole("button", { name: "Refresh" }));
+    expect(await screen.findByText(/may be out of date/)).toBeInTheDocument();
+    expect(screen.getByText("Notes.md")).toBeInTheDocument();
+  });
+
+  it("a drop while the file picker is open is refused with a reason and sends nothing (#1165)", async () => {
+    let finishPick: (value: unknown) => void = () => {};
+    const { user, intents } = await open(async (intent) => {
+      if (intent === "addFiles") return new Promise((resolve) => { finishPick = resolve; });
+      if (intent === "listDocuments") return { documents: [] };
+      if (intent === "listWatchedFolders") return { folders: [] };
+      if (intent === "beginUpload") return { uploadId: "u1" };
+      return {};
+    });
+    await screen.findByText("No documents yet");
+    await user.click(screen.getByRole("button", { name: "Add files" }));
+    const zone = screen.getByRole("region", { name: "Drop files to index" });
+    expect(zone).toHaveTextContent(/Dropping files is paused\. Finish with the file picker first\./);
+    fireEvent.dragOver(zone, { dataTransfer: { files: [], dropEffect: "copy" } });
+    expect(screen.queryByText("Drop files to index", { selector: ".knowledge-drop-overlay-content" })).toBeNull();
+    const file = new File(["x"], "late.md", { type: "text/markdown" });
+    fireEvent.drop(zone, { dataTransfer: { files: [file] } });
+    expect(await screen.findByRole("alert")).toHaveTextContent(/Those files weren't added\. Finish with the file picker first\./);
+    expect(intents.some((entry) => entry[1] === "beginUpload")).toBe(false);
+
+    await act(async () => { finishPick({}); });
+    expect(screen.getByRole("region", { name: "Drop files to index" })).not.toHaveTextContent(/paused/);
+  });
+});
