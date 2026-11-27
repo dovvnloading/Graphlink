@@ -7,6 +7,7 @@ import { Button } from "../ui/Button";
 import { IconButton } from "../ui/IconButton";
 import { MenuButton, MenuItem } from "../ui/Menu";
 import type { MenuPosition } from "../canvas/menuPosition";
+import { openHelp } from "./helpNavigation";
 import "./AppBar.css";
 
 const LazyAppBarOverflowMenu = lazy(() =>
@@ -111,7 +112,7 @@ export function AppBar({ store }: { store: SceneStore }) {
       )}
 
       <div className="appbar-group appbar-tier">
-        <IconButton icon="search" label="Global Search" shortcut="Ctrl+F" size="md"
+        <IconButton icon="search" label="Global Search" size="md"
           data-overlay-trigger="global-search" aria-pressed={overlays.isOpen("global-search")}
           onClick={() => overlays.toggle("global-search", "dialog")} />
         <IconButton icon="knowledge" label="Knowledge" size="md"
@@ -129,9 +130,9 @@ export function AppBar({ store }: { store: SceneStore }) {
         <MenuButton label="Help" aria-label="Help and diagnostics"
           menuLabel="Help and diagnostics" className="appbar-menu-button">
           <MenuItem label="Help" icon="help"
-            onSelect={() => overlays.open("help", "dialog")} />
+            onSelect={() => openHelp(overlays, "")} />
           <MenuItem label="Keyboard shortcuts" icon="keyboard"
-            onSelect={() => overlays.open("help", "dialog")} />
+            onSelect={() => openHelp(overlays, "Keyboard")} />
           <MenuItem label="Diagnostics" icon="diagnostics"
             onSelect={() => overlays.open("diagnostics", "dialog")} />
           <MenuItem label="About" icon="info"

@@ -196,6 +196,67 @@ describe("GlobalSearchDialog", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(/search failed/i);
   });
 
+  it("retries the same query and scope after a failure, by click and by Enter (#1127)", async () => {
+    const { user, request } = await setup();
+    request.mockRejectedValueOnce(new Error("offline"));
+    request.mockRejectedValueOnce(new Error("still offline"));
+    request.mockResolvedValueOnce({ results: [DOCUMENT_HIT] });
+    const input = screen.getByPlaceholderText(/search every workspace/i);
+
+    await user.type(input, "query{Enter}");
+    expect(await screen.findByRole("alert")).toHaveTextContent(/search failed/i);
+    await user.click(screen.getByRole("button", { name: "Search" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(/search failed/i);
+    await user.type(input, "{Enter}");
+
+    expect(await screen.findByText("Fox Story")).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(request).toHaveBeenCalledTimes(3);
+  });
+
+  it("does not send a duplicate request while the same search is in flight", async () => {
+    const { user, request } = await setup();
+    request.mockImplementationOnce(() => new Promise(() => {}));
+    await user.type(screen.getByPlaceholderText(/search every workspace/i), "query{Enter}{Enter}");
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  it("arrow keys move focus through results in the order they are shown (#1128)", async () => {
+    const { user, request } = await setup();
+    const second = { ...DOCUMENT_HIT, chunkId: 3, documentTitle: "Second Doc" };
+    request.mockResolvedValueOnce({ results: [DOCUMENT_HIT, GRAPH_HIT, second] });
+    const input = screen.getByPlaceholderText(/search every workspace/i);
+    await user.type(input, "query{Enter}");
+    await screen.findByText("Second Doc");
+
+    const header = (title: string) => screen.getByText(title).closest("button");
+    await user.keyboard("{ArrowDown}");
+    expect(header("Workspace B / Onboarding Notes")).toHaveFocus();
+    await user.keyboard("{ArrowDown}");
+    expect(header("Fox Story")).toHaveFocus();
+    await user.keyboard("{ArrowDown}");
+    expect(header("Second Doc")).toHaveFocus();
+    await user.keyboard("{ArrowDown}");
+    expect(header("Second Doc")).toHaveFocus();
+    await user.keyboard("{ArrowUp}{ArrowUp}");
+    expect(header("Workspace B / Onboarding Notes")).toHaveFocus();
+    await user.keyboard("{ArrowUp}");
+    expect(input).toHaveFocus();
+    expect(screen.queryByRole("listbox")).toBeNull();
+  });
+
+  it("Enter on a local-file hit expands its excerpt instead of doing nothing (#1128)", async () => {
+    const { user, request } = await setup();
+    const local = { ...DOCUMENT_HIT, sourceUri: "C:/docs/notes.md", documentTitle: "Local Notes" };
+    request.mockResolvedValueOnce({ results: [local] });
+    await user.type(screen.getByPlaceholderText(/search every workspace/i), "query{Enter}");
+    await screen.findByText("Local Notes");
+
+    await user.keyboard("{ArrowDown}{Enter}");
+    expect(screen.getByText("Local Notes").closest("button")).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText(DOCUMENT_HIT.text)).toBeInTheDocument();
+  });
+
   it("a newer query can run while an older reply is in flight; stale results are ignored", async () => {
     const { user, request } = await setup();
     let resolveFirst: (value: unknown) => void = () => {};

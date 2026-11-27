@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import helpDataUrl from "./help-data/sections.json?url";
 import type { HelpItem, HelpSection } from "./help-data/sections";
 import { Dialog } from "../overlays/overlays";
 import { Icon } from "../ui/icons/Icon";
 import type { IconName } from "../ui/icons/registry";
 import { Kbd } from "../ui/Kbd";
+import { getHelpSectionRequest, subscribeHelpSection } from "./helpNavigation";
 import { discoverShortcutChords, type ShortcutId } from "./shortcuts";
 import "./HelpDialog.css";
 
@@ -138,8 +139,16 @@ function Item({ item, context }: { item: HelpItem; context?: string }) {
 export function HelpDialog() {
   const [sections, setSections] = useState<HelpSection[] | null>(null);
   const [loadError, setLoadError] = useState("");
-  const [activeSectionName, setActiveSectionName] = useState("");
+  const [activeSectionName, setActiveSectionName] = useState(() => getHelpSectionRequest().section);
   const [query, setQuery] = useState("");
+  const sectionRequest = useSyncExternalStore(subscribeHelpSection, getHelpSectionRequest);
+  const [seenRequest, setSeenRequest] = useState(sectionRequest.sequence);
+  if (sectionRequest.sequence !== seenRequest) {
+    // An entry point asked for a section (#1133): land there, out of search.
+    setSeenRequest(sectionRequest.sequence);
+    setActiveSectionName(sectionRequest.section);
+    setQuery("");
+  }
 
   useEffect(() => {
     let disposed = false;
