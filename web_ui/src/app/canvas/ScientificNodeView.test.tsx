@@ -902,6 +902,66 @@ describe("typed table import and numeric selections", () => {
     expect(request).toHaveBeenCalledTimes(1);
   });
 
+  function previewArgs(request: ReturnType<typeof mount>["request"]) {
+    const call = request.mock.calls.filter((c) => c[2]?.[1] === "preview_table").at(-1);
+    return call?.[2]?.[2] as Record<string, unknown>;
+  }
+
+  it("a new file starts with no type hints from the previous source (#1148)", async () => {
+    const { request } = mount();
+    openImporter();
+    request.mockResolvedValueOnce({ ok: true, table: meta, runToken: "reviewed-token" });
+    fireEvent.click(screen.getByRole("button", { name: "Preview table" }));
+    await screen.findByRole("button", { name: "Apply reviewed table" });
+    chooseKit("Type for Station", "categorical");
+
+    chooseKit("Table data source", "Choose a file");
+    const file = new File(["Station\tPressure\nA\t1"], "other.tsv", { type: "text/tab-separated-values" });
+    Object.defineProperty(file, "arrayBuffer", { value: async () => new TextEncoder().encode("Station\tPressure\nA\t1").buffer });
+    fireEvent.change(screen.getByLabelText("CSV or TSV file"), { target: { files: [file] } });
+    expect(screen.getByLabelText("Column type overrides")).toHaveValue("{}");
+    fireEvent.click(screen.getByRole("button", { name: "Preview table" }));
+    await waitFor(() => expect(previewArgs(request)?.filename).toBe("other.tsv"));
+    // Same "Station" header, different data: the old categorical hint is not reused.
+    expect(previewArgs(request).column_types).toEqual({});
+  });
+
+  it("an edited header row clears the stale schema and lists hints for removal without JSON (#1148)", async () => {
+    const { request } = mount();
+    openImporter();
+    request.mockResolvedValueOnce({ ok: true, table: meta, runToken: "reviewed-token" });
+    fireEvent.click(screen.getByRole("button", { name: "Preview table" }));
+    await screen.findByRole("button", { name: "Apply reviewed table" });
+    chooseKit("Type for Station", "categorical");
+
+    fireEvent.change(screen.getByLabelText("Pasted table text"), { target: { value: "Depth,Salinity\n1,35" } });
+    expect(screen.queryByRole("table", { name: "Review column types" })).toBeNull();
+    const hints = screen.getByRole("group", { name: "Column type hints not in the reviewed columns" });
+    expect(hints).toHaveTextContent("Station → categorical");
+    fireEvent.click(screen.getByRole("button", { name: "Remove hint for Station" }));
+    expect(screen.queryByRole("group", { name: "Column type hints not in the reviewed columns" })).toBeNull();
+
+    request.mockResolvedValueOnce({ ok: true, table: meta, runToken: "second-token" });
+    fireEvent.click(screen.getByRole("button", { name: "Preview table" }));
+    await screen.findByRole("button", { name: "Apply reviewed table" });
+    expect(previewArgs(request)).toMatchObject({ text: "Depth,Salinity\n1,35", column_types: {} });
+  });
+
+  it("editing data rows under the same header keeps the reviewed hints (#1148)", async () => {
+    const { request } = mount();
+    openImporter();
+    request.mockResolvedValueOnce({ ok: true, table: meta, runToken: "reviewed-token" });
+    fireEvent.click(screen.getByRole("button", { name: "Preview table" }));
+    await screen.findByRole("button", { name: "Apply reviewed table" });
+    chooseKit("Type for Station", "categorical");
+    const pasted = screen.getByLabelText("Pasted table text") as HTMLTextAreaElement;
+    fireEvent.change(pasted, { target: { value: pasted.value + "\nC,30,true" } });
+    expect(screen.getByRole("table", { name: "Review column types" })).toBeInTheDocument();
+    request.mockResolvedValueOnce({ ok: true, table: meta, runToken: "third-token" });
+    fireEvent.click(screen.getByRole("button", { name: "Preview table" }));
+    await waitFor(() => expect(previewArgs(request)?.column_types).toEqual({ Station: "categorical" }));
+  });
+
   it("imports file bytes rather than decoding and repasting CSV into the field", async () => {
     const { request } = mount();
     openImporter();

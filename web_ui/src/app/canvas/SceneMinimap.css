@@ -33,6 +33,11 @@
   text-decoration: underline;
   text-underline-offset: var(--gl-space-0-5);
 }
+.scene-minimap-hidden-waiting {
+  font-size: var(--gl-text-2xs);
+  color: var(--gl-surface-text-muted);
+  white-space: nowrap;
+}
 .scene-minimap.react-flow__minimap {
   position: static;
   margin: 0;

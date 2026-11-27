@@ -348,6 +348,42 @@ describe("Graph Runner", () => {
     expect(request.mock.calls.filter(([, name]) => name === "executeGraphRun")).toHaveLength(0);
   });
 
+  it("recovers progress and cancellation after a failed status read while execution is pending (#1141)", async () => {
+    const { user, request } = setup();
+    const runningRun: GraphRun = { ...run, runId: "op-run", status: "running", steps: [{ ...step, status: "pending" }] };
+    let statusReads = 0;
+    request.mockImplementation((_topic: string, intent: string) => {
+      if (intent === "previewGraphRun") return Promise.resolve({ previewToken: "preview", steps: [step] });
+      if (intent === "executeGraphRun") return new Promise(() => {}); // still executing
+      if (intent === "cancelGraphRun") return Promise.resolve({ ok: true });
+      if (intent === "getGraphRun") {
+        statusReads += 1;
+        if (statusReads === 1) return Promise.resolve(null);
+        if (statusReads === 2) return Promise.reject(new Error("socket unavailable"));
+        return Promise.resolve(runningRun);
+      }
+      return Promise.resolve(null);
+    });
+    await user.click(screen.getByRole("button", { name: "Open runner" }));
+    await user.click(screen.getByRole("button", { name: "Preview run" }));
+    const preview = await screen.findByRole("region", { name: "Run preview" });
+    await user.click(within(preview).getByRole("button", { name: "Run graph" }));
+
+    // The first poll fails: shown as a read problem, not an execution failure.
+    expect(await screen.findByText(/Couldn't read the latest run status/, undefined, { timeout: 3000 }))
+      .toBeInTheDocument();
+    expect(screen.queryByRole("alert")).toBeNull();
+    const check = screen.getByRole("button", { name: "Check run status" });
+    expect(check).toBeEnabled();
+    await user.click(check);
+
+    expect(await screen.findByRole("button", { name: "Cancel run" })).toBeInTheDocument();
+    expect(screen.queryByText(/Couldn't read the latest run status/)).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Cancel run" }));
+    expect(request).toHaveBeenCalledWith("scene", "cancelGraphRun", ["op-run"]);
+    expect(request.mock.calls.filter(([, intent]) => intent === "executeGraphRun")).toHaveLength(1);
+  });
+
   it("can cancel a scientific run resumed from history instead of only the newest run", async () => {
     const { user, request } = setup();
     const older: GraphRun = {

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ReactFlowProvider, type Node, type useReactFlow as UseReactFlowType } from "@xyflow/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -88,7 +88,9 @@ describe("SceneMinimap", () => {
       node({ id: "docked", isDocked: true, builderAwaitingToolApproval: true }),
     ]);
     expect(screen.getByText("1 node")).toBeInTheDocument();
-    expect(screen.queryByText(/waiting/)).toBeNull();
+    expect(screen.queryByText(/^\d+ waiting$/)).toBeNull();
+    // Hidden decisions are not on the map, but their scope is stated (#1140).
+    expect(screen.getByText("2 in hidden groups or docked panels")).toBeInTheDocument();
   });
 
   it("draws links between mapped nodes and selects a clicked node at its center", () => {
@@ -140,6 +142,45 @@ describe("SceneMinimap", () => {
       // Passing the current zoom is what makes this a pan.
       expect(options?.zoom).toBe(0.75);
     });
+  });
+
+  it("each press reaches the next waiting node, without resolving the first (#1140)", async () => {
+    const user = userEvent.setup();
+    let scene = { ...initialSceneState, edges: [], nodes: [
+      node({ id: "a", title: "Agent task", x: 0, y: 0, harnessAwaitingQuestion: true }),
+      node({ id: "b", title: "Build plan", x: 400, y: 250, builderAwaitingToolApproval: true }),
+      node({ id: "c", title: "Second agent", x: 800, y: 500, harnessAwaitingApproval: true }),
+    ] };
+    const listeners = new Set<() => void>();
+    const store = {
+      subscribe: (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
+      getScene: () => scene,
+    } as unknown as SceneStore;
+    render(<ReactFlowProvider initialWidth={1200} initialHeight={800}><SceneMinimap store={store} /></ReactFlowProvider>);
+    const rerender = (nodes: SceneNodeRow[]) => act(() => {
+      scene = { ...scene, nodes };
+      for (const listener of listeners) listener();
+    });
+    const chip = () => screen.getByRole("button", { name: /^3 waiting|^2 waiting/ });
+    expect(chip()).toHaveAccessibleName("3 waiting. Show 1 of 3: Agent task");
+    await user.click(chip());
+    await user.click(chip());
+    expect(setCenterCalls.map(([x, y]) => [x, y])).toEqual([[0, 0], [400, 250]]);
+    expect(chip()).toHaveAccessibleName("3 waiting. Show 3 of 3: Second agent");
+    await user.click(screen.getByRole("button", { name: "Previous waiting decision" }));
+    expect(setCenterCalls.at(-1)?.slice(0, 2)).toEqual([0, 0]);
+
+    // "b" resolves between presses: the count and the next target stay coherent.
+    rerender([
+      node({ id: "a", title: "Agent task", x: 0, y: 0, harnessAwaitingQuestion: true }),
+      node({ id: "b", title: "Build plan", x: 400, y: 250 }),
+      node({ id: "c", title: "Second agent", x: 800, y: 500, harnessAwaitingApproval: true }),
+    ]);
+    expect(chip()).toHaveAccessibleName("2 waiting. Show 2 of 2: Second agent");
+    await user.click(chip());
+    expect(setCenterCalls.at(-1)?.slice(0, 2)).toEqual([800, 500]);
+    // Navigation never answers anything: only pans at the current zoom.
+    expect(setCenterCalls.every(([, , options]) => options?.zoom === 0.75)).toBe(true);
   });
 
   describe("collapsing", () => {
